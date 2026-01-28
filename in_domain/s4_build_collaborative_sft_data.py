@@ -27,7 +27,7 @@ def load_sasrec_sims(dataset):
             anchor = parts[0]
             # Store top 5 similar items for SFT to keep length reasonable
             # The file has 20, but we can't output all of them with meta info
-            similar_items = parts[1:]
+            similar_items = parts[1:5]
             sims[anchor] = similar_items
     return sims
 
@@ -105,7 +105,7 @@ def main(dataset):
     # Save Data
     output_dir = "../LlamaFactory/data/grlm_in_domain"
     os.makedirs(output_dir, exist_ok=True)
-    output_file = f"{output_dir}/amazon_{dataset}_sasrec_collaborative20_sft.json"
+    output_file = f"{output_dir}/amazon_{dataset}_sasrec_collaborative_sft.json"
     
     print(f"Saving {len(sft_data)} samples to {output_file}...")
     with open(output_file, 'w', encoding='utf-8') as f:
