@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This is the official open-source repository for the paper **"Unleashing the Native Recommendation Potential: LLM-Based Generative Recommendation via Structured Term Identifiers"**, which aims to build **LLM-based, general-purpose, and semantically-aware** recommendation systems. Our method has been applied to the text-augmented itemic tokens strategy of [OpenOnecRec](https://github.com/Kuaishou-OneRec/OpenOneRec) and has achieved improved results.
+This is the official open-source repository for the paper **"Unleashing the Native Recommendation Potential: LLM-Based Generative Recommendation via Structured Term Identifiers"**, which aims to build **LLM-based, general-purpose, and semantically-aware** recommendation systems. Our method has been applied to the text-augmented itemic tokens strategy of [OpenOneRec](https://github.com/Kuaishou-OneRec/OpenOneRec) and has achieved improved results.
 
 Complete intermediate data and evaluation results can be obtained from: https://drive.google.com/file/d/1QLAMH0rNIRIGfCVWt6oBnPaCtgFY5JIU/view?usp=sharing.
 
