@@ -38,16 +38,19 @@ def merge_specific_json_files(file_list, output_file):
 if __name__ == "__main__":
     files_to_merge = [
         "amazon_beauty_sft_data_rec_simplified.json", 
-        "amazon_beauty_sft_data_meta2tid.json"
+        "amazon_beauty_sft_data_meta2tid.json",
+        "amazon_beauty_sasrec_collaborative_sft.json"
     ]
-    merge_specific_json_files(files_to_merge, "amazon_beauty_sft_data_rec_meta2sid.json")
+    merge_specific_json_files(files_to_merge, "amazon_beauty_sft_data_combined.json")
     files_to_merge = [
         "amazon_sports_sft_data_rec_simplified.json", 
-        "amazon_sports_sft_data_meta2tid.json"
+        "amazon_sports_sft_data_meta2tid.json",
+        "amazon_sports_sasrec_collaborative_sft.json"
     ]
-    merge_specific_json_files(files_to_merge, "amazon_sports_sft_data_rec_meta2sid.json")
+    merge_specific_json_files(files_to_merge, "amazon_sports_sft_data_combined.json")
     files_to_merge = [
         "amazon_toys_sft_data_rec_simplified.json", 
-        "amazon_toys_sft_data_meta2tid.json"
+        "amazon_toys_sft_data_meta2tid.json",
+        "amazon_toys_sasrec_collaborative_sft.json"
     ]
-    merge_specific_json_files(files_to_merge, "amazon_toys_sft_data_rec_meta2sid.json")
+    merge_specific_json_files(files_to_merge, "amazon_toys_sft_data_combined.json")
