@@ -238,7 +238,8 @@ def compute_similarities(embeddings: np.ndarray, item_ids: List[str], k: int = 2
     return results
 
 def main(dataset):
-    model_name = "../hf_qwen3_emb_8b"
+    #model_name = "../hf_qwen3_emb_8b"
+    model_name = "/data/xiaoyukou/ckpts/Qwen3-Embedding-8B"
     
     # Check available GPUs
     num_gpus = torch.cuda.device_count()

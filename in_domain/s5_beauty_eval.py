@@ -367,7 +367,7 @@ reverse_mapping, word_to_keys = create_reverse_mapping(tid2item_id)
 def main():
     # Model paths
     ckpts = [
-        "../sft_ckpts/grlm_indomain_beauty/",
+        "/data/xiaoyukou/LLaMA-Factory/saves/grlm/indomain_beauty",
         ]
 
     for ckpt in ckpts:

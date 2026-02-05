@@ -362,8 +362,10 @@ def analyze_statistics_with_similarity(all_items, similarities_dict):
     }
 
 def main(dataset):
-    model_name = "../hf_qwen3_2507_4b"
-    num_gpus = 8
+    #model_name = "../hf_qwen3_2507_4b"
+    #num_gpus = 8
+    model_name = "/data/xiaoyukou/ckpts/Qwen3-4B-Instruct-2507"
+    num_gpus = 2
     
     data_file = f"./{dataset}/raw_data/{dataset}.item.json"
     dataset_similarities_file = f"./{dataset}/sum_data/{dataset}_similarities.json"

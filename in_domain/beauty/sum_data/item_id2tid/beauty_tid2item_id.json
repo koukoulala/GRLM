@@ -13,7 +13,7 @@
   "soap-nut,organic,sulfate-free,natural,vegan": [
     "4"
   ],
-  "body-lotion,moisturizing,natural,soft,soothing": [
+  "body-lotion,moisturizing,natural,soft,usa-made": [
     "5"
   ],
   "mirror,lighted,folding,10x,cosmetic": [
@@ -50,7 +50,7 @@
   "shampoo,strengthen,keratin,repair,split-ends": [
     "16"
   ],
-  "styling-mousse,humidity-resistant,alcohol-free,curl-enhancing,professional": [
+  "styling-mousse,humidity-resistant,alcohol-free,professional,curl-enhancing": [
     "17"
   ],
   "straightener,ceramic,pearl-infused,salon,wide-plates": [
@@ -92,7 +92,7 @@
   "leave-in,shine,argan,non-greasy,spray": [
     "30"
   ],
-  "cleanser,conditioner,argan,curly,moisture": [
+  "cleanser,conditioner,argan,curly,organic": [
     "31"
   ],
   "styling-cream,hydrates,non-greasy,frizz-free,argan-oil": [
@@ -113,7 +113,7 @@
   "nail,art,brush,detailer,professional": [
     "37"
   ],
-  "nail-art,decorative,mixed-colours,small-size,reusable": [
+  "nail-art,decorative,gem,mixed,small": [
     "38"
   ],
   "nail-art,stamp,set,25f,display-case": [
@@ -524,7 +524,7 @@
     "9054",
     "9369"
   ],
-  "wrap,soak-off,gel,nail,comfort": [
+  "wrap,soak-off,gel,nail,graham": [
     "185"
   ],
   "nail,lacquer,pink,exotic,not": [
@@ -552,7 +552,7 @@
   "makeup-sponge,blend,multi,pro,flawless": [
     "193"
   ],
-  "nail-lacquer,two-texture,shatter,color,finish": [
+  "nail,lacquer,two-texture,finish,opi": [
     "194"
   ],
   "shellac,uv-cured,iced-coral,gel-like,polish": [
@@ -560,6 +560,7 @@
   ],
   "gel-polish,uv-cure,twist-cap,brush-apply,soak-off": [
     "196",
+    "1155",
     "11793"
   ],
   "gel-polish,magnetic,electric,metal,lover": [
@@ -571,7 +572,7 @@
   "brow,shaping,custom,pencil,defining": [
     "199"
   ],
-  "mascara,voluminous,collagen,blackest,lashes": [
+  "mascara,voluminous,collagen,blackest,luxurious": [
     "200"
   ],
   "serum,hydration,pure,anti-aging,paraben-free": [
@@ -601,7 +602,7 @@
   "comb,conditioning,argan,oil,keratin": [
     "209"
   ],
-  "eye-shadow,blue-eyes,coastal,made-in-usa,palette": [
+  "eye-shadow,blue-eyes,cosmetic,made-in-usa,ultimate": [
     "210"
   ],
   "nail-treatment,heal,cure,split,acrylic": [
@@ -644,7 +645,7 @@
   "bronzer,matte,beach,glow,unique": [
     "223"
   ],
-  "nail-lacquer,long-wear,chip-resistant,mint-shade,free-form": [
+  "nail-lacquer,long-wear,chip-resistant,free,mint": [
     "224"
   ],
   "cream,moisturizing,concentrated,24hour,miracle": [
@@ -777,7 +778,7 @@
   "dermastrip,non-surgical,medical-grade,anti-aging,certified": [
     "267"
   ],
-  "serum,reduces,dark,circles,puffiness": [
+  "serum,reduces,dark-circles,puffiness,regu&reg-age": [
     "268"
   ],
   "massager,microcurrent,battery,eye,lifting": [
@@ -930,7 +931,7 @@
   "brush,soft,extra-large,powder,cosmetic": [
     "331"
   ],
-  "conditioner,moisture,oxygen,hair,repair": [
+  "conditioner,moisture,oxygen,hair,nourishing": [
     "332"
   ],
   "shampoo,natural,macadamia,orchid,hair": [
@@ -954,7 +955,7 @@
   "lightening,controlled,sheer,blonde,spray": [
     "339"
   ],
-  "primer,smooth,clear,anti-aging,instant": [
+  "primer,anti-aging,clear,smooth,instant": [
     "340"
   ],
   "mascara,24-hour,volumized,lash,black-brown": [
@@ -1039,7 +1040,7 @@
   "moisturizing,ceramide,pediatric,baby,sensitive": [
     "365"
   ],
-  "hair,treatment,argan,oil,silky": [
+  "hair,treatment,argan,oil,moisturizing": [
     "366"
   ],
   "led,dryer,12w,gel,manicure": [
@@ -1074,19 +1075,19 @@
   "crystal-file,gentle,hand-painted,adult,durable": [
     "376"
   ],
-  "makeup-brush,tapered,eco,blush,blend": [
+  "makeup,blush,tapered,eco,brush": [
     "377"
   ],
   "makeup,blend,eco,eye,brush": [
     "378"
   ],
-  "makeup-brush,buffing,custom,coverage,eco": [
+  "makeup-brush,buffing,eco,powder,custom": [
     "379"
   ],
   "shea-butter,pure,raw,gold,skincare": [
     "380"
   ],
-  "hand-cream,moisturizing,organic,body,conditioning": [
+  "hand-cream,organic,moisturizing,body,70%": [
     "381"
   ],
   "cleanser,hydrating,gentle,daily,ultra": [
@@ -1134,7 +1135,7 @@
   "hair,dye,natural,indigo,pure": [
     "396"
   ],
-  "eyeliner,water-resistant,liquid,brown,kiss-me": [
+  "eyeliner,water-resistant,liquid,brown,slide-off": [
     "397"
   ],
   "creme,thickening,texturizing,hair,radical": [
@@ -1161,7 +1162,7 @@
   "brush,high-tech,pro-designed,makeup,starter": [
     "405"
   ],
-  "mascara,voluminous,patented,blackest,waterproof": [
+  "mascara,voluminous,collagen,blackest,waterproof": [
     "406"
   ],
   "concealer,mineral,gentle,spf,natural": [
@@ -1191,7 +1192,7 @@
   "oil,anti-aging,organic,moisturizing,moroccan": [
     "415"
   ],
-  "scrub,detoxifying,smart,daily,essential": [
+  "scrub,detoxifying,smart,daily,skin": [
     "416"
   ],
   "shampoo,scalp,nourishing,hair,care": [
@@ -1215,7 +1216,7 @@
   "moisturizer,sunprotect,luminous,facial,spf15": [
     "423"
   ],
-  "hair,milk,curl,smoother,women": [
+  "hair,milk,curl,smoother,wave": [
     "424"
   ],
   "sunscreen,protect,hydrate,creamy,natural": [
@@ -1318,8 +1319,9 @@
   "shampoo,medicated,selenium,menthol,scalp": [
     "457"
   ],
-  "scrub,exfoliating,oil-free,deep,pores": [
-    "458"
+  "scrub,exfoliating,oil-free,deep,clear": [
+    "458",
+    "9276"
   ],
   "corrector,dark-spot,clinical,skin,renew": [
     "459"
@@ -1339,7 +1341,7 @@
   "eye-shadow,high-pigment,pearl-dense,satiny,exclusive": [
     "464"
   ],
-  "hair-growth,natural,plant-based,treatment,first": [
+  "hair,growth,natural,treatment,first": [
     "465"
   ],
   "conditioner,almond,shea,butter,dry": [
@@ -1370,7 +1372,7 @@
   "serum,vitamin,aha,pore,refine": [
     "474"
   ],
-  "eye-serum,anti-aging,peptide-based,adult,corrective": [
+  "eye-serum,peptide-based,anti-aging,adult,corrective": [
     "475"
   ],
   "styling-iron,ionic,tourmaline,hair,versatile": [
@@ -1404,7 +1406,6 @@
     "485",
     "486",
     "1115",
-    "1155",
     "1197",
     "2867",
     "2872",
@@ -1552,7 +1553,7 @@
     "530",
     "10071"
   ],
-  "cleanser,hydrating,gentle,skin,ceramide": [
+  "cleanser,hydrating,gentle,skin,ceramides": [
     "531"
   ],
   "cleansing-bar,gentle,oil-free,hypoallergenic,dermatologist": [
@@ -1646,7 +1647,7 @@
   "scrub,exfoliate,gentle,face,age-defying": [
     "562"
   ],
-  "blowout,protective,heat,gloss,guardian": [
+  "blowout,protective,gloss,heat,guardian": [
     "563"
   ],
   "flat-iron,heat-protection,gloss-finish,guardian-angel,styling-balm": [
@@ -1670,7 +1671,7 @@
   "fragrance,evening,floral,spicy,women": [
     "570"
   ],
-  "lipstick,moisturizing,black,honey,velvet": [
+  "lipstick,longlast,black,honey,usa": [
     "571"
   ],
   "nail-art,foil,transfer,decorative,glitzy": [
@@ -1679,7 +1680,7 @@
   "blush,sheer,peachy,cosmetic,gentle": [
     "573"
   ],
-  "bb-cream,detox,triple-function,gold,facial": [
+  "bb-cream,uv-protect,triple-function,gold,whitening": [
     "574"
   ],
   "bb-cream,moisturizing,hyaluronic,spf30,facial": [
@@ -1704,8 +1705,7 @@
     "581"
   ],
   "top-coat,fast-drying,professional,clear,gloss": [
-    "582",
-    "2205"
+    "582"
   ],
   "therapy,regrowth,minoxidil,women,extra-strength": [
     "583"
@@ -1717,7 +1717,7 @@
   "eye-care,separates,natural,lash,brow": [
     "585"
   ],
-  "patches,anti-aging,forehead,frown,wrinkles": [
+  "patch,anti-aging,forehead,frown,wrinkles": [
     "586"
   ],
   "patch,hydrating,anti-wrinkle,facial,derma": [
@@ -1775,10 +1775,10 @@
   "eyelash-curler,metal,deluxe,precision,professional": [
     "610"
   ],
-  "cleanser,foaming,straight,finish,motion": [
+  "cleanser,foaming,straight,finish,8oz": [
     "611"
   ],
-  "conditioner,deep-penetrating,straight-finish,leave-in,hair": [
+  "conditioner,deep-penetrating,leave-in,straight,finish": [
     "612"
   ],
   "moisturizer,fragrance-free,oil-free,night,dermatologically-tested": [
@@ -1842,10 +1842,10 @@
   "sunscreen,physical,zinc,children,gentle": [
     "632"
   ],
-  "facial,cleanser,mist,micro-fine,panasonic": [
+  "pore-cleanser,micro-fine-mist,deep-clean,skin-care,panasonic": [
     "633"
   ],
-  "detangler,professional,miracle,baby,release": [
+  "detangler,instant,wetdry,hair,original": [
     "634"
   ],
   "brush,detangling,nylon,anti-static,pink": [
@@ -1946,7 +1946,7 @@
   "nail,lacquer,czech,inspired,colorful": [
     "672"
   ],
-  "hair-oil,natural,travel,100%-organic,detangle": [
+  "hair-oil,natural,travel,detangle,long": [
     "673"
   ],
   "masque,repair,argan,unisex,keratin": [
@@ -2112,7 +2112,7 @@
   "facial,toner,sea-kelp,natural,vegetarian": [
     "778"
   ],
-  "conditioner,curl,pistachio,wavy,hair": [
+  "conditioner,curl,enhancing,pistachio,wavy": [
     "779"
   ],
   "towel,microfiber,absorbent,curl,defined": [
@@ -2121,8 +2121,9 @@
   "lashes,natural,invisible,handmade,brown": [
     "781"
   ],
-  "brush,high-tech,pro-designed,makeup,precise": [
-    "782"
+  "brush,makeup,high-tech,professional,precise": [
+    "782",
+    "924"
   ],
   "brush,stippling,cosmetic,professional,real": [
     "783"
@@ -2130,7 +2131,7 @@
   "wig,display,foam,case,mannequin": [
     "784"
   ],
-  "body-wash,eczema,restoring,skin,gentle": [
+  "body,wash,eczema,restoring,gentle": [
     "785"
   ],
   "conditioner,color,care,dry,damaged": [
@@ -2296,10 +2297,10 @@
   "cream,anti-wrinkle,intensive,complex,repair": [
     "841"
   ],
-  "body-lotion,aloe-fresh,moisturizing,adult,unique-scent": [
+  "body-lotion,moisturizing,aloe-fresh,adult,pack-of-3": [
     "722"
   ],
-  "nail-polish,chemical-free,gilded,safe,fun": [
+  "nail-polish,chemical-free,gilded,women,safe": [
     "842"
   ],
   "serum,enhancement,nighttime,conditioning,keratin": [
@@ -2332,7 +2333,7 @@
   "nail,uv-cured,hot-chili,polish,gel": [
     "850"
   ],
-  "fragrance,women,glow,tropical,unique": [
+  "fragrance,women,glow,miami,jennifer-lopez": [
     "851"
   ],
   "perfume,romantic,floral,women,sensuous": [
@@ -2484,9 +2485,6 @@
   "atomizer,travel,refillable,silver,zero-leaks": [
     "923"
   ],
-  "brush,makeup,high-tech,professional,precise": [
-    "924"
-  ],
   "blush,compact,warm,rosy,flip-up": [
     "925"
   ],
@@ -2562,7 +2560,7 @@
   "cleanser,acne,salicylic,2%,treatment": [
     "949"
   ],
-  "dispenser,push-down,clear,labeled,alcohol": [
+  "dispenser,alcohol,clear,labeled,push": [
     "950"
   ],
   "cleanser,salicylic,acne,preventive,facial": [
@@ -2577,7 +2575,7 @@
   "hand-soap,foaming,unscented,aloe-vera,refill": [
     "954"
   ],
-  "makeup,sensitive,eco,brush,pure": [
+  "makeup,sensitive,eco,brush,complexion": [
     "955"
   ],
   "shampoo,natural,seaweed,lotus,hair": [
@@ -2660,8 +2658,7 @@
     "981"
   ],
   "moisture,nourishes,absorbs,shea,vitamin": [
-    "982",
-    "6588"
+    "982"
   ],
   "detangling,spray,swirlberry,kids,unique": [
     "983"
@@ -2690,13 +2687,13 @@
   "wig,bald,styrofoam,female,make-up": [
     "991"
   ],
-  "false,nails,full,cover,clear": [
+  "false-nails,clear,full-cover,gel-compatible,professional": [
     "992"
   ],
   "cosmetic,wedge,foam,latex,32count": [
     "993"
   ],
-  "eye-shadow,professional,single,lush,raven": [
+  "eye,shadow,single,lush,raven": [
     "994"
   ],
   "hair,treatment,intensive,silicone,deep": [
@@ -2812,7 +2809,7 @@
   "clipper,professional,balanced,cutting,precise": [
     "1031"
   ],
-  "liquid,coverage,healthy,skin,natural": [
+  "liquid,makeup,healthy,skin,coverage": [
     "1032"
   ],
   "shampoo,conditioner,silk-lux,softening,hair": [
@@ -2833,7 +2830,7 @@
   "nail-art,3d,rhinestone,mix,kitty": [
     "1038"
   ],
-  "nail-art,ceramic,rhinestone,bow-tie,decorative": [
+  "nail,art,ceramic,rhinestone,bow-tie": [
     "1039"
   ],
   "moisturizer,spray,total,moisture,body": [
@@ -2875,9 +2872,8 @@
   "shampoo,color,protected,treated,vibrant": [
     "1051"
   ],
-  "conditioner,deep,moist,hair,aussie": [
-    "868",
-    "10699"
+  "conditioner,deep,moisturizing,hair,aussie": [
+    "868"
   ],
   "shampoo,keratin,color,treated,care": [
     "1052"
@@ -2900,7 +2896,7 @@
   "cosmetic,brush,natural,goat,badger": [
     "1058"
   ],
-  "mascara,volumizing,brush,washable,blackest": [
+  "mascara,volumizing,washable,black,brush": [
     "1059"
   ],
   "foundation,oil-free,flawless,porcelain,spf": [
@@ -2951,7 +2947,7 @@
   "ointment,acne,sulfur,topical,treatment": [
     "1075"
   ],
-  "serum,leave-in,silk,reparative,treatment": [
+  "spray,shine,silk,hair,repair": [
     "1076"
   ],
   "soap,lightening,kojic,dermatologist,sensitive": [
@@ -2978,8 +2974,7 @@
     "1083"
   ],
   "plate,stamping,nail,art,image": [
-    "1084",
-    "1702"
+    "1084"
   ],
   "nail-polish,neon,shiny,fashionista,bold": [
     "1085"
@@ -3029,7 +3024,7 @@
   "serum,anti-aging,vitamin-c,dead-sea,radiant": [
     "1100"
   ],
-  "hair-oil,treatment,organic,moisturizing,revolutionary": [
+  "hair-oil,treatment,organic,dry-hair,revolutionary": [
     "1101"
   ],
   "serum,anti-aging,organic,facial,glow": [
@@ -3044,7 +3039,7 @@
   "eyeshadow,colorful,64,palette,sparkle": [
     "1105"
   ],
-  "false-eyelashes,reusable,glue,black,synthetic": [
+  "false-eyelashes,reusable,glued,black,synthetic": [
     "1106"
   ],
   "eyelash,applicator,stainless,fish,tail": [
@@ -3096,7 +3091,7 @@
   "stand,display,cclamp,mannequin,durable": [
     "1121"
   ],
-  "waver,ceramic,high-heat,protective,revlon": [
+  "waver,ceramic,heat-protection,hair,revlon": [
     "1122"
   ],
   "sunscreen,mineral,sensitive,protective,water-resistant": [
@@ -3124,7 +3119,7 @@
   "moisturizer,balancing,tomato,daily,skin": [
     "1130"
   ],
-  "cleanser,clarifying,tomato,daily,skin": [
+  "cleanser,clarifying,tomato,daily,balanced": [
     "1131"
   ],
   "bb-cream,moisturizing,lightweight,flawless,glow": [
@@ -3197,7 +3192,7 @@
   "hair-cutter,touch-control,remington,cutter,precise": [
     "1154"
   ],
-  "gel-polish,damageproof,soak-off,color,long-wear": [
+  "gel-polish,soak-off,lasting,fruity,durable": [
     "1156"
   ],
   "uv,dryer,professional,dual,curing": [
@@ -3269,7 +3264,7 @@
   "clip,no-slip,oval,grip,hair": [
     "1179"
   ],
-  "perfume-oil,aromatic,traditional,arabian,roses": [
+  "perfume,aromatic,traditional,arabian,roses": [
     "1180"
   ],
   "soap,bath,bars,original,ivory": [
@@ -3279,7 +3274,7 @@
   "nail-lacquer,gelcolor,shatter,gold,soak-off": [
     "1182"
   ],
-  "nail,lacquer,mariah,carey,impossible": [
+  "nail,lacquer,colorful,mariah,inspired": [
     "1183"
   ],
   "nail-polish,magnetic,flow,blue-grey,tridimensional": [
@@ -3288,7 +3283,7 @@
   "nail-lacquer,durable,chip-resistant,smooth,free": [
     "1185"
   ],
-  "nail,lacquer,holographic,safe,free": [
+  "lacquer,safe,holographic,free,innovative": [
     "1186"
   ],
   "nail,stamping,clear,top,coat": [
@@ -3372,7 +3367,7 @@
   "self-tanner,moisturizing,gradual,face-body,anti-aging": [
     "1211"
   ],
-  "carousel,rotating,cosmetic,organizer,elegant": [
+  "carousel,rotate,cosmetic,organizer,elegant": [
     "1212"
   ],
   "eyeshadow,glitter,100piece,black,elegant": [
@@ -3393,7 +3388,7 @@
   "fragrance,women,violet,apricot,daytime": [
     "1218"
   ],
-  "fragrance,vanilla,musk,romantic,revlon": [
+  "fragrance,vanilla,musk,romantic,women": [
     "1219"
   ],
   "fragrance,women,steel,elegant,unique": [
@@ -3450,7 +3445,7 @@
   "lotion,resurfacing,chlorella,all-skin-types,lemon": [
     "1237"
   ],
-  "masque,probiotic,enzymatic,all-skin,rosacea": [
+  "masque,enzymatic,probiotic,all-skin,rosacea": [
     "1238"
   ],
   "shampoo,gentle,organic,scalp,green-tea": [
@@ -3748,7 +3743,7 @@
   "moisturizer,antiaging,parabenfree,men,usamade": [
     "1341"
   ],
-  "cream,firming,caffeine,retinol,proven": [
+  "cream,firming,caffeine,retinol,usa": [
     "1342"
   ],
   "anti-aging,sunscreen,therapeutic,facial,movie-star": [
@@ -3848,7 +3843,7 @@
   "hair-mask,protecting,shea-butter,damage,moisturizing": [
     "1392"
   ],
-  "sunless-tanning,quick-dry,mist-spray,all-skin-types,deep-tan": [
+  "spray,sunless,tanning,quick,deep": [
     "1393"
   ],
   "nail,polish,comic,themed,spider": [
@@ -3914,7 +3909,7 @@
   "gel-polish,uv-cured,soak-off,twist-cap,bashful": [
     "1413"
   ],
-  "gel,uv,taffeta,polish,color": [
+  "gel,uv,color,taffeta,polish": [
     "1414"
   ],
   "nail-wipe,lint-free,fiberless,cleanser,economical": [
@@ -3932,7 +3927,7 @@
   "hair-dryer,titanium,nano,travel,red": [
     "1419"
   ],
-  "eyeshadow,palette,100piece,e.l.f.,cosmetic": [
+  "eyeshadow,palette,100piece,cosmetic,e.l.f.": [
     "1420"
   ],
   "iron,heat,resistant,stand,professional": [
@@ -4008,7 +4003,7 @@
   "bath,dissolving,cellulite,reducing,organic": [
     "1443"
   ],
-  "shampoo,anti-dandruff,fortifying,men,dove": [
+  "shampoo,anti-dandruff,fortifying,men,care": [
     "713"
   ],
   "gel,hydrate,moisturizing,men,micro": [
@@ -4029,7 +4024,7 @@
   "face-wash,sensitive,moisturizing,men,micro-moisture": [
     "718"
   ],
-  "dry-shampoo,waterless,foam,reset,axe": [
+  "shampoo,waterless,foam,reset,axe": [
     "726"
   ],
   "antiperspirant,cool,silver,men,durable": [
@@ -4068,7 +4063,7 @@
   "hair,volume,building,fiber,dark": [
     "1459"
   ],
-  "applicator,precise,spray,thinning,control": [
+  "applicator,precision,spray,thinning,control": [
     "1460"
   ],
   "fragrance,women,spray,kiss,unique": [
@@ -4095,7 +4090,7 @@
   "perfume,women,spray,fragrance,jessica": [
     "1468"
   ],
-  "oil,moisturize,argan,moroccan,weightless": [
+  "oil,moisturizing,argan,moroccan,weightless": [
     "1469"
   ],
   "shampoo,cleanse,nourish,scalp,shea": [
@@ -4149,7 +4144,7 @@
   "self-tanning,liquid,fast-drying,flawless,set": [
     "1485"
   ],
-  "facial-wash,moisturizing,simple,gentle,clean": [
+  "facial-wash,moisturizing,simple,gentle,5oz": [
     "1486"
   ],
   "conditioner,nourishing,scalp,hair,lengths": [
@@ -4209,7 +4204,7 @@
   "false-eyelashes,reusable,long,black,natural": [
     "1504"
   ],
-  "false-eyelashes,reusable,thick,long,feminine": [
+  "false-eyelashes,reusable,long,thick,two-styles": [
     "1505"
   ],
   "brush,detangling,sculpting,hair,gift": [
@@ -4251,8 +4246,9 @@
   "retinol,antioxidant,moisturizer,organic,usa": [
     "1518"
   ],
-  "primer,smoothing,clear,skin,natural": [
-    "1519"
+  "primer,smoothing,clear,skin,refined": [
+    "1519",
+    "3242"
   ],
   "palette,shimmer,neutral,shades,double": [
     "1520"
@@ -4260,7 +4256,7 @@
   "makeup-remover,oil-free,aloe,eye,gentle": [
     "1521"
   ],
-  "cleansing,exfoliating,pumice,natural,anti-aging": [
+  "brush,exfoliating,natural,anti-aging,pumice": [
     "1329"
   ],
   "facial-mask,calming,cucumber,sensitive,gentle": [
@@ -4350,7 +4346,7 @@
   "bb-cream,beautifying,illuminator,natural,medium": [
     "1550"
   ],
-  "finishing-powder,anti-aging,goji-berry,protective,facial": [
+  "finisher,anti-aging,goji-berry,powder,beige": [
     "1551"
   ],
   "blush,luminous,mineral,mauve,natural": [
@@ -4506,7 +4502,7 @@
   "nail,brush,natural,set,professional": [
     "1600"
   ],
-  "makeup-sponge,applicator,versatile,hollywood,patented": [
+  "makeup-sponge,applicator,hollywood-designed,versatile,patent-pending": [
     "1601"
   ],
   "eyeliner,mistakeproof,glow,green,women": [
@@ -4557,22 +4553,20 @@
   "conditioner,leave-in,organic,hair,weightless": [
     "1615"
   ],
-  "brush,detangle,cordless,wetdry,twist": [
+  "brush,detangle,cordless,wetdry,tangle-tamer": [
     "1616"
   ],
   "lipstick,pigment,baby-pink,moisturizing,antioxidant": [
     "1617"
   ],
-  "lip-butter,colorful,gel,peach,glowing": [
+  "lip-butter,glowing,colored,balm,peach": [
     "1618"
   ],
   "lip-butter,colorful,gel-formula,women,berry-smoothie": [
     "1619"
   ],
-  "lip-butter,colorful,gel,soft,glow": [
-    "1620",
-    "7502",
-    "10301"
+  "lip-butter,colorful,gel-formula,soft,glow": [
+    "1620"
   ],
   "peel-pads,exfoliating,gentle,complexion,correction": [
     "1621"
@@ -4595,7 +4589,7 @@
   "blender,flawless,elliptical,makeup,sponge": [
     "1627"
   ],
-  "dryer-balls,chemical-free,non-toxic,allergy-safe,energy-save": [
+  "dryer-balls,non-toxic,chemical-free,allergy-safe,energy-save": [
     "1628"
   ],
   "night-cream,anti-aging,non-greasy,facial,aloe": [
@@ -4650,7 +4644,7 @@
   "conditioner,deep,damaged,hair,honeysuckle": [
     "1679"
   ],
-  "base-coat,nail,natural,treatment,usa": [
+  "base-coat,protective,natural,nail,usa-made": [
     "1680"
   ],
   "nail-art,glitter,powder,45-colors,decoration": [
@@ -4695,7 +4689,7 @@
   "finishing-powder,mineral,translucent,pure,luminous": [
     "1694"
   ],
-  "face-powder,sheer,coral-pink,adaptive,true-color": [
+  "face-powder,sheer,coral-pink,adaptive,skin-tone": [
     "1695"
   ],
   "moisturizer,anti-aging,fragrance-free,daily,facial": [
@@ -4716,13 +4710,16 @@
   "nail,art,stamping,plate,m64": [
     "1701"
   ],
+  "plate,stamping,nail,art,m66": [
+    "1702"
+  ],
   "nail-art,stamping,image,plate,design": [
     "1703"
   ],
   "curlers,bamboo,soft,lightweight,renewable": [
     "1704"
   ],
-  "mascara,washable,brush,defining,lash": [
+  "mascara,washable,brush,defining,very-black": [
     "1705"
   ],
   "foot-cream,repair,alpha-hydroxy,dry-skin,fragrance-free": [
@@ -4731,13 +4728,13 @@
   "foundation,mineral,powder,beige,natural": [
     "1707"
   ],
-  "concealer,eraser,goji,dark,circles": [
+  "concealer,dark-circles,goji-berry,haloxyl,neutralizer": [
     "1708"
   ],
   "eye,pillow,lavender,velvet,relaxation": [
     "1709"
   ],
-  "conditioner,cleansing,lavender,hair,soothing": [
+  "conditioner,cleansing,lavender,hair,fragrance": [
     "1710"
   ],
   "masque,repair,strengthen,unisex,deep": [
@@ -4776,7 +4773,7 @@
   "foundation,full-coverage,clay,12-hour,long-wearing": [
     "1721"
   ],
-  "perfume,luxury,orchid,women,exclusive": [
+  "perfume,luxury,orchid,women,elegant": [
     "1722"
   ],
   "fragrance,citrus,musk,men,imperial": [
@@ -4788,7 +4785,7 @@
   "cuticle-pusher,rubber-grip,double-ended,nail-cleaner,satin-edge": [
     "1725"
   ],
-  "lipstick,colored,brand,cosmetic,mood": [
+  "lipstick,colored,cosmetic,women,mood": [
     "1726"
   ],
   "wrap,remover,cotton,gentle,easy": [
@@ -4913,7 +4910,7 @@
   "sonic,cleansing,waterproof,professional,brighttherapy": [
     "1766"
   ],
-  "palette,colorful,make-up,adult,sleek": [
+  "makeup,colorful,palette,collection,sleek": [
     "1767"
   ],
   "dry-shampoo,revitalizes,tropical,travel,active": [
@@ -4953,7 +4950,7 @@
   "shampoo,organic,preventive,hair,loss": [
     "1778"
   ],
-  "shampoo,caffeine,essential,ketoconazole,hair-growth": [
+  "shampoo,caffeine,essential,ketoconazole,stimulant": [
     "1779"
   ],
   "conditioner,caffeine,essential,loss,growth": [
@@ -4971,7 +4968,7 @@
   "facial,hypoallergenic,cucumber,gentle,detoxifying": [
     "1784"
   ],
-  "facial,brightening,grapefruit,towelette,25count": [
+  "towelette,grapefruit,brightening,facial,25count": [
     "1785"
   ],
   "cleanser,exfoliating,gentle,facial,smoothing": [
@@ -5127,7 +5124,7 @@
   "curling-iron,ceramic,heat-protection,hair,instant": [
     "1836"
   ],
-  "holder,folding,durable,plastic,stable": [
+  "hat,holder,folding,stable,durable": [
     "1837"
   ],
   "body-wash,fragrant,pearl,scented,adult": [
@@ -5160,7 +5157,7 @@
   "bath,soothing,essential,chamomile,magnesium": [
     "1884"
   ],
-  "scrub,acne,control,daily,clear": [
+  "scrub,acne,control,daily,formula": [
     "1885"
   ],
   "shampoo,nourishing,floral,natural,luxurious": [
@@ -5178,7 +5175,7 @@
   "shampoo,organic,baby,growth,protective": [
     "1890"
   ],
-  "skincare,cleansing,organic,gentle,brightening": [
+  "cleanser,brightening,organic,facial,gentle": [
     "1891"
   ],
   "body-wash,moisturizing,tea-rose,almond,soothing": [
@@ -5240,7 +5237,7 @@
   "body-lotion,moisturizing,sheer,botanical,adult": [
     "1912"
   ],
-  "serum,primer,ageless,cosmetic,1-ounce": [
+  "serum,primer,ageless,cosmetic,1ounce": [
     "1913"
   ],
   "facial,cleansing,wipe,simple,25count": [
@@ -5291,7 +5288,7 @@
   "hair-color,permanent,shimmering,dark-burgundy,conditioning": [
     "1927"
   ],
-  "nail-treatment,restores,thickened,laquer,professional": [
+  "nail,treatment,restore,thickened,laquer": [
     "1928"
   ],
   "therapy,protein,intensive,soft,nails": [
@@ -5405,7 +5402,7 @@
   "eyeshadow,quad,pastel,perfect,velvet": [
     "1666"
   ],
-  "headband,rhinestone,vintage,women,phoenix": [
+  "headband,rhinestone,vintage,women,handmade": [
     "1965"
   ],
   "lipstick,luminous,lightweight,nude,color-riche": [
@@ -5454,7 +5451,7 @@
   "fragrance,unisex,edt,spray,ckone": [
     "1981"
   ],
-  "soap,antioxidant,glycerin,cranberry,defense": [
+  "soap,antioxidant,glycerin,cranberry,skin": [
     "1982"
   ],
   "powder,tone,correcting,balanced,radiant": [
@@ -5484,8 +5481,9 @@
   "makeup-case,with-mirror,zebra-print,durable,cosmetic": [
     "1990"
   ],
-  "lip-butter,colorful,gel-formula,women,glow": [
-    "1991"
+  "lip-butter,colorful,gel,women,glow": [
+    "1991",
+    "6600"
   ],
   "facial,care,4in1,set,purple": [
     "1992"
@@ -5657,6 +5655,7 @@
   "nail,art,brush,set,professional": [
     "2042",
     "7994",
+    "9803",
     "11759"
   ],
   "perfume,citrus,floral,women,luxury": [
@@ -5910,7 +5909,7 @@
   "mascara,waterproof,black,wash-off,jet": [
     "2130"
   ],
-  "perfume,floral,vanilla,evening,classic": [
+  "perfume,floral,vanilla,classic,exotic": [
     "2131"
   ],
   "cream,moisturizing,emu,vitamin,super": [
@@ -5935,7 +5934,7 @@
   "gel-polish,uv-cure,soak-off,twist-cap,gossip-girl": [
     "2137"
   ],
-  "shellac,uv-cured,glow,moonlight,roses": [
+  "shellac,uv-cured,moonlight,roses,glow": [
     "2138"
   ],
   "uv,top,coat,protective,durable": [
@@ -5977,7 +5976,7 @@
   "shampoo,dandruff,fragrance-free,salicylic,scalp": [
     "2148"
   ],
-  "exfoliator,natural,instant,dead,skin": [
+  "exfoliator,natural,peel,soft,skin": [
     "2149"
   ],
   "styling-cream,nourishes,hydrates,curls,defines": [
@@ -5995,8 +5994,9 @@
   "nail-art,dotting,marbling,tool,set": [
     "2154"
   ],
-  "gel,brightening,aha,skin,lightening": [
-    "2155"
+  "gel,brightening,aha,skin,lighten": [
+    "2155",
+    "7151"
   ],
   "eye,brightener,pink,base,restful": [
     "650"
@@ -6155,6 +6155,9 @@
   "nail-lacquer,pirate-theme,mermaid-tears,women,colorful": [
     "2204"
   ],
+  "top-coat,dry-fast,professional,clear,high-gloss": [
+    "2205"
+  ],
   "blotting,paper,oil,absorbent,premium": [
     "2206",
     "4734"
@@ -6253,7 +6256,7 @@
   "anti-aging,treatment,idebenone,topical,skincare": [
     "2237"
   ],
-  "foot-file,removes-callus,original,gentle,professional": [
+  "foot-file,removes-callus,original,gentle,precise": [
     "2238"
   ],
   "eye,restoration,professional,complex,treatment": [
@@ -6262,7 +6265,7 @@
   "anti-aging,cream,professional,dermatologist,smoothing": [
     "2240"
   ],
-  "serum,anti-aging,micro-sculpting,facial,regenerating": [
+  "serum,anti-aging,micro-sculpting,facial,olay": [
     "41"
   ],
   "anti-aging,night,resurfacing,elixir,facial": [
@@ -6280,7 +6283,7 @@
   "foundation,powder,pure,spf,lasting": [
     "2245"
   ],
-  "concealer,highlighting,lumi,ivory,touch": [
+  "concealer,highlighting,luminous,ivory,touch": [
     "2246"
   ],
   "eyeshadow,24hour,creamgel,inked,pink": [
@@ -6299,7 +6302,7 @@
     "2251",
     "6260"
   ],
-  "body-butter,hydrates,brazil-nut,natural,dry-skin": [
+  "body-butter,hydrating,natural,brazil-nut,skin-repair": [
     "2252"
   ],
   "scrubber,exfoliating,two-sided,back,textured": [
@@ -6388,18 +6391,6 @@
   ],
   "shampoo,conditioning,deep,penetrating,hair": [
     "2279"
-  ],
-  "shampoo,conditioner,kids,cowabunga,coconut": [
-    "315"
-  ],
-  "conditioner,leave-in,vitamin-e,hair,milk": [
-    "2280"
-  ],
-  "shampoo,keratin,smooth,hair,7day": [
-    "2281"
-  ],
-  "conditioner,color,care,technician,hair": [
-    "2282"
   ],
   "oil,tea-tree,natural,australian,antiseptic": [
     "2283"
@@ -6515,7 +6506,7 @@
   "face-wash,acne-treatment,10%-benzoyl,deep-clean,maximum-strength": [
     "2318"
   ],
-  "face-wash,acne-treatment,oxy,preventive,6-fl-oz": [
+  "face-wash,acne-treating,oxy,preventive,6-fl-oz": [
     "2319"
   ],
   "cleansing,acne,treatment,pads,patented": [
@@ -6554,7 +6545,7 @@
   "pusher,wooden,dual-ended,cuticle,orange": [
     "2330"
   ],
-  "fluid,firming,dmae,facial,supple": [
+  "firming,fluid,dmae,facial,supple": [
     "2331"
   ],
   "eyelid-tape,natural-double,soft-fiber,german-made,precise-fit": [
@@ -6614,7 +6605,7 @@
   "oil,organic,moisturizing,skin,hair": [
     "2350"
   ],
-  "concealer,minimizes,creaseless,fair,maracuja": [
+  "concealer,fair,maracuja,creaseless,minimizes": [
     "2351"
   ],
   "eyelash,applicator,clip,false,glue": [
@@ -6638,7 +6629,7 @@
   "shampoo,moisturize,natural,peppermint,olive-butter": [
     "2359"
   ],
-  "sunscreen,lavender,emollient,very,natural": [
+  "sunscreen,lavender,emollient,adult,natural": [
     "2360"
   ],
   "body,cream,pink,grapefruit,unisex": [
@@ -6665,7 +6656,7 @@
   "conditioner,tea-tree,cleansing,hair,soothing": [
     "2368"
   ],
-  "brow,define,pigmented,wax,shaped": [
+  "eyebrow,define,pigmented,wax,shaped": [
     "2369"
   ],
   "eyeshadow,lasting,tattoo,intense,24hour": [
@@ -6710,7 +6701,7 @@
   "hair-mask,paprika-extract,olive-oil,warming,growth": [
     "2383"
   ],
-  "shampoo,organic,argan,vitamin,fatty": [
+  "shampoo,organic,argan,vitamin,fatty-acids": [
     "2384"
   ],
   "conditioner,organic,argan,hair,nourishing": [
@@ -6853,7 +6844,7 @@
   "bronzing,cosmetic,celestial,powder,glow": [
     "2434"
   ],
-  "shampoo,blonde,enhancing,toning,brightening": [
+  "shampoo,blonde,enhancing,renewing,brightening": [
     "2435"
   ],
   "hairspray,flexible,hold,shine,strength": [
@@ -6874,7 +6865,7 @@
   "eye-cream,anti-aging,sculpting,women,duo": [
     "2441"
   ],
-  "conditioner,silk,therapy,hair,treatment": [
+  "hair-treatment,moisturizing,silk,therapeutic,biosilk": [
     "2442"
   ],
   "night-lotion,wrinkle-repair,deep-set,anti-aging,l'oreal": [
@@ -6981,7 +6972,7 @@
   "conditioner,moisturizes,restorative,damaged,shea": [
     "2479"
   ],
-  "shampoo,baby,gentle,travel,no-tears": [
+  "shampoo,baby,gentle,travel,natural": [
     "872"
   ],
   "conditioner,curl,hydrating,gentle,moisturizing": [
@@ -7133,7 +7124,7 @@
   "cream,nourishing,water-free,dry,shine": [
     "2535"
   ],
-  "wrap,anti-breakage,satin,hair,treatment": [
+  "wrap,anti-breakage,satin,dry,hair": [
     "2536"
   ],
   "bonnet,satin,extra-large,sleep,wrap": [
@@ -7221,7 +7212,7 @@
   "serum,keratin,smooth,at-home,shine": [
     "2564"
   ],
-  "acne-treatment,benzoyl-peroxide,medical-grade,5percent,therapeutic": [
+  "acne-treatment,benzoyl-peroxide,medical-grade,5percent,lotion": [
     "2565"
   ],
   "moisturizer,hydrating,therapeutic,skin,intensive": [
@@ -7317,7 +7308,7 @@
   "moisturizer,oil-free,spf15,facial,proactiv": [
     "2607"
   ],
-  "cleanser,acne,mask,dermatologist,clear-pore": [
+  "cleanser,acne,dual,dermatologist,clear": [
     "2608"
   ],
   "sunscreen,gentle,tear-free,baby,spf-40": [
@@ -7329,13 +7320,13 @@
   "mirror,adjustable,magnified,lighted,vanity": [
     "2611"
   ],
-  "hair-pin,jumbo,black,ball-tip,up-dos": [
+  "hair-pin,jumbo,black,assorted,up-dos": [
     "2612"
   ],
   "brush,ionic,boar,eco,healthy": [
     "2613"
   ],
-  "clip,bun,holder,girls,twist": [
+  "clip,bun,twist,holder,girls": [
     "2614"
   ],
   "shampoo,itch-relief,max-strength,scalp-treatment,gentle": [
@@ -7401,7 +7392,7 @@
   "leave-in,argan,absorb,soft,shine": [
     "1648"
   ],
-  "hair-treatment,moisturizing,natural,intensive,sweet-almond": [
+  "hair-treatment,moisturizing,natural,intensive,almond": [
     "2635"
   ],
   "cleanser,acne,salicylic,deep,pore": [
@@ -7413,7 +7404,7 @@
   "cleanser,oil-free,salicylic,acne,treatment": [
     "2639"
   ],
-  "soap,fragrance,pink,frosted,luxury": [
+  "soap,luxury,pink,frosted,graceful": [
     "2640"
   ],
   "conditioner,natural,vegetarian,leave-in,7-ounce": [
@@ -7468,7 +7459,7 @@
   "conditioner,nourishing,coconut,sulfate-free,paraben-free": [
     "2662"
   ],
-  "shampoo,nourishing,coconut,milk,sulfate-free": [
+  "shampoo,nourishing,coconut,sulfate-free,paraben-free": [
     "2663"
   ],
   "shampoo,conditioner,hydrating,tea,tree": [
@@ -7631,7 +7622,7 @@
   "rose-water,moisturizing,moroccan,pure,facial": [
     "2715"
   ],
-  "eyeliner,precise,liquid,black,dramatic": [
+  "eyeliner,precise,liquid,black,defined": [
     "2716"
   ],
   "anti-wrinkle,cream,protective,facial,90-second": [
@@ -7640,7 +7631,7 @@
   "body-creme,eczema-relief,soothing,dry-skin,dermatologist-recommended": [
     "2718"
   ],
-  "flat-iron,titanium,smooth,professional,1-inch": [
+  "flat-iron,titanium,smooth,1-inch,professional": [
     "2719"
   ],
   "styler,ceramic,limited,candy,yellow": [
@@ -7692,7 +7683,7 @@
   "brush,lift,concave,boar,long": [
     "2734"
   ],
-  "flat-iron,ceramic,450-degree,brazilian,halo": [
+  "flat-iron,ceramic,450-degrees,brazilian,halo": [
     "2735"
   ],
   "cream,anti-cellulite,natural,mint,diva": [
@@ -7728,7 +7719,7 @@
   "thinner,restore,shine,original,unique": [
     "2746"
   ],
-  "top-coat,rapid-dry,professional,high-shine,refill": [
+  "top-coat,rapid-dry,professional,polish,durable": [
     "2747"
   ],
   "eyelash,enhancement,gem,non-irritating,physician-tested": [
@@ -7826,7 +7817,7 @@
   "nail-polish,chip-resistant,essential,fashion,sure-shot": [
     "2780"
   ],
-  "nail,polish,collection,fall,essence": [
+  "nail,polish,collection,fall,head": [
     "2781"
   ],
   "nail,lacquer,after,dark,polish": [
@@ -7842,7 +7833,7 @@
     "2785",
     "7765"
   ],
-  "facial,cleansing,coq10,organic,milk": [
+  "cleansing,coq10,organic,facial,milk": [
     "2786"
   ],
   "moisturizer,sunshield,anti-aging,facial,spf-25": [
@@ -7893,10 +7884,10 @@
   "conditioner,humectant,moisture,28oz,professionals": [
     "2801"
   ],
-  "conditioner,moisturizes,strawberry,cream,softens": [
+  "conditioner,moisturizes,strawberry,cream,brittle": [
     "2802"
   ],
-  "conditioner,silky,protein,smooth,silk": [
+  "conditioner,silky,protein,smooth,luxury": [
     "2803"
   ],
   "concealer,instant,covers,imperfections,beautyko": [
@@ -7926,7 +7917,7 @@
   "remover,gentle,3in1,effective,conditioner": [
     "2812"
   ],
-  "eye-serum,anti-aging,women,luxury,daily": [
+  "eye-serum,anti-aging,women,luxury,l'oréal": [
     "2813"
   ],
   "lip,treatment,argan,buttery,shiny": [
@@ -8157,7 +8148,7 @@
   "oral,antiseptic,gentle,wound,odor-killing": [
     "2895"
   ],
-  "acne-care,phototherapy,handheld,topical,starter": [
+  "acne-care,phototherapy,handheld,starter,unique": [
     "2896"
   ],
   "gel,hardens,strengthens,nails,protective": [
@@ -8228,7 +8219,7 @@
   "makeup-sponge,blend,soft,professional,beginner": [
     "2918"
   ],
-  "makeup,organize,compact,purse,durable": [
+  "makeup-bag,organizer,compact,purse,durable": [
     "2919"
   ],
   "blush,melt,souffle,nude,cherubic": [
@@ -8306,7 +8297,7 @@
   "bb-cream,anti-aging,broad-spectrum,sunscreen,moisturizer": [
     "711"
   ],
-  "bb-cream,protective,mineral,light,bright": [
+  "bb-cream,protective,mineral,light,beige": [
     "2943"
   ],
   "snail-cream,repair,moisturizing,regeneration,all-in-one": [
@@ -8321,16 +8312,16 @@
   "nail-art,rhinestones,2400-piece,12-color,wheels": [
     "2947"
   ],
-  "beauty-clip,nose-shaping,lifting,daily,bridge-straightening": [
+  "beauty-clip,nose-shaping,lifting,bridge-straightening,daily-use": [
     "2948"
   ],
-  "oil,organic,moisturizing,hair,skin": [
+  "organic,argan,moisturizing,hair,skin": [
     "2949"
   ],
   "roller,micro,titanium,540,treatment": [
     "2950"
   ],
-  "nail-art,rhinestones,half-round,3d,pearl-beads": [
+  "nail-art,rhinestones,half-round,pearl-beads,3d-decoration": [
     "2951"
   ],
   "derma-roller,medical-grade,stainless-steel,acne-scar,home-use": [
@@ -8339,7 +8330,7 @@
   "oil,pure,moroccan,organic,skincare": [
     "2953"
   ],
-  "nail,uv-cured,clear,powder,technological": [
+  "nail,uv-cured,clear,powder,patent": [
     "2954"
   ],
   "nail-polish,colorful,decorative,women,unique": [
@@ -8451,7 +8442,7 @@
   "shampoo,color,care,treated,cucumber": [
     "2986"
   ],
-  "soap,natural,coconut,lemon,family": [
+  "soap,natural,essential,family,coconut": [
     "2987"
   ],
   "bronzer,glow-enhancing,pressed,shimmer,natural": [
@@ -8488,7 +8479,7 @@
     "2998",
     "9614"
   ],
-  "bb-cream,blemish-recover,oil-control,skin-protectant,troubled-skin": [
+  "bb-cream,blemish-recover,oil-control,skin-protectant,moisturizing": [
     "2999"
   ],
   "shampoo,conditioner,tea,tree,dry": [
@@ -8511,8 +8502,7 @@
   ],
   "conditioner,restorative,strengthening,hair,unique": [
     "3006",
-    "8143",
-    "9092"
+    "8143"
   ],
   "conditioner,moisturizing,humectress,deep,treatment": [
     "3007"
@@ -8592,7 +8582,7 @@
   "skin,smoothing,lotion,exfoliating,corrective": [
     "3031"
   ],
-  "facial-cream,exfoliating,glycolic,20percent,antiaging": [
+  "facial-cream,anti-aging,glycolic-acid,20-percent,elite": [
     "3032"
   ],
   "antioxidant,joint,skin,health,gel": [
@@ -8604,7 +8594,7 @@
   "perfume,women,floral,gift,unique": [
     "3035"
   ],
-  "perfume,masculine,metal,spray,unique": [
+  "perfume,masculine,metal,citrus,spray": [
     "3036"
   ],
   "fragrance,masculine,blue,spray,authentic": [
@@ -8634,7 +8624,7 @@
   "nail-art,diy,alloy,rhinestone,bow-tie": [
     "3044"
   ],
-  "nail-art,3d,alloy,floral,diy": [
+  "nail-art,3d,alloy,pink,butterfly": [
     "3045"
   ],
   "nail-art,rhinestone,clear,20000pcs,colorful": [
@@ -8643,7 +8633,7 @@
   "nail-art,metal,studs,heart,4mm": [
     "3047"
   ],
-  "nail-art,decorative,round,crystal,butterfly": [
+  "nail-art,decorative,round,crystal,600pc": [
     "3048"
   ],
   "false,lashes,bundle,natural,thick": [
@@ -8717,7 +8707,7 @@
   "cream,soothes,redness,skin,relief": [
     "3071"
   ],
-  "leavein-treatment,conditioning,restorative,hair,promend": [
+  "conditioning,leavein,treatment,hair,restorative": [
     "3072"
   ],
   "conditioner,color,protect,retain,treat": [
@@ -8886,7 +8876,7 @@
   "headband,elastic,unisex,wavy,free": [
     "3122"
   ],
-  "blower,portable,mini,silver,manicure": [
+  "fan,portable,mini,silver,manicure": [
     "3123"
   ],
   "nail,polish,pink,friday,collection": [
@@ -8969,18 +8959,6 @@
   "shampoo,anti-dandruff,mint,men,scalp": [
     "3148"
   ],
-  "conditioner,rainforest,natural,hair,fresh": [
-    "712"
-  ],
-  "cream,anti-aging,bee-venom,new-zealand,active": [
-    "3149"
-  ],
-  "shampoo-conditioner,kids,peach,2-in-1,gentle": [
-    "3150"
-  ],
-  "sleeping-mask,ear-plugs,foam,concave,travel": [
-    "3151"
-  ],
   "foundation,lightweight,floats,fine,lines": [
     "3152"
   ],
@@ -9023,7 +9001,7 @@
   "facial-peel,exfoliating,glycolic,30%,professional": [
     "3164"
   ],
-  "eyeliner,liquid,fiber,tipped,precise": [
+  "eyeliner,liquid,fiber,tip,precise": [
     "3165"
   ],
   "cleansing,gentle,granular,all-skin-types,exfoliating": [
@@ -9077,7 +9055,7 @@
   "cream,moisturizing,fortifying,night,barrier": [
     "3181"
   ],
-  "serum,anti-wrinkle,vitamin_a,facial,nourishing": [
+  "serum,anti-wrinkle,vitamin-a,facial,nourishing": [
     "3182"
   ],
   "lip-gloss,ph-powered,pink,usa-made,moisturizing": [
@@ -9089,7 +9067,7 @@
   "shower-cap,clear,reusable,adult,plain": [
     "3185"
   ],
-  "lipstick,creamy,long-lasting,black-label,heiress": [
+  "lipstick,creamy,long-lasting,rich,black-label": [
     "3186"
   ],
   "facial-scrub,citrus,natural,gentle,exfoliating": [
@@ -9101,7 +9079,7 @@
   "nail-lacquer,limited-edition,goldeneye,collectible,decorative": [
     "3189"
   ],
-  "nail-dryer,uv-curing,36w,professional,spa": [
+  "nail-dryer,uv-curing,36w,professional,spa-equipment": [
     "3190"
   ],
   "makeup-brush,precision,goat-hair,16-piece,professional": [
@@ -9110,10 +9088,10 @@
   "paraffin-bath,heat-retaining,lavender,therapeutic,refill": [
     "3192"
   ],
-  "cuticle-oil,organic,healing,redness,clove": [
+  "cuticle-oil,organic,nourishing,heals,clove": [
     "3193"
   ],
-  "lotion,moisturizing,essential,herbal,citrus-mint": [
+  "lotion,moisturizing,essential,herbal,citrus": [
     "3194"
   ],
   "brow,powder,duo,dark,natural": [
@@ -9210,7 +9188,7 @@
   "nail,polish,color,modern,american": [
     "3224"
   ],
-  "cleanser,nourish,radiance,gentle,exfoliating": [
+  "cleanser,nourish,radiance,exfoliating,creamy": [
     "3225"
   ],
   "cream,refines,texture,all-skin-tones,pixel-level": [
@@ -9222,7 +9200,7 @@
   "concealer,mineral,natural,unscented,healing": [
     "3228"
   ],
-  "conditioner,leave,blonde,treatment,repair": [
+  "conditioner,leave-in,blonde,treatment,repair": [
     "3229"
   ],
   "hair-mask,moisturizes,keratin,unisex,oil": [
@@ -9253,7 +9231,7 @@
   "headband,metallic,floral,gold,ladies": [
     "3238"
   ],
-  "ice,citrus,towelette,cool,personal": [
+  "ice,citrus,towelette,cooling,personal": [
     "3239"
   ],
   "concealer,heavy-duty,non-comedogenic,light-coverage,all-skin-types": [
@@ -9261,9 +9239,6 @@
   ],
   "lash-stain,4-day,thick,fluttery,durable": [
     "3241"
-  ],
-  "primer,smoothing,clear,skin,refined": [
-    "3242"
   ],
   "concealer,lift,tone,under-eye,minimizing": [
     "3243"
@@ -9289,7 +9264,7 @@
   "hair-oil,natural,conditioning,growth,100%": [
     "3250"
   ],
-  "self-tan,instant,spray,quick,gel": [
+  "self-tan,quick-dry,spray,instant,gel": [
     "3251"
   ],
   "self-tanner,moisturizer,color-maximizer,sunless,natural": [
@@ -9313,7 +9288,7 @@
   "conditioner,argan,shine,moisturizing,moroccan": [
     "3258"
   ],
-  "razor,disposable,single,blade,women": [
+  "razor,electric,double,edge,cartridge": [
     "3259"
   ],
   "remover,pen,changeable,tips,acetone": [
@@ -9325,7 +9300,7 @@
   "hair-clip,crystal,jewelry,floral,heart": [
     "3262"
   ],
-  "jewelry,fashion,rhinestone,pink,set": [
+  "jewelry,rhinestone,fashion,pink,set": [
     "3263"
   ],
   "hair-clip,vintage,crystal,women,blue": [
@@ -9460,7 +9435,7 @@
   "toner,ph,balance,enzymatic,refine": [
     "3328"
   ],
-  "facial-brush,acid-applicator,glycolic,wooden,exfoliating": [
+  "facial-brush,acid-applicator,glycolic,wooden,precise": [
     "3329"
   ],
   "cocoa,butter,raw,halal,organic": [
@@ -9500,10 +9475,10 @@
   "clip,no-slip,octopus,hair,woman": [
     "3339"
   ],
-  "mascara,volumizing,waterproof,black,brush": [
+  "mascara,volumizing,brush,waterproof,blackest": [
     "3340"
   ],
-  "styling,braid,elastic,black,snag-free": [
+  "braiding-tool,snag-free,elastic,black,4mm": [
     "3341"
   ],
   "twister,hair,mini,beauty,effortless": [
@@ -9537,7 +9512,7 @@
   "shampoo,conditioner,body,wash,pineapple": [
     "3350"
   ],
-  "soap,mild,biodegradable,cruelty-free,concentrated": [
+  "soap,mild,biodegradable,vegan,concentrated": [
     "3351"
   ],
   "nail-color,extreme-wear,trendy-shade,easy-grip,lacey-lilac": [
@@ -9592,7 +9567,8 @@
     "3367"
   ],
   "eyeliner,mistakeproof,liquid,black,precise": [
-    "3368"
+    "3368",
+    "7382"
   ],
   "haircolor,creamy,non-drip,medium,blonde": [
     "3369"
@@ -9742,7 +9718,7 @@
   "body-cream,moisturizer,water-based,greaseless,fresh-fragrance": [
     "3419"
   ],
-  "hand,moisturizing,gloves,soft,unique": [
+  "hand,moisturizing,gloves,repair,aquasential": [
     "3420"
   ],
   "cream,exfoliating,glycolic,acne,10%": [
@@ -9778,7 +9754,7 @@
   "soap,refresh,original,bar,skin": [
     "3430"
   ],
-  "hair-color,fade-resistant,conditioning,black,rich": [
+  "hair-color,fade-resistant,conditioning,natural,black": [
     "3431"
   ],
   "brush,detangling,professional,wet,dry": [
@@ -9835,13 +9811,13 @@
   "soap,moisturizing,silk,unisex,endless": [
     "3449"
   ],
-  "castor-oil,cold-pressed,natural,skin,emollient": [
+  "castor-oil,pure,cold-pressed,skin,nourish": [
     "3450"
   ],
   "mascara,volumizing,carbon,black,healthy": [
     "3451"
   ],
-  "skin,peel,thermal,regenerative,daily": [
+  "skin,regenerate,peel,daily,thermal": [
     "3452"
   ],
   "top-coat,anti-chip,acrylic,hard,glossy": [
@@ -9898,7 +9874,7 @@
   "conditioner,brightens,silver,gray,hair": [
     "3471"
   ],
-  "headband,comfort,no-headache,stylish,vidal-sassoon": [
+  "headband,comfort,no-headache,stylish,fashion": [
     "3472"
   ],
   "bonnet,ionic,soft,dryer,purple": [
@@ -9910,7 +9886,7 @@
   "straightener,digital,ceramic,tourmaline,bonus": [
     "3475"
   ],
-  "mirror,lighted,foldable,magnified,two-sided": [
+  "mirror,lighted,foldable,two-sided,5x-magnification": [
     "3476"
   ],
   "hair-dryer,ac-motor,fast-drying,salon-performance,ceramic": [
@@ -9941,7 +9917,7 @@
     "3485",
     "3492"
   ],
-  "fragrance,women,spray,edible,unique": [
+  "fragrance,spray,floral,women,unique": [
     "3486"
   ],
   "moisturizing,antioxidant,spf,derma,anti-aging": [
@@ -9986,7 +9962,7 @@
   "adhesive,waterproof,dark,tube,precise": [
     "3501"
   ],
-  "eyeliner,sticker,temporary,multi-style,40pairs": [
+  "eyeliner,temporary,sticker,mix,styles": [
     "3502"
   ],
   "headband,rabbit,polka,dot,keyring": [
@@ -10157,7 +10133,7 @@
   "concealer,true-match,super-blendable,fair-light,crayon": [
     "3562"
   ],
-  "nail-lacquer,decorative,liquid,mariah,hong-kong": [
+  "nail,lacquer,plum,collection,mariah": [
     "3563"
   ],
   "nail-polish,metallic,collection,nicki-minaj,burlesque": [
@@ -10251,12 +10227,11 @@
   "fragrance,women,orange,apple,forbidden": [
     "3589"
   ],
-  "body-mist,women,vintage,soul,liz-claiborne": [
+  "body-mist,women,vintage,liz-claiborne,soul": [
     "3590"
   ],
-  "fragrance,floral,premium,women,unique": [
-    "3591",
-    "1660"
+  "fragrance,spray,queen,latifah,edp": [
+    "3591"
   ],
   "perfume,energetic,unique,women,beyonce": [
     "3592"
@@ -10264,7 +10239,7 @@
   "perfume,sensual,rare,women,baie-rose": [
     "3593"
   ],
-  "nail,stamping,plates,original,2010": [
+  "nail,stamping,plate,set,original": [
     "3594"
   ],
   "sunblock,spf-70,helioplex,dry-touch,unisex": [
@@ -10300,7 +10275,7 @@
   "powder,brightening,camouflage,facial,secret": [
     "3605"
   ],
-  "anti-aging,retinol,pure,high-concentration,clinical": [
+  "anti-aging,retinol,high-concentration,clinical,pure": [
     "3606"
   ],
   "conditioner,smoothing,unisex,frizzness,herbal": [
@@ -10339,7 +10314,7 @@
   "toner,permanent,liquid,white,blonde": [
     "3618"
   ],
-  "developer,cream,20volume,hair,permanent": [
+  "developer,cream,20volume,hair,color": [
     "3619"
   ],
   "hair-care,protective,keratin,sulfate-free,color-preserving": [
@@ -10390,7 +10365,7 @@
   "cuticle-nipper,stainless-steel,full-jaw,precision,safety": [
     "3634"
   ],
-  "oil,replenishing,lavender,cuticle,post-gel": [
+  "cuticle-oil,replenishing,lavender,post-gel,small-size": [
     "3635"
   ],
   "eye-shadow,long-wear,color-stay,quad,addictive": [
@@ -10411,7 +10386,7 @@
   "skin,clear,mist,facial,unique": [
     "3641"
   ],
-  "mascara,volumizing,longlash,cat,wink": [
+  "mascara,volumizing,longlash,wink,cat": [
     "3642"
   ],
   "eye-cream,nourishing,almond,delicate,protective": [
@@ -10489,9 +10464,8 @@
   "body-lotion,coconut-papaya,shea-butter,nourishing,tropical": [
     "3667"
   ],
-  "rosewater,glycerin,skin,protectant,pure": [
-    "3668",
-    "8004"
+  "rosewater,glycerin,pure,skin,protectant": [
+    "3668"
   ],
   "hair,smoother,shine,control,sheen": [
     "3669"
@@ -10624,21 +10598,20 @@
   "cleanser,whipped,creamy,facial,gentle": [
     "3709"
   ],
-  "facial-wipe,gentle,kind-to-skin,cleanses,waterproof-mascara": [
+  "facial-wipe,gentle,kind-to-skin,twin-pack,50-count": [
     "3710"
   ],
   "headband,fashion,gold-leaf,festival,princess": [
     "3711"
   ],
-  "headband,rhinestone,korean,party,cat": [
+  "headband,rhinestone,korean,cat,party": [
     "3712"
   ],
   "headband,rhinestone,elastic,fashion,handmade": [
     "3713"
   ],
-  "headband,trendy,polka-dot,rabbit-ear,necklace": [
-    "3714",
-    "7083"
+  "headband,trendy,polka-dot,rabbit-ear,face-wash": [
+    "3714"
   ],
   "fragrance,floral,elegant,women,unique": [
     "3715"
@@ -10688,7 +10661,7 @@
   "oil,organic,cold-pressed,skin,guarantee": [
     "1359"
   ],
-  "smoothing,treatment,rich,dry,hair": [
+  "smoothing,treatment,butter,dry,hair": [
     "3730"
   ],
   "self-tanning,instant,mousse,dark,fast-drying": [
@@ -10742,7 +10715,7 @@
   "wash-cloth,nylon,textured,japanese,patented": [
     "3746"
   ],
-  "clipper,stainless,precision,lever,durable": [
+  "clipper,stainless,precise,durable,lever": [
     "3747"
   ],
   "diffuser,heat保护,ultra-light,prevents-damage,diffusion": [
@@ -10757,10 +10730,10 @@
   "gloss,shiny,soft,coral,rich": [
     "3756"
   ],
-  "gloss,high-shine,honey-nectar,lip,electric-shock": [
+  "gloss,high-shine,pigmented,lip,electric": [
     "3757"
   ],
-  "hair-mask,moisturizing,deep-recovery,dry-hair,intensive": [
+  "hair-mask,moisturizing,deep-recovery,dry-hair,neutrogena": [
     "866"
   ],
   "lipstick,lustrous,pearl,highbeam,tan": [
@@ -10785,7 +10758,7 @@
   "eyeshadow,neon,glitter,33-color,dazzling": [
     "3764"
   ],
-  "makeup-brushes,goat-hair,pro-set,cosmetic,case": [
+  "makeup-brushes,goat-hair,pro-set,cosmetic,neewer": [
     "3765"
   ],
   "conditioner,smoothing,silky,hair,sleek": [
@@ -10800,7 +10773,7 @@
   "conditioner,smooth,silky,hair,moisturizing": [
     "873"
   ],
-  "fragrance,floral,feminine,luxury,princess": [
+  "fragrance,floral,feminine,luxury,unique": [
     "3769"
   ],
   "serum,vitamin,high,potency,oil-free": [
@@ -10851,7 +10824,7 @@
   "shampoo,anti-dandruff,peace,hair,adult": [
     "3784"
   ],
-  "facial-sponge,cleanses,round,pack-of-12,reusable": [
+  "facial-sponge,cleanses,reusable,round,pack": [
     "3794"
   ],
   "bath,soak,organic,creamy,nourishes": [
@@ -10899,7 +10872,7 @@
   "brush,cleansing,deep-pore,oily-skin,twin-pack": [
     "3809"
   ],
-  "paraffin-bath,heat-control,pain-relief,dry-skin,dial": [
+  "paraffin-bath,heat-control,pain-relief,dry-skin,therapeutic": [
     "3810"
   ],
   "electric,nail,drill,art,pen": [
@@ -11142,7 +11115,7 @@
   "foot-file,two-sided,hangable,removable,supportive": [
     "3896"
   ],
-  "essential,aromatic,floral,cleansing,stimulating": [
+  "essential-oil,focusing,lavender,herbal,balancing": [
     "3897"
   ],
   "essential-oil,uplifting,ylang-ylang,1-oz,aromatic": [
@@ -11199,7 +11172,7 @@
   "cleansing,hydrating,cowash,dry,hair": [
     "3915"
   ],
-  "facial-mask,clay,chocolate,strawberry,delectable": [
+  "facial-mask,clay,chocolate,strawberry,soothing": [
     "3916"
   ],
   "cream,defining,curl,hair,natural": [
@@ -11214,7 +11187,7 @@
   "face-wash,gentle,alpha-hydroxy,men,exfoliating": [
     "3922"
   ],
-  "travel,organize,hanging,cosmetic,grey": [
+  "travel,organize,hanging,cosmetic,kit": [
     "3923"
   ],
   "microdermabrasion,revitalizing,skin,luminous,firm": [
@@ -11287,7 +11260,7 @@
   "bleach,volume,lightning,hair,dramatic": [
     "3943"
   ],
-  "hair-color,semi-permanent,cobalt-blue,shiny,lasting": [
+  "hair-color,semi-permanent,cobalt-blue,shiny,balsam": [
     "3944"
   ],
   "body,wash,fragrance,dry,calming": [
@@ -11350,9 +11323,8 @@
   "crystal,glass,etched,genuine,czech": [
     "3965"
   ],
-  "nail,lacquer,chip-resistant,white,free": [
-    "3966",
-    "6429"
+  "nail-lacquer,long-last,chip-resistant,white-shade,free-form": [
+    "3966"
   ],
   "cuticle-oil,nourishing,solar,vitamin-e,award-winning": [
     "3967"
@@ -11363,7 +11335,7 @@
   "polish,uv,gel,color,coat": [
     "3969"
   ],
-  "strengthener,protective,brittle,natural,layer": [
+  "nail,strengthener,protective,brittle,natural": [
     "3970"
   ],
   "nail-art,foil,sticker,diy,gold-silver": [
@@ -11372,7 +11344,7 @@
   "guide,sticker,french,chevron,teardrop": [
     "3972"
   ],
-  "nail,art,display,chart,clear": [
+  "nail-art,display,clear,fan-shaped,practice": [
     "3973"
   ],
   "nail-art,glitter,powder,hexagon,decorative": [
@@ -11470,7 +11442,7 @@
   "straightener,ceramic,pearl,1-inch,sleek": [
     "4005"
   ],
-  "night-cream,rebrightening,white,skin,nocturnal": [
+  "night-cream,rebrightening,white,skin,repair": [
     "4006"
   ],
   "facial,cotton,natural,soft,absorbent": [
@@ -11540,13 +11512,13 @@
   "moisturizer,olive,mango,cocoa,unisex": [
     "4028"
   ],
-  "body-wash,acne-fighting,clear-skin,back-chest,gentle": [
+  "body-wash,acne-fighting,clear-skin,gentle,all-over": [
     "4029"
   ],
   "eye-cream,anti-aging,natural,moisturizing,youthful": [
     "4030"
   ],
-  "perfume,concentrated,red,sexy,vanilla": [
+  "perfume,concentrated,vanilla,cinnamon,red": [
     "4031"
   ],
   "perfume,love,concentrated,oil,potion": [
@@ -11578,6 +11550,9 @@
   ],
   "conditioner,scalp,nourishing,daily,frizz": [
     "3786"
+  ],
+  "conditioner,color,care,technician,hair": [
+    "2282"
   ],
   "shampoo,color,care,technician,formula": [
     "4041"
@@ -11630,7 +11605,7 @@
   "spray,texturizing,sea-salt,beach,unique": [
     "4057"
   ],
-  "hand-cream,fragrance-free,intensive,repair,extra-dry": [
+  "hand-cream,repair,fragrance-free,extra-dry,intensive": [
     "4058"
   ],
   "insert,volumizing,donut,updo,lightweight": [
@@ -11787,13 +11762,13 @@
   "lacquer,german,collection,cosmetic,octoberfest": [
     "4124"
   ],
-  "nail,lacquer,chip,resistant,free": [
+  "nail,lacquer,chip-resistant,free,resort": [
     "4125"
   ],
   "gel-polish,neon,uv,soak-off,samba": [
     "4126"
   ],
-  "serum,frizz-block,silicone,unisex,smooth": [
+  "serum,frizz-blocking,silicone,hair,unisex": [
     "4127"
   ],
   "nail-polish,longwearing,chipresistant,resort,essie": [
@@ -11838,7 +11813,7 @@
   "night-cream,plumping,retinol,hyaluronic,anti-wrinkle": [
     "4141"
   ],
-  "hair-dryer,ionic,ceramic,professional,high-wattage": [
+  "hair-dryer,ionic,ceramic,professional,folding": [
     "4142"
   ],
   "body-oil,lavender,cardamom,organic,soothing": [
@@ -11973,7 +11948,7 @@
   "oil,conditioning,monoi,treated,hair": [
     "4189"
   ],
-  "concealer,lightweight,mineral,all-skin-types,non-comedogenic": [
+  "concealer,lightweight,non-comedogenic,facial,mineral": [
     "4190"
   ],
   "foundation,sheer,glowing,brightening,skincare": [
@@ -12141,7 +12116,7 @@
   "moisturizer,anti-aging,tone-correcting,night-treatment,vitamin-rich": [
     "4247"
   ],
-  "acne-treatment,gel,topical,skin,relief": [
+  "acne-gel,treats-blemishes,reduces-redness,skin-care,mary-kay": [
     "4248"
   ],
   "foundation,dual,wet,dry,rice": [
@@ -12216,7 +12191,7 @@
   "nail,strengthener,maximum,formula,resistant": [
     "4273"
   ],
-  "nail-polish,metallic,bold,black-gold,copper-silver": [
+  "nail-polish,metallic,copper,silver,bold": [
     "4274"
   ],
   "gel,defining,alcohol-free,curl,styling": [
@@ -12261,7 +12236,7 @@
   "cleanser,foaming,antioxidant,herbal,women": [
     "4288"
   ],
-  "cleansing,wipe,gentle,travel,truth": [
+  "cleansing-wipe,gentle,travel,skin,truth": [
     "4289"
   ],
   "blotting-sheet,oil-absorbing,shine-control,ultraabsorbent,silky": [
@@ -12270,7 +12245,7 @@
   "doll,hair,clip,japanese,real": [
     "4291"
   ],
-  "electric,drill,pen-shaped,professional,multi-bit": [
+  "pen-shape,electric,multi-bit,professional,manicure": [
     "4292"
   ],
   "sleep-mask,blocks-light,lightweight,soft,travel": [
@@ -12360,7 +12335,7 @@
   "masque,nourishing,anti-frizz,dry,hair": [
     "4322"
   ],
-  "hair-mask,fortifying,thick,unisex,masquintense": [
+  "hair-mask,fortifying,thick,unisex,kerastase": [
     "4323"
   ],
   "hair-treatment,intensive,keratin,awapuhi,repair": [
@@ -12406,7 +12381,7 @@
   "hairsetter,compact,plastic,hot,clips": [
     "4337"
   ],
-  "serum,age-reversing,luminous,makeup,nude": [
+  "serum,age-reversing,luminous,nude,absolute": [
     "1642"
   ],
   "moisturizing,oatmeal,natural,body,soothing": [
@@ -12414,6 +12389,9 @@
   ],
   "bath,salt,blue,breeze,relaxing": [
     "4341"
+  ],
+  "cream,anti-aging,bee-venom,new-zealand,active": [
+    "3149"
   ],
   "facial,sonic,cleansing,skincare,glow": [
     "4342"
@@ -12536,7 +12514,7 @@
   "lip,palette,metallic,shimmer,66": [
     "4381"
   ],
-  "eyeshadow,162-colors,professional,palette,runway": [
+  "eyeshadow,162-colors,professional,collection,runway": [
     "4383"
   ],
   "makeup,crease,pointed,soft,precise": [
@@ -12605,7 +12583,7 @@
   "gel,uv,clear,natural,overlay": [
     "4404"
   ],
-  "primer,bonding,ph,balancing,agent": [
+  "primer,bonding,ph,balancing,treatment": [
     "4405"
   ],
   "supplement,hair,vitality,women,revive": [
@@ -12626,7 +12604,7 @@
   "nail-polish,colorful,kardashian,trendy,rainbow": [
     "4411"
   ],
-  "face-brush,natural-bristles,wooden-handle,skincare,earthline": [
+  "face-brush,natural-bristle,wooden-handle,skincare,earthline": [
     "4412"
   ],
   "moisturizer,age-fighting,hydration,combination,patented": [
@@ -12647,7 +12625,7 @@
   "body-bar,odor-fighting,sage,lemongrass,natural": [
     "4418"
   ],
-  "makeup,brush,natural,set,starter": [
+  "makeup,brush,natural,starter,set": [
     "4419"
   ],
   "cleanser,conditioner,almond,all-types,sulfate-free": [
@@ -12698,7 +12676,7 @@
   "curling-iron,ceramic,smooth,hair,protective": [
     "4433"
   ],
-  "serum,correcting,dark-spots,moisturizer,illuminating": [
+  "serum,correcting,dark,spots,illuminating": [
     "4434"
   ],
   "lip-polish,sugar-enriched,nourishing,dry-lips,brown-sugar": [
@@ -12821,7 +12799,7 @@
   "essential-oil,soothing,floral,100%-pure,lemongrass": [
     "4476"
   ],
-  "oil,lavender,tea-tree,aromatic,soothing": [
+  "oil,aromatic,lavender,tea-tree,uplifting": [
     "4477"
   ],
   "holder,folding,chrome,cabinet,space-saver": [
@@ -12830,7 +12808,7 @@
   "soap,natural,lavender,vanilla,non-toxic": [
     "4479"
   ],
-  "night-cream,natural,vegetarian,moisturizing,advanced": [
+  "night,cream,natural,vegetarian,advanced": [
     "4480"
   ],
   "lipstick,matte,paraben-free,red,1940s": [
@@ -12839,7 +12817,7 @@
   "roller,derma,titanium,0.50mm,facial": [
     "4482"
   ],
-  "serum,moisturising,refining,unisex,correcting": [
+  "serum,moisturising,refining,unisex,clinical": [
     "4483"
   ],
   "hair-clip,crystal,floral,purple,decorative": [
@@ -12888,7 +12866,7 @@
   "uv,color,coat,shellac,tutti-frutti": [
     "4498"
   ],
-  "self-tanning,deep-tan,overnight,original,competition": [
+  "self-tanning,deep-tan,long-lasting,overnight,competition": [
     "4499"
   ],
   "gel-polish,uv-soak-off,neon,carnaval,collectible": [
@@ -12900,7 +12878,7 @@
   "nail-polish,smoky,plush,taupe,mink": [
     "4502"
   ],
-  "perfume,women,lust,spray,3.3oz": [
+  "perfume,women,lust,spray,sensual": [
     "4503"
   ],
   "perfume,feminine,sultry,evening,rose": [
@@ -12909,7 +12887,7 @@
   "perfume,fruity,floral,women,wild-berries": [
     "4505"
   ],
-  "hair-dryer,soft-bonnet,compact,blue,portable": [
+  "hair-dryer,soft-bonnet,compact,blue,ceramic": [
     "4506"
   ],
   "blush,creamy,hd,sculpting,everyday": [
@@ -12933,7 +12911,7 @@
   "gel,defining,hydrating,curl,lightweight": [
     "4513"
   ],
-  "manicure-tool-set,spring-loaded,plastic-pouch,reusable,six-pieces": [
+  "manicure-tool-set,spring-loaded,plastic-pouch,reusable,all-in-one": [
     "4514"
   ],
   "cleanser,battery-operated,foaming,deep-clean,power": [
@@ -12999,7 +12977,7 @@
   "gloves,moisturizing,breathable,hand,ultra": [
     "3793"
   ],
-  "socks,moisturizing,gel,feet,spa": [
+  "socks,moisturizing,gel,foot,spa": [
     "3790"
   ],
   "moisturizer,anti-aging,7-in-1,daily,protective": [
@@ -13020,7 +12998,7 @@
   "lip-tint,vivid-color,one-touch,cherry-juice,longwearing": [
     "4538"
   ],
-  "heat-cap,conditioning,professional,scalp,therapeutic": [
+  "heat-cap,conditioning,professional,scalp,thermal": [
     "3515"
   ],
   "uv-color-coat,cured,shellac,studio,white": [
@@ -13113,7 +13091,7 @@
   "oil,organic,golden,argan,certified": [
     "4576"
   ],
-  "eyeliner,long-lasting,liquid,everlast,color": [
+  "eyeliner,long-lasting,liquid,everlast,colorintense": [
     "4577"
   ],
   "brush,detangle,rubberized,child,happy": [
@@ -13123,7 +13101,7 @@
   "led,dryer,digital,timer,spa": [
     "4579"
   ],
-  "eye-pillow,relief,breathable,cotton,black": [
+  "eye-pillow,pain-relief,breathable,cotton-lycra,conforming": [
     "4580"
   ],
   "sonic,cleansing,professional,four-speed,skin": [
@@ -13138,7 +13116,7 @@
   "eye,remover,cucumber,gentle,hypoallergenic": [
     "4584"
   ],
-  "bronzer,quadruple,melamax,silicone,designer": [
+  "bronzer,silicone,mega,dark,worship": [
     "1841"
   ],
   "styling,straightening,creme,hair,fixation": [
@@ -13147,7 +13125,7 @@
   "styling-mousse,anti-frizz,soft-hold,perm,panthenol": [
     "4586"
   ],
-  "gel,hold,argan,unisex,weightless": [
+  "gel,curling,defining,frizz,unisex": [
     "4587"
   ],
   "fragrance,citrus,masculine,spray,azzaro": [
@@ -13186,7 +13164,7 @@
   "oil-control,lotion,skincare,blemish-prone,formula-3": [
     "4599"
   ],
-  "gel,mattifying,oil-control,skin,tube": [
+  "gel,mattifying,oil-control,skin,unique": [
     "4600"
   ],
   "heat-cap,thermal,conditioning,scalp,professional": [
@@ -13239,7 +13217,7 @@
   "shea-butter,unrefined,soft,ghanian,raw": [
     "4616"
   ],
-  "fragrance,spicy,warm,creamy,gift": [
+  "fragrance,spicy,rich,warm,wearable": [
     "1871"
   ],
   "lip-balm,coffee-flavor,real-extract,true-coffee-lover,cocoa-butter": [
@@ -13335,7 +13313,7 @@
   "eye-remover,waterproof,quick,instant,clean": [
     "4647"
   ],
-  "lunch-set,reusable,bpa-free,containers,on-the-go": [
+  "lunch-set,reusable,bpa-free,portable,on-the-go": [
     "4648"
   ],
   "peel,exfoliating,glycolic,unbuffered,50%": [
@@ -13501,7 +13479,7 @@
   "oil,organic,pure,macadamia,culinary": [
     "4701"
   ],
-  "styling-cream,tames-frizz,curly-hair,custard-formula,original": [
+  "styling-cream,curls,custard,frizzy,tames": [
     "4702"
   ],
   "essential,therapeutic,pure,aromatic,rosemary": [
@@ -13525,7 +13503,7 @@
   "stick,multiuse,soothing,facial,glow": [
     "4709"
   ],
-  "skin-cream,whitening,serum,tone,extract": [
+  "skin,whitener,cream,tone,bleach": [
     "4710"
   ],
   "makeup-brush,blending,goat-hair,contouring,large": [
@@ -13555,7 +13533,7 @@
   "eye,remover,hydrating,lotion,gentle": [
     "4718"
   ],
-  "sunblock,spray,wet,skin,spf-70": [
+  "sunblock,spray,wet,skin,spf70": [
     "4719"
   ],
   "nail-dryer,led,single-hand,thermal,professional": [
@@ -13588,7 +13566,7 @@
   "cream,moisturizing,rose,facial,balanced": [
     "4728"
   ],
-  "makeup-palette,color-comparison,custom-designed,black,large": [
+  "makeup-palette,custom-design,large-size,black,display": [
     "4729"
   ],
   "leave-in,natural,chemical-free,hair,care": [
@@ -13754,7 +13732,7 @@
   "shower-cap,waterproof,elastic,adult,reusable": [
     "4782"
   ],
-  "eye-cream,anti-aging,peptide,retinol,lifting": [
+  "eye-cream,anti-aging,retinol-based,facial,lifting": [
     "4180"
   ],
   "hair,volumizing,spray,argan,weightless": [
@@ -13790,7 +13768,7 @@
   "tanning,dark,intense,outback,fierce": [
     "4793"
   ],
-  "fragrance,masculine,wooden,musk,tropical": [
+  "fragrance,masculine,wooden,musk,unique": [
     "4794"
   ],
   "nail-polish,spring,gumdrop,colorful,collectible": [
@@ -13808,7 +13786,7 @@
   "styler,ceramic,tourmaline,2in1,professional": [
     "4799"
   ],
-  "hair-dryer,folding,twin,portable,dual-voltage": [
+  "hair-dryer,folding,twin,dual-voltage,mini-turbo": [
     "4800"
   ],
   "oil,natural,therapeutic,scalp,marula": [
@@ -13852,6 +13830,9 @@
   ],
   "serum,extra-strength,protective,professional,hair": [
     "4812"
+  ],
+  "shampoo,keratin,smooth,hair,7day": [
+    "2281"
   ],
   "hair-spray,hold,sheer,adult,non-aerosol": [
     "4813"
@@ -13921,7 +13902,7 @@
   "oil,treatment,organic,facial,revitalizing": [
     "1332"
   ],
-  "eye-cream,vitamin-c,soothing,anti-aging,oil-free": [
+  "eye-cream,vitamin-c,all-in-one,soothing,oil-free": [
     "4832"
   ],
   "brush,sensitive,generic,twin,guarantee": [
@@ -13967,7 +13948,7 @@
   "eyeshadow,enhance,define,contour,pro": [
     "4847"
   ],
-  "hair-accessory,twister,mini,black,effortless": [
+  "hair,twister,mini,black,effortless": [
     "4848"
   ],
   "bath,moisturizing,vitamin,gentle,breeze": [
@@ -13985,10 +13966,10 @@
   "hair,coloring,kit,rebellious,jet-black": [
     "4853"
   ],
-  "moisturizer,firming,natural,fair_to_medium,glow": [
+  "moisturizer,firming,natural,fair-to-medium,glow": [
     "4854"
   ],
-  "eye-brush,cosmetic,eco,makeup,blending": [
+  "makeup,brush,eco,eye,shadow": [
     "4855"
   ],
   "nail,polish,shimmery,pink,chip-resistant": [
@@ -14078,7 +14059,7 @@
   "acne-treatment,exfoliating,salicylic,repair,gel": [
     "4894"
   ],
-  "straightening,ionic,nano-ceramic,hair,condition": [
+  "straightening,ionic,nano,ceramic,hair": [
     "4896"
   ],
   "moisturizer,hydrating,green-tea,skin,serum": [
@@ -14099,7 +14080,7 @@
   "brush,define,angled,brow,firm": [
     "4902"
   ],
-  "face-pack,purifying,neem,antibacterial,glow": [
+  "face-pack,purifying,neem,antibacterial,natural": [
     "4903"
   ],
   "nail-art,natural,salon,tips,modern": [
@@ -14165,7 +14146,7 @@
   "cuticle-pen,moisturizes,quick-dry,pen-delivery,dry-nails": [
     "4924"
   ],
-  "brush,wooden,boar,firm,hair": [
+  "brush,wooden,boar-bristle,large,german": [
     "4925"
   ],
   "elastic,hair,clear,braid,functional": [
@@ -14183,8 +14164,9 @@
   "hair-color,permanent,liquid,golden,high-lift": [
     "4930"
   ],
-  "nail-polish,soft-shade,princess,feminine,lacquer": [
-    "4931"
+  "nail,lacquer,soft,shade,limited": [
+    "4931",
+    "8153"
   ],
   "nail,lacquer,french,color,polish": [
     "4932"
@@ -14261,7 +14243,7 @@
   "mascara,volumizing,mineral,plump,definition": [
     "4956"
   ],
-  "face-mask,cleanses,pumpkin-puree,mild,all-skin-types": [
+  "mask,cleanses,pumpkin,all-skin,mild-tingling": [
     "4957"
   ],
   "acne-treatment,clearing,medicinal,adult,unique": [
@@ -14337,7 +14319,8 @@
     "4982"
   ],
   "false,eyelashes,red,cherry,extend": [
-    "4983"
+    "4983",
+    "7926"
   ],
   "facial-scrub,exfoliates,natural,gentle,stimulates": [
     "4984"
@@ -14366,7 +14349,7 @@
   "eye-gel,cooling,cucumber,tea,antioxidant": [
     "4992"
   ],
-  "day-lotion,natural,aging,facial,diminishing": [
+  "day-lotion,natural,ageless,facial,diminishing": [
     "4993"
   ],
   "cream,soothing,jasmine,vitamin,natural": [
@@ -14378,7 +14361,7 @@
   "nail-lacquer,glitter,muppet,holiday,magenta": [
     "4996"
   ],
-  "nail-lacquer,muppet,glitter,holiday,collection": [
+  "nail-lacquer,muppet,glitter,festive,collection": [
     "4997"
   ],
   "nail-polish,colorful,textured,spring,special": [
@@ -14478,13 +14461,13 @@
   "uv-cream,anti-aging,dna-protection,facial,superstructure": [
     "5029"
   ],
-  "nail,brush,assorted,professional,grip": [
+  "nail,brush,assorted,professional,gel": [
     "5030"
   ],
   "brow,sculpting,gel,light,brown": [
     "5031"
   ],
-  "cleansing,foaming,powered,skin,vivid": [
+  "cleansing,revitalizes,powered,contour,skin": [
     "4439"
   ],
   "hair,nourishing,oil,scalp,therapeutic": [
@@ -14511,10 +14494,10 @@
   "moisturizer,sunscreen,glow,fair-to-medium,spf-20": [
     "5039"
   ],
-  "shampoo,condition,hydrating,hair,set": [
+  "shampoo,conditioner,hydrating,hair,set": [
     "5040"
   ],
-  "sunscreen,broad-spectrum,natural,facial,lightweight": [
+  "sunscreen,broad-spectrum,natural,facial,spf47": [
     "5041"
   ],
   "travel-dryer,dual-setting,cold-shot,black,stylist": [
@@ -14718,7 +14701,7 @@
   "hair-mask,smoothness,shine,softness,moisturizing": [
     "5119"
   ],
-  "conditioner,luxury,moisture,locks,hair": [
+  "conditioner,luxury,moisturizing,hair,leave-in": [
     "5120"
   ],
   "shampoo,conditioner,duo,luxury,one-step": [
@@ -14727,7 +14710,7 @@
   "oil,treatment,non-greasy,hair,skin": [
     "5122"
   ],
-  "conditioning,detangles,protects,lightweight,lowph": [
+  "conditioning,detangles,moisturizes,protects,low-ph": [
     "5123"
   ],
   "acrylic,display,holds,bottles,wall": [
@@ -14778,7 +14761,7 @@
   "brush,styling,natural,heavy,long": [
     "5144"
   ],
-  "body-lotion,moisturizes,shea-butter,shower,dry-skin": [
+  "body-lotion,shower-use,shea-butter,dry-skin,moisture": [
     "5145"
   ],
   "moisturizer,herbal,hemp,age-defying,smooth": [
@@ -14883,7 +14866,7 @@
   "relaxing-balm,no-lye,botanical,hair,easy": [
     "5178"
   ],
-  "pencil,defining,twin,brown,sharpener": [
+  "pen,defining,twin,brown,sharpener": [
     "5179"
   ],
   "lipstick,shiny,light,blue,riche": [
@@ -14901,7 +14884,7 @@
   "tinted,moisturizer,spf,hydrating,philosophical": [
     "5183"
   ],
-  "base-coat,glitter,peelable,nail,opi": [
+  "base-coat,adhesive,glitter,peelable,nail": [
     "5184"
   ],
   "manicure,gel,starter,home,45": [
@@ -14940,7 +14923,7 @@
   "straightener,conditioning,nutrifusion,1-inch,hair": [
     "5195"
   ],
-  "fragrance,women,amber,luxury,unique": [
+  "fragrance,women,amber,luxurious,unique": [
     "5196"
   ],
   "primer,beautifying,nude,skin,flawless": [
@@ -14980,7 +14963,7 @@
   "hairpiece,dual-style,drawstring,blonde,high-heat": [
     "5209"
   ],
-  "travel,compartment,durable,foldable,rothco": [
+  "travel,compartment,durable,toiletry,rothco": [
     "5210"
   ],
   "nail-lacquer,metallic,mini,travel,bold": [
@@ -14999,8 +14982,7 @@
     "5215"
   ],
   "serum,lifting,organic,facial,luxury": [
-    "5216",
-    "8478"
+    "5216"
   ],
   "hair,healthy,natural,nourish,treat": [
     "5217"
@@ -15041,7 +15023,7 @@
   "gloss,stain,longlast,transparent,vibrant": [
     "5228"
   ],
-  "stain-gloss,longwear,transparent,vibrant,mauve": [
+  "gloss,stain,longwear,transparent,mauve": [
     "5229"
   ],
   "gloss,stain,longwear,transparent,berry": [
@@ -15083,7 +15065,7 @@
   "manicure,five,clear,salon,quick": [
     "5241"
   ],
-  "creme,soothing,healing,repair,dry": [
+  "creme,healing,soothing,repair,dry": [
     "5242"
   ],
   "makeup-brush,sculpting,eco,face,body": [
@@ -15269,7 +15251,7 @@
   "nail-art,decorative,colorful,beads,wheel": [
     "5304"
   ],
-  "serum,anti-frizz,polishing,hair,expert": [
+  "serum,anti-frizz,argan-oil,hair,polish": [
     "5305"
   ],
   "shampoo,itch,control,scalp,treatment": [
@@ -15362,7 +15344,7 @@
   "clay-mask,oily-skin,volcanic-mud,sensitive-skin,pore-minimizer": [
     "5335"
   ],
-  "foundation,whipped,smooth,beige,hydrated": [
+  "foundation,whipped,hydrated,smooth,beige": [
     "5336"
   ],
   "makeup-sponge,soft,hydrophilic,environmental,3d": [
@@ -15404,7 +15386,7 @@
   "organizer,quilted,travel,jewelry,safe": [
     "5350"
   ],
-  "eyelash-curler,heated,silicone,pain-free,safe": [
+  "eyelash-curler,heated,silicone,pain-free,panasonic": [
     "5351"
   ],
   "acne-treatment,time-released,benzoyl-peroxide,retinol,severe": [
@@ -15510,7 +15492,7 @@
   "primer,oil-free,cosmetic,foundation,nyx": [
     "5384"
   ],
-  "bb-cream,hydrating,hot-pink,lightweight,natural": [
+  "bb-cream,hydrating,hot-pink,lightweight,cosmetic": [
     "5385"
   ],
   "powder,neutral,natural,facial,diffuses": [
@@ -15528,13 +15510,13 @@
   "perfume,floral,daytime,women,elegant": [
     "5391"
   ],
-  "hair-regrowth,minoxidil,extra-strength,men,5%": [
+  "hair,regrowth,minoxidil,men,extra-strength": [
     "5392"
   ],
   "hair-color,conditioning,anti-brass,extra-light,glistening": [
     "5393"
   ],
-  "hair,repair,infusion,deep,omega-3": [
+  "hair,repair,infusion,deep,oil": [
     "5394"
   ],
   "feather,extension,synthetic,kit,realistic": [
@@ -15567,7 +15549,7 @@
   "aromatherapeutic,soothing,organic,mood,citrus": [
     "5404"
   ],
-  "hair-balm,shaping,quick-change,short,unisex": [
+  "shaping,quick,change,balm,unisex": [
     "5405"
   ],
   "curling,iron,ceramic,nano,tourmaline": [
@@ -15670,10 +15652,6 @@
   "body,wash,moisture,pomegranate,velvet": [
     "5440"
   ],
-  "shampoo,medicated,selenium,menthol,doctor-recommended": [
-    "5441",
-    "9529"
-  ],
   "self-tanning,instant,rich,bronze,lotion": [
     "5442"
   ],
@@ -15710,7 +15688,7 @@
   "facial,hypoallergenic,fragrance-free,coq10,vitaminc": [
     "5453"
   ],
-  "bronzer,enriched,white-tea,coq10,ultraextreme": [
+  "bronzer,ultra,enriched,skin,tanning": [
     "5454"
   ],
   "gel-polish,mint,spring,no-box,unique": [
@@ -15719,7 +15697,7 @@
   "blush,sheer,silky,fuchsia,fusion": [
     "5456"
   ],
-  "brush,bamboo,foundation,cosmetic,durable": [
+  "brush,foundation,bamboo,cosmetic,tarte": [
     "5457"
   ],
   "face-wash,exfoliate,potent,pure,cleanser": [
@@ -15801,7 +15779,7 @@
   "nail,polish,chip,resistant,long": [
     "5488"
   ],
-  "nail-polish,pearl,white,sophisticated,essence": [
+  "nail-polish,pearl,white,sophisticated,essie": [
     "5489"
   ],
   "eyeshadow,palette,limited,edition,smoky": [
@@ -15867,7 +15845,7 @@
   "roller,skin,treatment,1.0mm,hair-loss": [
     "5510"
   ],
-  "conditioner,hydrating,curl,scalp,unique": [
+  "conditioner,hydrating,curl,care,tresemme": [
     "5511"
   ],
   "hair,regrowth,minoxidil,biotin,women": [
@@ -15963,7 +15941,7 @@
   "self-tanning,lotion,medium-natural,streak-free,instant": [
     "1638"
   ],
-  "serum,repair,strengthen,dry,hair": [
+  "hair-care,blend,fashion,professional,potion": [
     "5542"
   ],
   "bb-cream,mattifies,pores,oily,combination": [
@@ -16056,7 +16034,7 @@
   "spray-bottle,fine-mist,clear,mini,fine": [
     "4438"
   ],
-  "eyeshadow,colorful,moon-style,decorative,feminine": [
+  "eyeshadow,colorful,moon-style,decorative,adult": [
     "5574"
   ],
   "face-wash,acne-treatment,daily-use,clearasil,gentle": [
@@ -16120,7 +16098,10 @@
   "body,wash,creamy,sensitive,skin": [
     "318"
   ],
-  "gel,styling,control,hair,peace": [
+  "conditioner,leave-in,vitamin-e,hair,milk": [
+    "2280"
+  ],
+  "hair,styling,control,cream,peace": [
     "5593"
   ],
   "shampoo,conditioner,citrus,male,hydration": [
@@ -16213,13 +16194,13 @@
   "eyeshadow,longwearing,crease-resistant,duo,unique": [
     "5628"
   ],
-  "shampoo,repair,caviar,overnight,hair": [
+  "shampoo,repair,overnight,hair,rescue": [
     "5629"
   ],
   "nail-lacquer,colorful,premium,professional,opi": [
     "5630"
   ],
-  "body,wash,exfoliating,fruit,creamy": [
+  "body,wash,fruit,peel,exfoliate": [
     "5631"
   ],
   "nail,file,crystal,regular,four-way": [
@@ -16374,7 +16355,7 @@
   "hair-dryer,professional,1875-watt,variable-airflow,hard-hat": [
     "5681"
   ],
-  "brightener,contour,highlight,shadow,delicate": [
+  "brightener,contour,highlight,shadow,dark": [
     "5682"
   ],
   "powder,glow,antioxidant,cosmetic,candlelight": [
@@ -16404,7 +16385,7 @@
   "perfume,sensual,floral,musk,exotic": [
     "5689"
   ],
-  "nail-lacquer,protective,chip-resistant,base-coat,free": [
+  "nail-lacquer,protective,chip-resistant,free,base": [
     "5690"
   ],
   "nail,polish,alcohol,hazardous,cosmetic": [
@@ -16413,7 +16394,7 @@
   "curling-iron,tourmaline,ceramic,tapered,1-inch": [
     "5692"
   ],
-  "clip-in,hair,extension,remy,dark-brown": [
+  "extension,clip,human,hair,dark": [
     "5693"
   ],
   "wig,synthetic,curly,short,fiber": [
@@ -16476,6 +16457,9 @@
   "shampoo,conditioner,anti-dandruff,men,care": [
     "685"
   ],
+  "conditioner,rainforest,natural,hair,fresh": [
+    "712"
+  ],
   "bath,exfoliating,cloth,twin,aquabella": [
     "5715"
   ],
@@ -16531,7 +16515,7 @@
   "manicure,no-dry-time,strip,white-cloud,tips-only": [
     "5732"
   ],
-  "moisturizer,oil-free,second-skin,hydrating,protective": [
+  "moisturizer,oil-free,second-skin,hydration,protective": [
     "5733"
   ],
   "styler,ionic,1875-watt,dual-setting,hair": [
@@ -16549,7 +16533,7 @@
   "elastic,gentle,metal-free,black,stayput": [
     "5738"
   ],
-  "toner,enzyme,vitamin,even,complexion": [
+  "serum,acne,treatment,gel,pigment": [
     "5739"
   ],
   "deodorant,natural,vanilla-lavender,gentle,long-lasting": [
@@ -16621,7 +16605,7 @@
   "parfum,feminine,pink,sensual,spray": [
     "5768"
   ],
-  "perfume,spray,women,fragrance,kate-perry": [
+  "perfume,women,spray,fragrance,kate-perry": [
     "5769"
   ],
   "tan,moisturizer,gradual,skin,natural": [
@@ -16676,8 +16660,7 @@
     "5793"
   ],
   "serum,vitamin,c,anti,aging": [
-    "5794",
-    "6212"
+    "5794"
   ],
   "perfume,oil,natural,usa,black-opium": [
     "5795"
@@ -16721,7 +16704,7 @@
   "bonnet,tourmaline,conditioning,smooth,shine": [
     "5808"
   ],
-  "serum,anti-aging,vitamin-c,organic,radiance": [
+  "serum,antiaging,vitaminc,organic,radiance": [
     "5809"
   ],
   "hair-spray,defined-curls,non-flaking,unisex,hi-def": [
@@ -16835,7 +16818,7 @@
   "serum,anti-frizz,moisture,soft,weightless": [
     "5850"
   ],
-  "shampoo,sulfate-free,thickening,spray,hair": [
+  "shampoo,sulfate-free,thickening,spray,daily": [
     "5851"
   ],
   "moisturizer,shine,vegan,paraben-free,gluten-free": [
@@ -16868,7 +16851,7 @@
   "shampoo,organic,rosemary,scalp,treatment": [
     "5859"
   ],
-  "cream,healing,patent,dry,skin": [
+  "cream,healing,moisturizing,dry,skin": [
     "5860"
   ],
   "eye,roller,anti-dark,circle,renew": [
@@ -16907,7 +16890,7 @@
   "eyeshadow,blush,shimmer,color,dual": [
     "5871"
   ],
-  "setting-spray,no-animal,u.s.-made,cosmetic,protective": [
+  "setting-spray,no-animal,u.s.a.-made,cosmetic,protective": [
     "5872"
   ],
   "primer,poreless,natural,facial,trio": [
@@ -16925,7 +16908,7 @@
   "oil,organic,restoring,skin,rosehip": [
     "5876"
   ],
-  "hydrator,collagen,natural,skin,youthful": [
+  "hydrator,collagen,natural,skin,soft": [
     "5877"
   ],
   "brush,powder,guard,large,kabuki": [
@@ -16991,7 +16974,7 @@
   "tinted,moisturizer,spf,botanical,radiant": [
     "5896"
   ],
-  "exfoliator,facial,mitten,dry,firming": [
+  "exfoliator,microdermabrasion,blackhead,firming,scrub": [
     "5898"
   ],
   "back-scrub,exfoliate,tea-tree-oil,aromatherapy,moisturize": [
@@ -17012,7 +16995,7 @@
   "soap,moisturizing,glycerin,white-tea,vitamin-e": [
     "5904"
   ],
-  "eye,treatment,illuminating,skincare,defined": [
+  "eye,treatment,illuminating,care,luminous": [
     "5905"
   ],
   "serum,anti-aging,retinol,non-irritating,collagen": [
@@ -17223,7 +17206,7 @@
   "mascara,glitter,color,rare,teal": [
     "5969"
   ],
-  "tinted,moisturizer,organic,natural,sensitive": [
+  "tinted,moisturizer,organic,natural,ivory": [
     "5970"
   ],
   "soap,organic,shea,almond,castile": [
@@ -17280,7 +17263,7 @@
   "pen,dotting,double-ended,10sizes,nail-art": [
     "5988"
   ],
-  "holder,acrylic,round,display,durable": [
+  "holder,acrylic,display,round,durable": [
     "5989"
   ],
   "lipstick,opaque,grey,chinchilla,lime-crime": [
@@ -17424,7 +17407,7 @@
   "liquid,lipstick,matte,vegan,suedeberry": [
     "6032"
   ],
-  "eyeliner,eco,brush,women,pack": [
+  "eyeliner,eco,brush,women,flat": [
     "6033"
   ],
   "face-powder,talc-free,mineral,sensitive-skin,built-in-mirror": [
@@ -17448,7 +17431,7 @@
   "acrylic,brush,synthetic,professional,design": [
     "6040"
   ],
-  "nail-art,practice,wheel,display,ten": [
+  "nail-art,practice,wheel,display,acrylic": [
     "6041"
   ],
   "serum,vitaminc,organic,antiaging,natural": [
@@ -17568,7 +17551,7 @@
   "moisturizer,rejuvenating,vital,daily,ageless": [
     "5748"
   ],
-  "wig,lace,front,offblack,human": [
+  "wig,lace,front,offblack,synthetic": [
     "6080"
   ],
   "facial-mask,deep-cleansing,natural-clay,organic,exfoliator": [
@@ -17598,7 +17581,7 @@
   "moisturizing,sensitive,cream,daily,clinical": [
     "6089"
   ],
-  "lip,treatment,sugar,moisturizing,advanced": [
+  "lip,treatment,sugar,anti-aging,translucent": [
     "4892"
   ],
   "body-lotion,moisturizes,cocoa-butter,women,stretch-marks": [
@@ -17646,7 +17629,7 @@
   "body-wash,moisturizing,silky,berry,pack": [
     "6103"
   ],
-  "emu-oil,triple-refined,pure,premium,certified": [
+  "emu-oil,triple-refined,pure,highest-grade,aea-certified": [
     "6104"
   ],
   "serum,peptide,hyaluronic,anti-aging,concentrated": [
@@ -17685,7 +17668,7 @@
   "eyelashes,human-hair,red-cherry,pack-of-6,false": [
     "6116"
   ],
-  "makeup-palette,color-comparison,custom-design,black,display": [
+  "makeup-palette,color-comparison,custom-design,display,black": [
     "6117"
   ],
   "applicator,disposable,mascara,wand,100pcs": [
@@ -17697,8 +17680,9 @@
   "hand-cream,moisturising,oil-infused,adult,unique-fragrance": [
     "6120"
   ],
-  "nail-lacquer,long-wearing,bold-color,trendsetter,feminine": [
-    "6121"
+  "nail-lacquer,colorful,long-wearing,trendsetter,bold": [
+    "6121",
+    "12037"
   ],
   "toner,hydrating,gentle,brightening,sensitive": [
     "6122"
@@ -17723,6 +17707,9 @@
   ],
   "styling,gel,shine,frizz,bottle": [
     "6129"
+  ],
+  "fragrance,floral,premium,women,unique": [
+    "1660"
   ],
   "shampoo,color,maintenance,sulfate-free,copper": [
     "6130"
@@ -17802,7 +17789,7 @@
   "conditioner,keratin,shine,hair,nourishing": [
     "6168"
   ],
-  "masque,anti-breakage,organic,fine,hair": [
+  "masque,organic,anti-breakage,fine-hair,yucca": [
     "6169"
   ],
   "oil,organic,moroccan,pure,vitamin": [
@@ -17863,7 +17850,7 @@
   "nail-color,fast-dry,expresso,small,instant": [
     "6189"
   ],
-  "night-cream,firming,elastin,dmae,dry-skin": [
+  "night-cream,firming,dmae,dry-skin,advanced": [
     "6190"
   ],
   "gloss,shine,luxurious,honey,pigment": [
@@ -17926,6 +17913,9 @@
   "cream,anti-cellulite,sponge,seaweed,caffeine": [
     "6211"
   ],
+  "serum,vitaminc,hyaluronic,vitamine,antiaging": [
+    "6212"
+  ],
   "peel,lactic,acid,gel,professional": [
     "6213"
   ],
@@ -17947,7 +17937,7 @@
   "primer,color-correcting,wrinkle-reducing,dark-spot-defying,cosmetic": [
     "6218"
   ],
-  "conditioning,color-enhancing,pigment,platinum,treatment": [
+  "conditioning,color,enhance,platinum,treatment": [
     "6219"
   ],
   "cream,softening,natural,hair,fresh": [
@@ -17966,7 +17956,7 @@
   "perfume,women,fragrance,elegant,unique": [
     "6223"
   ],
-  "fragrance,daytime,lavender,musk,davidoff": [
+  "fragrance,daytime,lavender,musk,men": [
     "6225"
   ],
   "fragrance,sweet,pink,sugar,spray": [
@@ -18012,7 +18002,7 @@
   "mascara,volumizing,luxury,cosmetic,premium": [
     "6239"
   ],
-  "shampoo,thickening,gentle,unisex,gugo-bark": [
+  "shampoo,thickening,gentle,unisex,gugo": [
     "6240"
   ],
   "corrector,brightening,dark,spot,facial": [
@@ -18042,7 +18032,7 @@
   "mascara,lengthen,waterproof,lashes,double-extend": [
     "6253"
   ],
-  "facial,moisturizing,acarola,elastic,clear": [
+  "facial,mask,acaera,elastic,moisturizing": [
     "6254"
   ],
   "false-lashes,human-hair,red-cherry,natural,delicate": [
@@ -18090,7 +18080,7 @@
   "hair-dye,natural,chemical-free,dark-brown,herbal": [
     "6269"
   ],
-  "hair-color,natural,ebony-mocha,brown-black,1-kit": [
+  "hair-color,brown-black,3oz,kit,ebony-mocha": [
     "6270"
   ],
   "bb-cream,sunscreen,concealing,honey-beige,rosemary": [
@@ -18117,7 +18107,7 @@
   "body-lotion,moisturizing,organic,coconut,cocoa-butter": [
     "6278"
   ],
-  "shampoo,restorative,pure,coconut,honey": [
+  "shampoo,restorative,honey,coconut,hydrating": [
     "6279"
   ],
   "concealer,eye-rehab,fair,olay,310": [
@@ -18129,7 +18119,7 @@
   "nail,art,practice,wheel,acrylic": [
     "6281"
   ],
-  "conditioner,soft,spray,dry,cashmere": [
+  "conditioner,soft,spray,dry,hair": [
     "6282"
   ],
   "nail-dryer,led,upgraded,portable,gel-curing": [
@@ -18150,7 +18140,7 @@
   "peel,salicylic,20,oil,professional": [
     "6289"
   ],
-  "body-wash,cleanses,softens,conditions,residue-free": [
+  "body-wash,cleanses,softens,conditions,gel": [
     "6290"
   ],
   "conditioner,creamy,daily,curl,vitamin": [
@@ -18194,7 +18184,7 @@
   "serum,shine,argan,unisex,vitamin-e": [
     "6302"
   ],
-  "gloss,hair,silk,unisex,instant": [
+  "gloss,hair,silk,unisex,platinum": [
     "6303"
   ],
   "shampoo,conditioner,volumizing,tween,limited": [
@@ -18218,7 +18208,7 @@
   "polish-bottle,spill-prevention,steady-hold,one-handed,tilt": [
     "6310"
   ],
-  "body,moisturizing,vitamin,age,defying": [
+  "body,moisturizing,vitamin,anti-aging,olay": [
     "6311"
   ],
   "soap,coastal,handpressed,ghana,natural": [
@@ -18227,7 +18217,7 @@
   "shea-butter,unrefined,african,medicinal,natural": [
     "6313"
   ],
-  "cleansing,conditioner,fig,ethnic,curly": [
+  "cleansing,conditioner,fig,ethnic,hair": [
     "6314"
   ],
   "conditioner,tea-tree,scalp,sensitive,nourishing": [
@@ -18300,7 +18290,7 @@
   "serum,anti-aging,pearl-like,facial,smooth": [
     "6336"
   ],
-  "serum,anti-aging,cindy,cosmetic,beauty": [
+  "serum,anti-aging,cindy,facial,meaningful": [
     "6337"
   ],
   "shea-butter,unrefined,creamy,african,32oz": [
@@ -18339,7 +18329,7 @@
   "body-wash,two-in-one,tone-brightening,moisturizing,adult": [
     "5713"
   ],
-  "anti-aging,intensive,oil-free,wrinkle,treatment": [
+  "anti-aging,intensive,oil-free,wrinkle,protocol": [
     "4199"
   ],
   "fragrance,masculine,wooden,romantic,unique": [
@@ -18363,7 +18353,7 @@
   "moisturizer,rich,natural,butters,daily": [
     "6355"
   ],
-  "conditioner,leave-in,smooth,hair,nourish": [
+  "leave-in,conditioner,soft,shiny,hair": [
     "6356"
   ],
   "conditioner,moisturizing,whipped,curl,mixed": [
@@ -18393,7 +18383,7 @@
   "acrylic,practice,display,finger,uv": [
     "6364"
   ],
-  "antifungal,treatment,topical,nail,cure": [
+  "antifungal,treatment,cure,nail,infection": [
     "6365"
   ],
   "conditioner,volume,protection,hair,dual": [
@@ -18427,7 +18417,7 @@
   "brush,facial,color,men,gel": [
     "6376"
   ],
-  "shower-gel,cleansing,refreshing,softens,mega-size": [
+  "shower-gel,refreshing,lightweight,adult,residue-free": [
     "6377"
   ],
   "body-wash,natural,men,invigorating,royal-jelly": [
@@ -18508,7 +18498,7 @@
   "shampoo,conditioner,eucalyptus,scalp,care": [
     "6403"
   ],
-  "cream,moisturizing,ultra,body,women": [
+  "cream,moisturizing,velvet,women,love": [
     "6404"
   ],
   "brush,long-handle,natural-bristle,detachable,cellulite-reducing": [
@@ -18586,6 +18576,9 @@
   ],
   "nail-polish,textured,shimmer,top-coat,go-ginza": [
     "6428"
+  ],
+  "nail,lacquer,chip-resistant,white,free": [
+    "6429"
   ],
   "nail,polish,city,inspired,spring": [
     "6430"
@@ -18752,7 +18745,7 @@
   "body-mist,fragrant,pink,fresh,women": [
     "6482"
   ],
-  "face-mask,cooling,tea-tree,facial,cleanses": [
+  "face-mask,tea-tree,cooling,cleanses,refreshes": [
     "6483"
   ],
   "shower-mirror,fogless,led,deluxe,larger": [
@@ -18782,7 +18775,7 @@
   "scalp-therapy,moisturizing,botanical,fine-hair,protective": [
     "6491"
   ],
-  "cream,smoothing,wave,shaping,after": [
+  "cream,smoothing,wave,styling,after": [
     "1636"
   ],
   "acne-gel,benzoyl-peroxide,salicylic-acid,treatment,10%": [
@@ -18851,7 +18844,7 @@
   "brow,makeup,dark,brown,natural": [
     "6513"
   ],
-  "nail-polish,long-lasting,chip-resistant,fall-color,quick-drying": [
+  "nail-polish,fall-color,zoya,new-release,cashmeres": [
     "6514"
   ],
   "cleanser,gentle,multipurpose,daily,mild": [
@@ -18881,7 +18874,7 @@
   "eye-serum,anti-wrinkle,alpha-lipoic,firming,vitamin": [
     "6523"
   ],
-  "gel-polish,removal,tool,gentle,easy": [
+  "removal-tool,gel-polish,gentle,easy-grip,convenient": [
     "6524"
   ],
   "removal,gel,all-in-one,home,easy": [
@@ -18984,13 +18977,13 @@
   "serum,anti-aging,retinol,vitamin,paraben-free": [
     "6557"
   ],
-  "mirror,lighted,swivel,hard-wired,halo": [
+  "mirror,lighted,swivel,magnified,hard-wired": [
     "6558"
   ],
   "shampoo,moisturize,oat,wheat,healthy": [
     "6559"
   ],
-  "mascara,volumizing,black,lash,three-way": [
+  "eyeliner,mistake-proof,marker,black,three-way": [
     "6560"
   ],
   "comb,handmade,smooth,scalp,indian": [
@@ -19011,13 +19004,13 @@
   "oil,organic,pure,seed,primrose": [
     "6566"
   ],
-  "oil,organic,grapeseed,carrier,skincare": [
+  "oil,organic,carrier,grapeseed,8oz": [
     "6567"
   ],
   "leave-in,condition,nourish,oat,hair": [
     "6569"
   ],
-  "fragrance,spray,bold,menwomen,philosophical": [
+  "fragrance,spray,bold,philosophical,unisex": [
     "6570"
   ],
   "perfume-oil,traditional,arabian,scented,premium": [
@@ -19071,6 +19064,9 @@
   "nail,polish,shimmer,pink,lavender": [
     "6587"
   ],
+  "moisture,nourishes,absorbs,ginkgo,very-dry": [
+    "6588"
+  ],
   "hand-soap,moisturizing,lavender,vitamin-e,refill": [
     "6589"
   ],
@@ -19106,9 +19102,6 @@
   ],
   "flat-iron,ion,ceramic,tourmaline,hot-pink": [
     "6599"
-  ],
-  "lip-butter,colorful,gel,women,glow": [
-    "6600"
   ],
   "shampoo,moisture,cucumber,green-tea,repair": [
     "6601"
@@ -19276,11 +19269,14 @@
   "foundation,mineral,matte,natural,spf": [
     "6656"
   ],
-  "shave-gel,moisturizing,cocoa-butter,dry-skin,clinical": [
+  "shave-gel,moisturizing,cocoa-butter,dry-skin,women": [
     "6657"
   ],
   "shower-gel,hydrating,acai-berry,blueberry,invigorating": [
     "6658"
+  ],
+  "shampoo-conditioner,kids,peach,2-in-1,gentle": [
+    "3150"
   ],
   "strengthener,protective,glossy,repair,natural": [
     "6659"
@@ -19291,7 +19287,7 @@
   "organic,peppermint,lotion,body,pump": [
     "6661"
   ],
-  "shampoo,hemp,argan,enriched,radiant": [
+  "shampoo,hemp,argan,shine,enriched": [
     "6662"
   ],
   "nail-polish,colorful,burlesque,feminine,unique": [
@@ -19393,16 +19389,16 @@
   "serum,anti-aging,growth,factor,egf": [
     "6695"
   ],
-  "cream,anti-aging,growth-factor,facial,unique": [
+  "anti-aging,cream,growth-factor,facial,rejuvenating": [
     "6696"
   ],
   "hair,conditioning,fixative,fiber,elastic": [
     "6697"
   ],
-  "men,hair,regrowth,treatment,extra-strength": [
+  "men,hair,regrowth,treatment,extra": [
     "6698"
   ],
-  "hair,spray,texturizing,unisex,fast-drying": [
+  "hair-spray,texturizing,shiny,unisex,fast-drying": [
     "6699"
   ],
   "shampoo,growth,stimulating,scalp,scientific": [
@@ -19628,7 +19624,7 @@
   "hair-color,root-touch-up,argan-oil,copper,blonde": [
     "6775"
   ],
-  "body,wash,silk,peach,orange-blossom": [
+  "body-wash,soothing,fragrant,silky,peach": [
     "6776"
   ],
   "primer,oil-free,foundation,cosmetic,unique": [
@@ -19640,7 +19636,7 @@
   "hair-treatment,argan-oil,spray,daily,smoothing": [
     "6779"
   ],
-  "eye-cream,hydrating,travel,small,brown": [
+  "eye-cream,hydrating,travel,brown,bobbi": [
     "6780"
   ],
   "shower-wash,moisturizing,mango,shea,tropical": [
@@ -19697,7 +19693,7 @@
   "lipstick,mood-changing,multicolor,set,12pack": [
     "6799"
   ],
-  "strengthener,leave-in,moisture,enriched,damaged": [
+  "strengthener,leave-in,moisture,damaged,enriched": [
     "6800"
   ],
   "texturizer,flexible,hold,dry,out": [
@@ -19836,7 +19832,7 @@
   "makeup,mist,brush,smooth,clear": [
     "6834"
   ],
-  "shampoo,volumizing,foam,fine,baby": [
+  "foam,volumizing,baby,fine,redken": [
     "6835"
   ],
   "facial,cotton,five,layer,gentle": [
@@ -19885,7 +19881,7 @@
   "body,wash,coconut,jasmine,nourishing": [
     "6849"
   ],
-  "deodorant,revive,twin,fresh,antiperspirant": [
+  "antiperspirant,revive,fresh,twin,deodorant": [
     "6850"
   ],
   "eye-cream,anti-aging,natural,women,50g": [
@@ -19903,7 +19899,7 @@
   "hairspray,anti-humidity,bamboo,uv,strong-hold": [
     "6862"
   ],
-  "facial-mask,enzyme,papaya,natural,hawaiian": [
+  "facial,enzyme,papaya,natural,mask": [
     "6863"
   ],
   "night-cream,strengthen,lightweight,sleep,deep": [
@@ -20014,7 +20010,7 @@
   "gel,polish,pure,color,durable": [
     "6898"
   ],
-  "nail-polish,gel,soak-off,mango,vibrant": [
+  "nail-polish,soak-off,gel,mango,vibrant": [
     "6899"
   ],
   "shower-gel,luxurious,fragrance,feminine,coconut": [
@@ -20111,7 +20107,7 @@
   "eye-shadow,limited,satin,taupe,pure": [
     "6929"
   ],
-  "bead,loader,silicone,micro,link": [
+  "bead,installer,silicone,micro,link": [
     "6930"
   ],
   "makeup,setting,spray,long-lasting,mist": [
@@ -20126,7 +20122,7 @@
   "shampoo,shea,moisturizing,hair,essential": [
     "6934"
   ],
-  "perfume,women,pink,spray,nicki-minaj": [
+  "perfume,women,pink,spray,nicki": [
     "6935"
   ],
   "cream,firming,aloe,non-greasy,night": [
@@ -20180,7 +20176,7 @@
   "shampoo,hydrating,thick,coarse,dry": [
     "6969"
   ],
-  "moisturising-gel,daily-hydration,unisex,lightweight,radiant": [
+  "moisturising-gel,daily-hydration,unisex,light,radiant": [
     "6970"
   ],
   "dryer,2-speed,turbo,black,cold-shot": [
@@ -20243,7 +20239,7 @@
   "brush,cosmetic,set,professional,12piece": [
     "6990"
   ],
-  "shampoo,dry,coloured,brunette,active": [
+  "shampoo,coloured,dry,brunette,travel": [
     "6991"
   ],
   "gloss,brunette,shine,perfecting,leave-on": [
@@ -20273,7 +20269,7 @@
   "nail,art,dual,system,plastic": [
     "6999"
   ],
-  "hand-soap,lavender,essential-oils,aloe-vera,moisturizing": [
+  "hand-soap,lavender,aloe-vera,gentle,moisturizing": [
     "7000"
   ],
   "comb,straighten,smooth,hair,easy": [
@@ -20321,12 +20317,11 @@
   "remover,cleansing,towelette,dermatologist,refill": [
     "7027"
   ],
-  "body-bar,anti-aging,moisturizing,adult,age-defying": [
+  "body-wash,anti-aging,moisturizing,creamy,younger": [
     "7028"
   ],
   "soap,moisturizing,pink,women,dermatologist": [
-    "7029",
-    "11670"
+    "7029"
   ],
   "shampoo,conditioner,dandruff,control,gentle": [
     "7032"
@@ -20343,7 +20338,7 @@
   "bubble-bath,rosemary-mint,aromatic,soothing,adult": [
     "7036"
   ],
-  "eye-shadow,protective,disposable,self-adhesive,moon-shaped": [
+  "eye-shadow,protective,disposable,moon-shaped,self-adhesive": [
     "7037"
   ],
   "lipstick,matte,long-lasting,rich-pigment,all-colors": [
@@ -20460,16 +20455,19 @@
   "foot-file,dual-sided,hangable,strappy,strips": [
     "7082"
   ],
+  "headband,trendy,polka-dot,rabbit-ear,necklace": [
+    "7083"
+  ],
   "cleanser,sensitive,micelle,non-rinse,dry": [
     "7084"
   ],
-  "face-cream,glycolic,regenerist,micro-sculpt,skincare": [
+  "face-cream,glycolic,regenerist,micro-sculpting,olay": [
     "7085"
   ],
   "facial-sponge,natural-fiber,volcanic-scoria,all-natural,exfoliating": [
     "7086"
   ],
-  "body,natural,fiber,wave,sponge": [
+  "body-sponge,natural-fiber,konjac,all-natural,exfoliating": [
     "7087"
   ],
   "soap,sandalwood,hand-milled,indian,gentle": [
@@ -20509,8 +20507,10 @@
   "wash,organic,intimate,feminine,cotton": [
     "7101"
   ],
-  "gel,curl,defining,hair,flawless": [
-    "7102"
+  "gel,curl,defining,spray,flawless": [
+    "7102",
+    "9236",
+    "10267"
   ],
   "foot-cream,moisturizing,superior,heel,rescue": [
     "4339"
@@ -20569,7 +20569,7 @@
   "shampoo,conditioner,vegan,blonde,wellness": [
     "7118"
   ],
-  "curl-volumizer,lavender,botanical,fine-hair,sulfate-free": [
+  "curl-volumizer,botanical,sulfate-free,delicate-curls,revitalizer": [
     "7119"
   ],
   "hair-spray,flexible-hold,alcohol-free,daily-use,curl-support": [
@@ -20664,9 +20664,6 @@
   ],
   "perfume,fresh,green,women,magnetic": [
     "2110"
-  ],
-  "gel,brightening,aha,skin,lighten": [
-    "7151"
   ],
   "hair-powder,volumizing,micro-texture,unisex,invisible": [
     "7152"
@@ -20788,10 +20785,10 @@
   "self-tan,liquid,flawless,body,instant": [
     "7189"
   ],
-  "hair-color,blonde,super-lightening,luminous,advanced": [
+  "hair-color,lighten,super-blonde,luminous,advanced": [
     "7190"
   ],
-  "nail-polish,holographic,glaze,women,galactic-gray": [
+  "nail-polish,holographic,glaze,women,cosmic": [
     "7191"
   ],
   "soap,aromatherapy,herbal,sandalwood,hand-milled": [
@@ -20815,7 +20812,7 @@
   "night-cream,retinol,0.5%,skin-refining,anti-aging": [
     "7197"
   ],
-  "cream,night,restorative,sleep,anti-discoloration": [
+  "cream,sleep,restorative,night,anti-aging": [
     "7198"
   ],
   "shampoo,blonde,enriching,color,brightening": [
@@ -20925,7 +20922,7 @@
   "clips,soft,hair,sectional,large": [
     "7231"
   ],
-  "straightener,ceramic,thermal,red,versatile": [
+  "straightener,ceramic,thermal,red,universal": [
     "7232"
   ],
   "bath,therapeutic,natural,crystals,soothing": [
@@ -20949,7 +20946,7 @@
   "dry-shampoo,revitalizes,floral,blush,active": [
     "7238"
   ],
-  "eyeliner,waterproof,swivel-up,automatic,black": [
+  "eyeliner,waterproof,automatic,swivel,black": [
     "7239"
   ],
   "straightener,ceramic,tourmaline,professional,1-inch": [
@@ -20973,7 +20970,7 @@
   "lip-liner,color-rich,high-intensity,precise,chic": [
     "7246"
   ],
-  "nail,lacquer,collection,german,mini": [
+  "nail,lacquer,collection,german,limited": [
     "7247"
   ],
   "moisturizer,glow,ocean,medium,daily": [
@@ -21003,7 +21000,7 @@
   "eyeliner,waterproof,telescopic,precision,dark-brown": [
     "7255"
   ],
-  "moisturizer,balancing,non-greasy,aloe,vitamin": [
+  "moisturizer,balancing,aphogee,16oz,skin": [
     "7256"
   ],
   "bronzer,dark,blinged,style,snooki": [
@@ -21013,13 +21010,13 @@
     "7258",
     "10605"
   ],
-  "blush,powder,creamy,feminine,perfect": [
+  "blush,powder,creamy,soft,perfect": [
     "7259"
   ],
   "perfume,women,fragrance,island,fantasy": [
     "7260"
   ],
-  "parfum,feminine,vibrant,queen,unique": [
+  "fragrance,sweet,vibrant,women,killer": [
     "7261"
   ],
   "styling-cream,smoothing,creamy,hair,chi": [
@@ -21188,7 +21185,7 @@
   "acrylic,nail,tips,clear,pink": [
     "7304"
   ],
-  "nail,art,acrylic,marbleizing,brush": [
+  "nail,art,acrylic,marble,brush": [
     "7305"
   ],
   "perfume,oriental,woody,women,iris": [
@@ -21207,7 +21204,7 @@
   "sunscreen,broad-spectrum,physical,sheer,protective": [
     "7310"
   ],
-  "soap,therapeutic,eucalyptus,moroccan,natural": [
+  "soap,eucalyptus,moroccan,therapeutic,natural": [
     "7311"
   ],
   "nail,polish,mint,candy,apple": [
@@ -21225,7 +21222,7 @@
   "perfume,floral,explosive,women,unique": [
     "7316"
   ],
-  "acne-treatment,benzoyl-peroxide,soluzyl-technology,deep-pore,minimum-dryness": [
+  "acne-treatment,10%-strength,benzoyl-peroxide,oil-free,maximum": [
     "7317"
   ],
   "cleanser,pore,blackhead,acne,remover": [
@@ -21258,7 +21255,7 @@
   "palette,shimmer,matte,blush,limited": [
     "7327"
   ],
-  "cream,healing,honey,night,antioxidant": [
+  "cream,healing,manuka,antioxidant,night": [
     "7328"
   ],
   "toner,shake,tea-tree,clearing,matte": [
@@ -21290,6 +21287,9 @@
   ],
   "soap,moisturizing,mineral,dead-sea,youthful": [
     "7338"
+  ],
+  "sleeping-mask,ear-plugs,foam,concave,travel": [
+    "3151"
   ],
   "wipe,calming,sensitive,skin,gentle": [
     "7340"
@@ -21346,9 +21346,6 @@
   "serum,leave-in,moisturizing,curl,enhancing": [
     "7381"
   ],
-  "eyeliner,lacquered,very-black,precise,intense": [
-    "7382"
-  ],
   "hair-treatment,restorative,natural,tropical,ancient": [
     "7383"
   ],
@@ -21361,7 +21358,7 @@
   "cream,zinc,problem,skin,treatment": [
     "7385"
   ],
-  "moisturizer,sunprotect,dual,fusion,biore": [
+  "moisturizer,sun-protection,dual-fusion,spf-30,environmental-defense": [
     "6143"
   ],
   "perfume,aromatic,traditional,arabian,oil": [
@@ -21463,7 +21460,7 @@
   "eyebrow,eyeliner,waterproof,twin,auburn": [
     "7421"
   ],
-  "eyebrow,liquid,waterproof,longlast,tonymoly": [
+  "eyebrow-pen,liquid,waterproof,long-last,tonymoly": [
     "7422"
   ],
   "night-cream,stem-cell,argan-oil,organic,non-greasy": [
@@ -21505,7 +21502,7 @@
   "shampoo,repair,strengthen,damage,hair": [
     "7435"
   ],
-  "mannequin,foam,display,holder,styrofoam": [
+  "mannequin,foam,display,holder,secure": [
     "7436"
   ],
   "serum,firming,under-eye,anti-aging,smooth": [
@@ -21584,7 +21581,7 @@
   "mask,hydration,intense,facial,bees": [
     "7461"
   ],
-  "shampoo,natural,sulfate-free,vegan,unscented": [
+  "shampoo,sulfate-free,natural,vegan,unscented": [
     "7462"
   ],
   "serum,heat,protection,hair,potion": [
@@ -21705,7 +21702,11 @@
   "bronzer,silicone,dark,protective,edhardy": [
     "7501"
   ],
-  "cosmetic,organized,clear,compact,all-in-one": [
+  "lip-butter,colorful,gel,soft,glow": [
+    "7502",
+    "10301"
+  ],
+  "cosmetic,organized,clear,compact,travel": [
     "7503"
   ],
   "sunscreen,antioxidant,spf-40,citrix,protective": [
@@ -21771,7 +21772,7 @@
   "gel,strengthener,led,uv,recovery": [
     "7525"
   ],
-  "cream,retinol,spf,anti-aging,daytime": [
+  "cream,retinol,anti-aging,facial,spf": [
     "7526"
   ],
   "nail-polish,weekly,vinylux,lacquer,durable": [
@@ -21798,7 +21799,7 @@
   "perfume,vanilla,musk,women,romantic": [
     "7534"
   ],
-  "cc-cream,sunscreen,luminous,facial,aura": [
+  "cc-cream,protective,luminous,facial,glow": [
     "7535"
   ],
   "liner,precise,thin,tip,eye": [
@@ -21888,7 +21889,7 @@
   "scrubber,exfoliating,soft,x-large,body": [
     "7575"
   ],
-  "body-wash,exfoliating,moisturizing,daily,olay": [
+  "body-wash,exfoliating,moisturizing,adult,olay": [
     "7576"
   ],
   "self-tanning,glove-mitt,application,sunless,dark": [
@@ -22036,7 +22037,7 @@
   "blower,monkey,cute,manicure,dryer": [
     "7625"
   ],
-  "soap,pine-tar,traditional,grandpa,mild": [
+  "soap,pine-tar,mild,grandpa,traditional": [
     "7626"
   ],
   "serum,moisturizing,nourishing,dry,hair": [
@@ -22089,13 +22090,13 @@
   "blush,powder,fibre,beveled,diffused": [
     "7644"
   ],
-  "body,tan,lotion,quick,even": [
+  "body,tan,lotion,quick,bronze": [
     "7645"
   ],
-  "cleanser,facial,natural,calmansi,gentle": [
+  "cleanser,facial,natural,calmansi,organic": [
     "7646"
   ],
-  "facial-foam,whitening,cleanses,deep,vao-b3": [
+  "facial-foam,whitening,vao-b3,deep,cleanses": [
     "7647"
   ],
   "eyeliner,waterproof,precision,black,liquid": [
@@ -22131,7 +22132,7 @@
   "setting,spray,oil,control,cosmetic": [
     "7655"
   ],
-  "makeup,setting,spray,longlast,flawless": [
+  "makeup-spray,long-lasting,setting,flawless,skin": [
     "7656"
   ],
   "facial-cream,antioxidant,lycopene,tomato,pure": [
@@ -22186,7 +22187,7 @@
   "comb,heat,gold-plated,scalp,straighten": [
     "7673"
   ],
-  "eyebrow,lift,filler,ivory,medium": [
+  "eyebrow,lift,filler,pencil,ivory": [
     "7674"
   ],
   "eyeliner,pigmented,liquid,black,extreme": [
@@ -22198,7 +22199,7 @@
   "nail-polish,dusty-pink,fast-drying,cosmetic,essie": [
     "7677"
   ],
-  "eyeliner,waterproof,gel,leopard,black": [
+  "eyeliner,waterproof,gel,black,leopard": [
     "7678"
   ],
   "wig,curly,synthetic,extension,japanese": [
@@ -22321,7 +22322,7 @@
   "gelish,holiday,collection,glossy,0.5oz": [
     "7719"
   ],
-  "eye,anti-aging,complex,cellular,youthful": [
+  "eye,complex,anti-aging,cellular,treatment": [
     "7720"
   ],
   "acne-lotion,buffering,cystic,deep,treatment": [
@@ -22393,7 +22394,7 @@
   "skin-care,extractor,stainless-steel,professional,lancet": [
     "7746"
   ],
-  "moisturizer,hyaluronic,vitamin,soft,effective": [
+  "gel,moisturizing,hyaluronic,vitamin,soft": [
     "7747"
   ],
   "nail,lacquer,neon,bright,affordable": [
@@ -22509,7 +22510,7 @@
   "cream,anti-redness,balsam-peru,rosacea,soothing": [
     "7790"
   ],
-  "brow,mousse,non-sticky,conditioning,gel": [
+  "brow,mousse,non-sticky,clear,conditioning": [
     "7791"
   ],
   "eyeshadow,matte,soft,sexy,sophisticated": [
@@ -22584,13 +22585,13 @@
   "soap,mineral,therapeutic,eczema,dead-sea": [
     "7814"
   ],
-  "microdermabrasion,professional,diamond,tip,unique": [
+  "microdermabrasion,diamond,premium,professional,unique": [
     "7815"
   ],
   "mascara,black,waterproof,eyelash,ultimate": [
     "7816"
   ],
-  "foundation,mineral,pressed,warm,natural": [
+  "foundation,mineral,pressed,warm,coverage": [
     "7817"
   ],
   "cheek-product,portable,mini,cosmetic,blush": [
@@ -22623,7 +22624,7 @@
   "straightening,ionic,bio,hair,treatment": [
     "7828"
   ],
-  "eye-cream,caffeine,anti-puff,gentle,renew": [
+  "eye-roller,anti-puff,caffeine,vitamin-b5,gentle": [
     "7829"
   ],
   "lipstain,balm,kissproof,soft-shine,adhesive": [
@@ -22632,10 +22633,10 @@
   "eye-gel,anti-aging,peptide-blend,dark-circles,wrinkles": [
     "7831"
   ],
-  "lipstick,opaque,sparkly,magenta,feminine": [
+  "lipstick,opaque,sparkly,magenta,future": [
     "7832"
   ],
-  "makeup,palette,colorful,women,versatile": [
+  "makeup,palette,46-colors,women,pigmented": [
     "7833"
   ],
   "straightener,nano,silver,tourmaline,hair": [
@@ -22765,7 +22766,7 @@
   "perfume,masculine,spicy,woody,unique": [
     "7874"
   ],
-  "self-tanning,gel,lightweight,vitamin-e,aha": [
+  "self-tanning,lightweight,quick-drying,vitamin-e,aha": [
     "7875"
   ],
   "body-lotion,firming,elastin,collagen,baby": [
@@ -22840,7 +22841,7 @@
   "nail-polish,soak-off,gel,hot-pink,uv": [
     "7899"
   ],
-  "gel,dehydrator,ph,nail,bond": [
+  "primer,non-acid,grip,strong,bond": [
     "7900"
   ],
   "clip,spiral,alloy,long,durable": [
@@ -22920,9 +22921,6 @@
     "9095",
     "11178"
   ],
-  "eyelashes,false,human,hair,natural": [
-    "7926"
-  ],
   "lipcolor,longwear,two-step,wine,everlast": [
     "7927"
   ],
@@ -22998,7 +22996,7 @@
   "eyeshadow,colorful,glitter,kit,neon": [
     "7948"
   ],
-  "hair-oil,herbal,amla,organic,wellness": [
+  "hair-oil,organic,amla,herbal,wellness": [
     "7949"
   ],
   "spray-bottle,fine-mist,soft-style,8-oz,pack-of-6": [
@@ -23053,7 +23051,7 @@
   "oil,cellulite,nourish,dermatologically,birch": [
     "7965"
   ],
-  "firming,mask,age,diffusing,treatment": [
+  "firming,mask,age,diffusing,skin": [
     "7966"
   ],
   "perfume,spray,cologne,women,fire": [
@@ -23062,7 +23060,7 @@
   "hair,oil,natural,growth,conditioner": [
     "7968"
   ],
-  "conditioner,peppermint,petroleum,150g,deep": [
+  "conditioner,petroleum,peppermint,150g,strong-odor": [
     "7969"
   ],
   "wig,synthetic,half,care,vanessa": [
@@ -23071,7 +23069,7 @@
   "nail,lacquer,high-gloss,rapid-drying,rainbow": [
     "7971"
   ],
-  "concealer,smooth,precise,facial,unique": [
+  "concealer,smooth,precise,facial,brush": [
     "7972"
   ],
   "brush,synthetic,flat,black,professional": [
@@ -23165,8 +23163,11 @@
   "bonnet,satin,elastic,sleep,assorted": [
     "8002"
   ],
-  "comb,hold,clips,natural,large": [
+  "comb,hold,natural,large,clip": [
     "8003"
+  ],
+  "rosewater,glycerin,skin,protectant,pure": [
+    "8004"
   ],
   "curling-iron,ceramic,nano,moisture,blackpurple": [
     "8005"
@@ -23174,7 +23175,7 @@
   "curling,ceramic,instant,hair,protective": [
     "8006"
   ],
-  "hair-pin,spin,dark-hair,three-styles,simple": [
+  "hair-pin,spin,dark-hair,simple,style": [
     "8007"
   ],
   "false-nails,natural-color,plastic,500pcs,art-tips": [
@@ -23204,7 +23205,7 @@
   "gel-polish,uv-cure,soak-off,red-roses,harmony": [
     "8016"
   ],
-  "bb-cream,beautifying,illuminator,light,natural": [
+  "bb-cream,illuminator,natural,light,flawless": [
     "8017"
   ],
   "bb-cream,sunscreen,mineral,natural,beige": [
@@ -23263,7 +23264,7 @@
   "nail-art,3d,heart-shaped,decorative,fimo": [
     "8036"
   ],
-  "false-nails,white,acrylic,artificial,salon": [
+  "false-nails,artificial,white,acrylic,salon": [
     "8037"
   ],
   "perfume,women,floral,spray,fergie": [
@@ -23290,8 +23291,10 @@
   "gel,manicure,mini,kit,starter": [
     "8044"
   ],
-  "cosmetic,travel,roll-up,women,mary-kay": [
-    "8045"
+  "cosmetic,travel,roll-up,hanger,mary-kay": [
+    "8045",
+    "10718",
+    "10990"
   ],
   "soap,whitening,herbal,moisturizing,papaya": [
     "8046"
@@ -23302,7 +23305,7 @@
   "scarf,satin,pocket,bonnet,anti-breakage": [
     "8048"
   ],
-  "clip,hair,soft,large,rust-resistant": [
+  "clip,spring-action,rust-resistant,lightweight,large": [
     "8049"
   ],
   "foam,curl,satin,protective,hair": [
@@ -23335,7 +23338,7 @@
   "facial-scrub,natural,mint-julep,refreshing,exfoliates": [
     "8060"
   ],
-  "self-tan,instant,mousse,fast-drying,streak-free": [
+  "self-tan,instant,mousse,salon,streak-free": [
     "7004"
   ],
   "brush,retractable,cosmetic,portable,kabuki": [
@@ -23545,9 +23548,6 @@
   "stretch-mark-oil,moisturizing,shea-butter,pregnancy,rich": [
     "8141"
   ],
-  "shaping,firm,hold,professional,ultimate": [
-    "8142"
-  ],
   "conditioner,natural,organic,hair,rahua": [
     "8144"
   ],
@@ -23575,10 +23575,7 @@
   "nail,lacquer,star,ferry,color": [
     "8152"
   ],
-  "nail,lacquer,soft,shade,limited": [
-    "8153"
-  ],
-  "nail,lacquer,jet,decorative,premium": [
+  "nail,lacquer,jet,decorative,opi": [
     "8154"
   ],
   "hair-clip,vintage,rhinestone,peacock,pink": [
@@ -23651,7 +23648,7 @@
   "nail,lacquer,hardener,glossy,china-glaze": [
     "8177"
   ],
-  "shadow,high-intensity,pigment,black,kohl": [
+  "eyeshadow,high-intensity,pigment,black,kohl": [
     "8178"
   ],
   "makeup-brush,professional,synthetic,vegan,12pc": [
@@ -23708,13 +23705,13 @@
   "nail-polish,hologram,glossy,effect,mermaid": [
     "8197"
   ],
-  "remover,twist,sponge,7oz,regular": [
+  "remover,lanolin,cuticle,safe,professional": [
     "8198"
   ],
   "shampoo,botanical,smooth,hair,fragrance": [
     "8199"
   ],
-  "updo-maker,easy-use,assorted-colors,women,modern": [
+  "updo-maker,simple-style,assorted-colors,modern,elegant": [
     "8200"
   ],
   "magnesium,balance,natural,vitality,calm": [
@@ -23729,7 +23726,7 @@
   "hand-soap,no-touch,cucumber,soothing,healthy": [
     "8204"
   ],
-  "serum,lash,enhance,clinical,peptide": [
+  "serum,enhances,clear,lashes,clinical": [
     "8207"
   ],
   "moisturizer,anti-aging,collagen,elastin,facial": [
@@ -23747,7 +23744,7 @@
   "styling-brush,ceramic,tourmaline,nano,ions": [
     "8212"
   ],
-  "nail,drill,electric,fuchsia,five-bits": [
+  "nail,electric,drill,fuchsia,five": [
     "8213"
   ],
   "toner,hydrating,soothes,sensitive,skin": [
@@ -23789,7 +23786,7 @@
   "acne-treatment,gel,rapid-action,facial,clearasil": [
     "8235"
   ],
-  "hair-oil,keratin,healing,treatment,shine": [
+  "hair-oil,healing,keratin,phyto,treatment": [
     "8236"
   ],
   "hair-spray,nourish,nutrient,dry,shine": [
@@ -23837,13 +23834,14 @@
   "lipgloss,shimmery,colorful,nourishing,feminine": [
     "8249"
   ],
-  "cleanser,gentle,non-comedogenic,oily,dermatologist-formulated": [
-    "8250"
+  "cleanser,gentle,non-comedogenic,oily,dermatologist": [
+    "8250",
+    "9503"
   ],
   "hair-dryer,dual-voltage,folding,professional,turbo": [
     "8252"
   ],
-  "styler,ionic,ceramic,curl,fusion": [
+  "styler,ionic,ceramic,curl,1800w": [
     "7483"
   ],
   "fragrance,glow,women,jennifer-lopez,after-dark": [
@@ -23966,7 +23964,7 @@
   "moisturizer,anti-aging,matrixyl,women,guaranteed": [
     "8290"
   ],
-  "foot,care,rasp,remover,two-in-one": [
+  "foot,file,rasp,remover,two-in-one": [
     "8291"
   ],
   "toner,lighten,firm,lactic,5%": [
@@ -24038,6 +24036,9 @@
   "fragrance,floral,delicate,women,romantic": [
     "8313"
   ],
+  "shaping,firm,hold,professional,ultimate": [
+    "8142"
+  ],
   "toner,herbal,concentrated,facial,balancing": [
     "8314"
   ],
@@ -24098,7 +24099,7 @@
   "brush,detangling,wet,hair,value": [
     "8344"
   ],
-  "brush,detangle,pro,wet,select": [
+  "brush,detangle,wet,hair,pro": [
     "8345"
   ],
   "shampoo,hydrating,curl,softens,manages": [
@@ -24137,7 +24138,7 @@
   "shampoo,gentle,strawberry,kids,2in1": [
     "8357"
   ],
-  "holographic,changing,linear,polish,chrome": [
+  "holographic,changing,linear,polish,chromie": [
     "8360"
   ],
   "moisturizer,exfoliating,ahas,facial,8percent": [
@@ -24164,7 +24165,7 @@
   "gelish,holiday,dot,collection,unique": [
     "8374"
   ],
-  "nail-art,stamping,jumbo,image,romance": [
+  "nail,art,stamp,plate,romantic": [
     "8375"
   ],
   "nail,art,stamp,princess,charming": [
@@ -24178,7 +24179,6 @@
   ],
   "nail-lacquer,high-gloss,colorful,expressive,unique": [
     "8379",
-    "8909",
     "9355",
     "10726"
   ],
@@ -24227,7 +24227,7 @@
   "dish-soap,lemon-scent,auto,refill,eco": [
     "8396"
   ],
-  "mascara,volume,dark,curvaceous,bombshell": [
+  "mascara,volume,black,curvaceous,bombshell": [
     "8397"
   ],
   "conditioner,leave-in,protein,argan,rejuvenating": [
@@ -24241,6 +24241,10 @@
   ],
   "cleanser,sulfate-free,orange-oil,facial,gentle": [
     "8402"
+  ],
+  "shampoo,medicated,selenium,menthol,doctor-recommended": [
+    "5441",
+    "9529"
   ],
   "fasting,cleanse,natural,5-day,body": [
     "8403"
@@ -24360,7 +24364,7 @@
   "cream,soothing,natural,scent-free,irritated": [
     "8442"
   ],
-  "acne-gel,organic,botanical,facial,breakout": [
+  "acne-gel,organic,botanical,skin,breakouts": [
     "8443"
   ],
   "facial,peel-off,pomegranate,natural,nourishing": [
@@ -24399,13 +24403,13 @@
   "body-lotion,moisturizing,shea-butter,women,barrier-improving": [
     "8460"
   ],
-  "conditioner,moisturizing,normal,thick,hair": [
+  "conditioner,smooth,normal,thick,hair": [
     "8461"
   ],
   "shampoo,smooth,pro-v,hair,cleansing": [
     "8462"
   ],
-  "moisturizer,sunscreen,normal,daily,broad-spectrum": [
+  "moisturizer,sunscreen,normal-skin,daily,broad-spectrum": [
     "5076"
   ],
   "pen,define,brow,eye,twin": [
@@ -24450,16 +24454,19 @@
   "moisture-cream,lifting,volcanic,organic,facial": [
     "8477"
   ],
+  "serum,lifting,organic,facial,active": [
+    "8478"
+  ],
   "primer,mineral,fine-lines,smooth,flirty": [
     "8479"
   ],
   "foot-file,rasp,ergonomic,double,colossal": [
     "8480"
   ],
-  "sunblock,sensitive,protective,lotion,spf60": [
+  "sunblock,sensitive,spf60,lotion,protective": [
     "8481"
   ],
-  "conditioner,moisturizing,olive,mango,unisex": [
+  "conditioner,leave-in,olive,mango,organic": [
     "8482"
   ],
   "conditioner,moisturizing,aloe-vera,dry-hair,softening": [
@@ -24501,7 +24508,7 @@
   "nail-lacquer,colorful,liquid,mariah,collection": [
     "8494"
   ],
-  "nail-lacquer,vibrant,glossy,mariah,impossible": [
+  "nail-lacquer,glamorous,mariah,stay,night": [
     "8495"
   ],
   "nail-polish,tinted,luxury,feminine,forbidden": [
@@ -24513,10 +24520,10 @@
   "fragrance,spray,variety,men,edt": [
     "8498"
   ],
-  "cream,ayurvedic,vanilla,organic,skin": [
+  "cream,ayurvedic,organic,vanilla,skin": [
     "8499"
   ],
-  "shampoo,gentle,neem,organic,therapeutic": [
+  "shampoo,gentle,neem,organic,hair": [
     "8500"
   ],
   "oil,treatment,argan,hair,intensive": [
@@ -24648,7 +24655,7 @@
   "foundation,repair,creamy,natural,spf": [
     "8543"
   ],
-  "nail,lacquer,rare,hard,tofind": [
+  "nail,lacquer,diamond,dust,unique": [
     "8544"
   ],
   "nail-polish,mirror-effect,magnetic,cosmetic,glow": [
@@ -24696,7 +24703,7 @@
   "leave-in,treatment,ceramic,hydration,silk": [
     "7096"
   ],
-  "facial,rejuvenation,dual,microdermabrasion,derma": [
+  "facial,rejuvenation,dual,microdermabrasion,gentle": [
     "8558"
   ],
   "cleansing-bar,clarifying,antibacterial,acne,raspberry": [
@@ -24708,7 +24715,7 @@
   "atomizer,refillable,travel,silver,stylish": [
     "8561"
   ],
-  "hair,moisturizing,vitamin,treatment,hot": [
+  "hair-treatment,moisturizing,vitamin-enriched,weekly,revitalizes": [
     "8562"
   ],
   "dry-shampoo,gentle,oat-milk,volume,sensitive": [
@@ -24789,7 +24796,7 @@
   "concealer,hydrating,smoothing,under-eye,spf": [
     "8587"
   ],
-  "curl,defining,lotion,humidity,shiny": [
+  "curl,defining,lotion,humidity,frizz": [
     "8588"
   ],
   "lip-gloss,shiny,natural,pink,buttery": [
@@ -24834,7 +24841,7 @@
   "shampoo,green-tea,clarifying,oily-hair,organic": [
     "8600"
   ],
-  "lip-care,mood-match,yellow,spf,durable": [
+  "lip-care,moisturizing,spf,yellow,mood-matcher": [
     "8602"
   ],
   "eye-treatment,anti-aging,collagen,bio-spheres,chromatic": [
@@ -24874,7 +24881,7 @@
   "oil,inhibitor,liquid,formula,perfluoroalkyl": [
     "8612"
   ],
-  "manikin,cutting,protein,fiber,bald": [
+  "manikin,cutting,protein,fiber,cosmetic": [
     "8613"
   ],
   "moisturizer,natural,fruit,vegan,spf": [
@@ -24883,7 +24890,7 @@
   "sunscreen,natural,mineral,organic,purple": [
     "8615"
   ],
-  "tooth,gel,natural,children,protective": [
+  "tooth-gel,natural,children,gum,protective": [
     "8616"
   ],
   "conditioner,calendula,natural,baby,fragrance-free": [
@@ -24977,7 +24984,7 @@
   "moisturizer,enzymatic,facial,gentle,hydrating": [
     "8647"
   ],
-  "cleanser,calming,herbal,facial,natural": [
+  "cleanser,calming,herbal,facial,chamomile": [
     "8648"
   ],
   "airbrush,makeup,system,fair,radiant": [
@@ -25154,7 +25161,7 @@
   "remover,strip,adhesive,eyelash,easy": [
     "8122"
   ],
-  "false-eyelashes,human-hair,red-cherry,pack-of-3,cosmetic": [
+  "false-eyelashes,human-hair,red-cherry,pair,cosmetic": [
     "8709"
   ],
   "shadow,protective,women,confidence,shield": [
@@ -25223,10 +25230,10 @@
   "gel,defining,humidity,barrier,curls": [
     "8746"
   ],
-  "hairspray,hold,finishing,touchable,mist": [
+  "hairspray,hold,finishing,mist,touchable": [
     "8747"
   ],
-  "curl-enhancer,hydrating,styling,hair,smooth": [
+  "hair-cream,hydrating,defining,curly,aveda": [
     "8748"
   ],
   "hair-dryer,ceramic,low-emf,professional,anion": [
@@ -25247,7 +25254,7 @@
   "shampoo,blonde,tone,correcting,renew": [
     "8754"
   ],
-  "hair-spray,straight,crystal,clear,blonde": [
+  "hair-spray,straight,semi-permanent,blonde,3-day": [
     "8755"
   ],
   "hot-air,styler,ionic,revlon,dual-attachment": [
@@ -25268,7 +25275,7 @@
   "bronzer,tanning,oxygen,dark,regenerating": [
     "8760"
   ],
-  "shampoo,conditioner,growth,faster,vitamins": [
+  "shampoo,conditioner,growth,vitamins,faster": [
     "8761"
   ],
   "facial-tanning,natural,hypoallergenic,honey,melanin": [
@@ -25328,7 +25335,7 @@
   "setting-powder,camouflages,high-definition,sheer,undereye": [
     "8778"
   ],
-  "cleanser,purifying,pure,rare,skincare": [
+  "cleanser,purifying,mineral,gentle,balanced": [
     "8779"
   ],
   "night-cream,retinol,sensitive,moisturizing,clinical": [
@@ -25394,7 +25401,7 @@
   "shampoo,conditioner,repair,protein,hair": [
     "8798"
   ],
-  "sunscreen,sensitive,dermatologist,lotion,broad-spectrum": [
+  "sunscreen,sensitive,dermatologist,broad-spectrum,lotion": [
     "8799"
   ],
   "shampoo,tea-tree,unisex,scalp,invigorating": [
@@ -25445,7 +25452,7 @@
   "eye-shadow,mineral,intense,sleek,premium": [
     "8815"
   ],
-  "blush-palette,multi-use,28-color,professional,pigment-rich": [
+  "blush-palette,professional,28-color,makeup-artist,versatile": [
     "6201"
   ],
   "plate,stamping,xxl,480,designs": [
@@ -25481,7 +25488,7 @@
   "acne-treatment,spot,gel,facial,murad": [
     "8826"
   ],
-  "comb,handmade,fine,coarse,scalp": [
+  "comb,handmade,smooth,scalp,india": [
     "8827"
   ],
   "bath,moisturizing,lavender,chamomile,shea": [
@@ -25637,13 +25644,13 @@
   "perfume,feminine,floral,women,unique": [
     "8881"
   ],
-  "gel-polish,uv-cure,candy-land,soak-off,sweet": [
+  "gel-polish,uv-cure,candy-land,toddler,sweet-tooth": [
     "8882"
   ],
   "serum,antioxidant,natural,eye,repair": [
     "8883"
   ],
-  "foundation,whipped,us-made,beige,nouvage": [
+  "foundation,whipped,us-made,beige,novel": [
     "8884"
   ],
   "body-lotion,moisturizing,cocoa,cupuacu,dermatologist-tested": [
@@ -25691,10 +25698,10 @@
   "makeup-brush,professional,synthetic,black,four-pcs": [
     "8897"
   ],
-  "primer,mineral,infused,smooth,radiant": [
+  "primer,mineral,infused,oily,radiant": [
     "8898"
   ],
-  "eye-creme,vitamin-c,organic,revitalizing,moisturizing": [
+  "eye-cream,vitamin-c,organic,revitalizing,creme": [
     "8899"
   ],
   "nail-lacquer,holiday,muppets,glitter,minnie": [
@@ -25732,6 +25739,9 @@
   ],
   "nail-polish,longwearing,lacquer,adult,charisma": [
     "8908"
+  ],
+  "nail,lacquer,high-gloss,colorful,expressive": [
+    "8909"
   ],
   "brush-tree,dry-bristles,vertical-hold,white,protective": [
     "8910"
@@ -25829,7 +25839,7 @@
   "serum,vitamin,organic,skin,refine": [
     "8938"
   ],
-  "body-wash,masculine,pure,sport,high-endurance": [
+  "body-wash,men's,pure,sport,endurance": [
     "8939"
   ],
   "body,wash,dry,skin,defense": [
@@ -25847,7 +25857,7 @@
   "castor-oil,pure,antiviral,antibacterial,emollient": [
     "8943"
   ],
-  "foot-file,industrial,diamond,callus,remover": [
+  "foot-file,diamond,industrial,callus,rasp": [
     "8944"
   ],
   "serum,pure,natural,squalane,moisturizing": [
@@ -25868,7 +25878,7 @@
   "oil,organic,pure,skin,rosehip": [
     "8949"
   ],
-  "cleanser,exfoliate,anti-aging,combination,three-in-one": [
+  "cleanser,exfoliate,anti-aging,combination,oily": [
     "8950"
   ],
   "gloves,moisturizing,aloe,pink,soft": [
@@ -25880,7 +25890,7 @@
   "eyeshadow,matte,shimmer,88-color,professional": [
     "8953"
   ],
-  "lip-butter,colorful,gel,soft,glowing": [
+  "lip-butter,color,gel,soft,red-velvet": [
     "8954"
   ],
   "serum,thickens,moisturizes,scalp,strands": [
@@ -25898,7 +25908,7 @@
   "eyeshadow,primer,transparent,lasting,creaseproof": [
     "8959"
   ],
-  "shampoo,sulfate-free,lipid,dermatological,conditioning": [
+  "shampoo,conditioning,organic,lipid,dermatological": [
     "8960"
   ],
   "crease-brush,professional,wooden,yellow,studio": [
@@ -25916,7 +25926,7 @@
   "henna,pure,herbal,hair,dark": [
     "8965"
   ],
-  "eyeshadow,neutral,palette,cosmetic,professional": [
+  "eyeshadow,neutral,palette,professional,cosmetic": [
     "8966"
   ],
   "curl-cream,nourishing,unisex,macadamia,defining": [
@@ -26054,7 +26064,7 @@
   "cowash,cleansing,coconut,creamy,curls": [
     "9006"
   ],
-  "styling,gel,body,hold,smooth": [
+  "styling-gel,hair-hold,smoothing,body,styling": [
     "9007"
   ],
   "lip,precise,firm,tip,contour": [
@@ -26129,7 +26139,7 @@
   "shampoo,organic,bamboo,shine,unisex": [
     "9030"
   ],
-  "deodorant,creamy,floral,women,elizabeth-arden": [
+  "deodorant,fragrance,creamy,women,blue": [
     "9031"
   ],
   "sunscreen,broad-spectrum,zinc-oxide,daily,protective": [
@@ -26242,7 +26252,7 @@
   "foundation,mineral,spf-20,warm-sienna,loose": [
     "9063"
   ],
-  "facial-pad,cleansing,natural,tomato,salicylic": [
+  "facial,cleansing,natural,tomato,salicylic": [
     "9064"
   ],
   "facial,protective,duo,anti-blemish,sunscreen": [
@@ -26335,6 +26345,9 @@
   "conditioning,hydrating,balm,hair,matrix": [
     "9091"
   ],
+  "conditioner,restorative,strengthening,hair,nexxus": [
+    "9092"
+  ],
   "conditioner,reconstruct,damaged,hair,nutrafix": [
     "1852"
   ],
@@ -26344,7 +26357,7 @@
   "toner,alcohol-free,glycolic,acne,revitalizing": [
     "9094"
   ],
-  "false-eyelashes,invisible,black,baby,synthetic": [
+  "false-eyelashes,synthetic,black,10-pairs,k-ma": [
     "9096"
   ],
   "makeup-brush,eco,bamboo,finishing,modern": [
@@ -26722,7 +26735,7 @@
   "moisturizer,hyaluronic,repair,mature,fine": [
     "9227"
   ],
-  "moisturizer,repair,intensive,vitamin,dry": [
+  "lotion,repair,intensive,vitamin,dry": [
     "9228"
   ],
   "repair,antioxidant,decolletage,hands,intensive": [
@@ -26745,10 +26758,6 @@
   ],
   "bath,stress,herbal,soothing,gel": [
     "9235"
-  ],
-  "gel,curl,defining,spray,flawless": [
-    "9236",
-    "10267"
   ],
   "body-wash,antibacterial,moisturizing,freshness,spring-water": [
     "9237"
@@ -26864,9 +26873,6 @@
   "makeup-brush,blending,antibacterial,professional,duet": [
     "9275"
   ],
-  "scrub,exfoliating,oil-free,deep,clear": [
-    "9276"
-  ],
   "sunscreen,high-spf,water-resistant,kids,no-ad": [
     "7609"
   ],
@@ -26879,7 +26885,7 @@
   "skin,nourishing,rose,dry,deep": [
     "9278"
   ],
-  "lotion,illuminating,bare,skin,natural": [
+  "beauty,illuminating,lotion,bare,skin": [
     "9279"
   ],
   "cream,moisturising,brightening,wild-rose,soothing": [
@@ -26930,7 +26936,7 @@
   "barrette,curved,secure,sleep,updo": [
     "9296"
   ],
-  "soap,pure,raw,african,5lbs": [
+  "african,black,soap,pure,raw": [
     "9297"
   ],
   "travel,dryer,nano,titanium,ion": [
@@ -26961,7 +26967,7 @@
   "back-scrubber,exfoliating,long-handle,random-color,detachable": [
     "9326"
   ],
-  "manicure,chip-resistant,sheer,romantic,women": [
+  "manicure,chip-resistant,sheer,romantic,set": [
     "9327"
   ],
   "cream,fade,vitamin,spot,even": [
@@ -26973,7 +26979,7 @@
   "powder,longwearing,softflex,fair,flawless": [
     "9330"
   ],
-  "toner,clarifying,oil-control,acne,skin": [
+  "toner,clarifying,oil-control,acne,preventive": [
     "9331"
   ],
   "acne-mask,treats,clarifying,repair,blemish": [
@@ -27033,7 +27039,7 @@
   "nail,polish,collection,mini,resort": [
     "9353"
   ],
-  "nail-lacquer,high-gloss,neon-color,expressive,unique-design": [
+  "nail,lacquer,neon,glow,expressive": [
     "9354"
   ],
   "lipstick,creamy,butter,round,snow-white": [
@@ -27093,7 +27099,7 @@
   "conditioner,cleansing,tea-tree,aloe,cucumber": [
     "9377"
   ],
-  "conditioner,cleansing,mint,sealed,6oz": [
+  "conditioner,cleansing,mint,sealed,pump": [
     "9378"
   ],
   "nail,art,glitter,powder,mixcolor": [
@@ -27126,7 +27132,7 @@
   "sonic,cleansing,plus,face,body": [
     "9388"
   ],
-  "body-wash,exfoliating,royal-jelly,radiant,creamy": [
+  "body-wash,exfoliating,royal-jelly,creamy,radiant": [
     "9389"
   ],
   "moisturizer,protective,even,clear,radiant": [
@@ -27141,7 +27147,7 @@
   "brush,replacement,pumice,skin,care": [
     "9392"
   ],
-  "gel-polish,uv-cure,soak-off,violet,harmony": [
+  "gel-polish,uv-cure,soak-off,violet,applicator": [
     "8086"
   ],
   "gel-polish,uv-cure,soak-off,elegant,wish": [
@@ -27243,7 +27249,7 @@
   "night-cream,cell-renewal,nutritious,skin,intensive": [
     "9421"
   ],
-  "primer,stay-put,dual-action,eye,conceal": [
+  "primer,stay-put,dual-action,eye,concealer": [
     "8724"
   ],
   "perfume,feminine,floral,daytime,elizabeth-arden": [
@@ -27285,13 +27291,13 @@
   "manicure,one-step,bright,polish,french": [
     "9433"
   ],
-  "moisturizer,hydrating,acquacell,facial,protective": [
+  "moisturizer,hydrating,acquacell,facial,anti-aging": [
     "9434"
   ],
   "eye,hydrate,shield,cellular,protective": [
     "9435"
   ],
-  "moisturizer,treats,na-pca,dry,skin": [
+  "moisturizer,treats,dry,skin,hair": [
     "9436"
   ],
   "foaming,cleansing,aloe,facial,deep": [
@@ -27429,9 +27435,6 @@
   "perfume,feminine,floral,women,elegant": [
     "9480"
   ],
-  "finishing-spray,texture,satin-matte,high-impact,rebel-style": [
-    "9481"
-  ],
   "deodorant,natural,rosemary,mint,lichen": [
     "9482"
   ],
@@ -27498,9 +27501,6 @@
   "headband,rhinestone,elastic,women,retro": [
     "9501"
   ],
-  "cleanser,gentle,non-comedogenic,oily,dermatologist": [
-    "9503"
-  ],
   "hand-cream,moisturizing,organic,philosophical,hope": [
     "9505"
   ],
@@ -27546,7 +27546,7 @@
   "shampoo,gentle,strawberry,kids,swim": [
     "9519"
   ],
-  "concealer,hydrating,vitamin,dark,lines": [
+  "concealer,hydrating,vitamin,light,crease": [
     "9520"
   ],
   "moisturizer,lightweight,oily,acne,lemon": [
@@ -27561,8 +27561,9 @@
   "perfume,woody,oriental,masculine,sensual": [
     "9523"
   ],
-  "wash-cloth,soft,patented,japanese,pink": [
-    "9524"
+  "wash-cloth,soft,nylon,japanese,patented": [
+    "9524",
+    "10896"
   ],
   "nail,sheer,tint,mini,hint": [
     "9525"
@@ -27615,16 +27616,16 @@
   "gel,frizz-free,edge,control,sleek": [
     "9542"
   ],
-  "moisture,spray,botanical,curly,grapefruit": [
+  "spray,moisturizing,botanical,curly,grapefruit": [
     "9543"
   ],
   "nail-lacquer,high-gloss,colorful,women,peach": [
     "9544"
   ],
-  "false-lashes,natural,organic,ultra-black,irritation-free": [
+  "mascara,fiber,organic,false,natural": [
     "9545"
   ],
-  "cream,healing,rough,skin,gentle": [
+  "cream,nourishing,deep-conditioning,dry,skin": [
     "9546"
   ],
   "mascara,eyeliner,volumizing,blackest,unstoppable": [
@@ -27997,7 +27998,7 @@
   "fragrance,women,perfume,luxury,distinctive": [
     "9673"
   ],
-  "fragrance,luxury,elegant,women,designer": [
+  "fragrance,luxury,edt,women,premium": [
     "9674"
   ],
   "shampoo,repair,natural,hair,blueberry": [
@@ -28009,7 +28010,7 @@
   "eyeshadow,applicator,natural,bristles,tapered": [
     "9677"
   ],
-  "toner,antiaging,peptide,firming,allskin": [
+  "toner,anti-aging,peptide,firming,all-skin-types": [
     "9678"
   ],
   "body-brush,exfoliating,durable,plastic,blue": [
@@ -28039,7 +28040,7 @@
   "top-coat,quick-dry,lustrous,patent,nail": [
     "9687"
   ],
-  "hand-gloves,moisturizing,therapeutic,woven,dry-relief": [
+  "gloves,moisturizing,therapeutic,hand,weave": [
     "9688"
   ],
   "mask,restorative,patented,dry,hair": [
@@ -28099,7 +28100,7 @@
   "hair,repair,coconut,nourishing,silk": [
     "1655"
   ],
-  "fragrance,floral,oriental,women,vintage": [
+  "fragrance,floral,oriental,evening,velvet": [
     "9708"
   ],
   "styling,volumiser,oil-free,texturizing,anti-gravity": [
@@ -28153,7 +28154,7 @@
   "heat-cap,conditioning,ceramic,professional,gold": [
     "9724"
   ],
-  "hair-mousse,volume,maximum,hold,adult": [
+  "hair-mousse,volume,maximum-hold,pro-v,triple-action": [
     "9725"
   ],
   "oil,repairing,ginger,dry,hair": [
@@ -28325,16 +28326,16 @@
   "shampoo,fortifying,pure,antioxidant,normal-hair": [
     "9782"
   ],
-  "pheromone,seductive,glow,hypoallergenic,women": [
+  "pheromone,seductive,glow,women,hypoallergenic": [
     "9783"
   ],
   "sonic,cleansing,acne,clarifying,brush": [
     "9784"
   ],
-  "hair-dryer,curls,fusion,anti-frizz,women": [
+  "hair-dryer,curls,fusion,anti-frizz,conair": [
     "9785"
   ],
-  "shampoo,color,preserve,grapefruit,shine": [
+  "shampoo,color,protective,grapefruit,shine": [
     "9786"
   ],
   "conditioner,softens,mallow,hair,detangles": [
@@ -28385,9 +28386,6 @@
   "body-oil,rosewater,glycerin,pure,protective": [
     "9802"
   ],
-  "brush,art,acrylic,professional,design": [
-    "9803"
-  ],
   "eye-shadow,bright,duo,professional,adventurous": [
     "8337"
   ],
@@ -28418,7 +28416,7 @@
   "hairspray,shine,humidity,resistant,charged": [
     "9810"
   ],
-  "dry-shampoo,smoothing,mineral-clay,fine-hair,fresh-start": [
+  "dry-shampoo,smoothing,mineral-clay,fine-hair,professional": [
     "9811"
   ],
   "mascara,volumizing,washable,black,colossal": [
@@ -28667,7 +28665,7 @@
   "serum,retinol,hyaluronic,organic,natural": [
     "9886"
   ],
-  "lip-balm,shimmer,rhubarb,color,natural": [
+  "lip,shimmer,rhubarb,balm,pearlized": [
     "6685"
   ],
   "body,care,natural,complete,kit": [
@@ -28742,7 +28740,7 @@
   "nail,color,smart,gel,bride": [
     "8369"
   ],
-  "conditioner,soothes,herbal,scalp,tames": [
+  "conditioner,soothes,tea-tree,scalp,vitamins": [
     "9910"
   ],
   "dry-shampoo,bamboo,translucent,unisex,organic": [
@@ -28811,7 +28809,7 @@
   "shampoo,anti-frizz,emollient,dry,coarse": [
     "9930"
   ],
-  "uv,coat,color,shellac,tropix": [
+  "uv,color,coat,tropix,gel": [
     "9932"
   ],
   "gel,uv-cured,patent,high-quality,zillionaire": [
@@ -28889,7 +28887,7 @@
   "facial,exfoliate,glycolic,pro-grade,home-kit": [
     "9958"
   ],
-  "shampoo,smoothing,nutritive,dry,rebellious": [
+  "shampoo,nutritive,smoothing,dry,rebellious": [
     "9959"
   ],
   "touch-up,hair-color,medium-brown,women,conceal-gray": [
@@ -28940,7 +28938,7 @@
   "nail-dryer,uv-curing,36w-light,timer-function,spa-equipment": [
     "9974"
   ],
-  "top-coat,uv-cured,patent-pending,durable,color-enhancing": [
+  "top-coat,uv-cured,long-last,color-layer,quick-off": [
     "9975"
   ],
   "hot-brush,styling,aluminum,white,safety": [
@@ -29020,7 +29018,6 @@
   ],
   "shampoo,toning,violet,blonde,brassiness": [
     "9999",
-    "10561",
     "11928"
   ],
   "gel,curl,defining,activator,12oz": [
@@ -29122,7 +29119,7 @@
   "makeup,hanging,polka-dot,pink-green,organize": [
     "8125"
   ],
-  "concealer,pore,protein,invisible,nose": [
+  "concealer,pore,smooth,protein,nose": [
     "10029"
   ],
   "deodorant,talc-free,herbal,aloe,vitamins": [
@@ -29191,7 +29188,7 @@
   "spray-bottle,applicator,soft,8-oz,set": [
     "10052"
   ],
-  "lipstick,violet,berry,color,stick": [
+  "lipstick,violet,berry,argan,moisturizing": [
     "10053"
   ],
   "tanning,auto-darkening,silicone,extreme,bronzer": [
@@ -29216,10 +29213,10 @@
   "body-wash,moisture,shea-butter,24hr,age-defying": [
     "10060"
   ],
-  "hair,thickening,fibers,professional,strong": [
+  "hair,thickening,fiber,professional,strong": [
     "10061"
   ],
-  "conditioner,moisturizing,replenishing,hair,neutrogena": [
+  "conditioner,moisturizing,replenishing,hair,shine": [
     "10062"
   ],
   "styling-paste,matte-finish,firm-hold,hair,pliable": [
@@ -29267,7 +29264,7 @@
   "curling,iron,ceramic,hair,style": [
     "10079"
   ],
-  "gel-polish,uv-cure,pink,chiffon,harmony": [
+  "gel-polish,uv-cure,pink,feminine,chiffon": [
     "10080"
   ],
   "oil,mist,healing,hair,absorb": [
@@ -29372,7 +29369,7 @@
   "face-powder,wrinkle-reduction,hypoallergenic,fragrance-free,translucent": [
     "10111"
   ],
-  "body-cream,moisturizing,clinical,soft,pack": [
+  "body-cream,moisturizing,luxurious,soft,clinical": [
     "5466"
   ],
   "fragrance,soft,elegant,women,luxury": [
@@ -29396,7 +29393,7 @@
   "styling-iron,ceramic,tourmaline,professional,deep-brilliance": [
     "10118"
   ],
-  "conditioner,hydrating,detangling,dry,hair": [
+  "conditioner,hydrating,detangling,children,leave-in": [
     "10119"
   ],
   "shampoo,color,seal,treated,silk": [
@@ -29615,7 +29612,7 @@
   "shampoo,conditioner,strengthening,repair,hair": [
     "10186"
   ],
-  "finishing-powder,mineral,matte,suntan,imperfections": [
+  "powder,mineral,matting,finishing,suntan": [
     "3751"
   ],
   "fragrance,floral,classic,women,lanvin": [
@@ -29660,7 +29657,7 @@
   "travel,spray,clear,mini,three": [
     "10199"
   ],
-  "exfoliating,acne,lotion,10%-glycolic,aha": [
+  "exfoliating,acne,lotion,10%,glycolic": [
     "10200"
   ],
   "concealer,blemish,healing,fair,long-lasting": [
@@ -29723,7 +29720,7 @@
   "spray-bottle,fine-mist,soft-style,pack-of-12,fine-detail": [
     "10223"
   ],
-  "shampoo,keratin,shine,protein,hair": [
+  "shampoo,keratin,shine,oil,smooth": [
     "10224"
   ],
   "conditioner,keratin,vanilla,deep,hair": [
@@ -29792,7 +29789,7 @@
   "toner,oily,glycolic,moisturizing,balanced": [
     "10248"
   ],
-  "eyeliner,precise,sharpener,black,defined": [
+  "eyeliner,precise,sharpener,black,define": [
     "10249"
   ],
   "face-lift,collagen,non-surgical,skin,boost": [
@@ -29810,7 +29807,7 @@
   "conditioner,smoothing,daily,curl,assurance": [
     "10254"
   ],
-  "conditioner,sulfate-free,moisture,lock,omega": [
+  "conditioner,moisturizing,spray,aphinity,hair": [
     "10255"
   ],
   "hair-treatment,moisturizing,original,non-greasy,pump": [
@@ -29906,7 +29903,7 @@
   "conditioner,moisturizing,coconut,curly,instant": [
     "10287"
   ],
-  "eye-remover,soothing,gel,delicate,dermalogica": [
+  "eye-remover,soothing,gel,delicate,dermatological": [
     "10288"
   ],
   "flat-iron,dual-voltage,travel,mini,lime": [
@@ -29948,7 +29945,7 @@
   "attachment,detachable,fine-tooth,wide-tooth,detangling": [
     "10303"
   ],
-  "moisturizer,hydrating,dream,skin,cream": [
+  "moisturizer,hydrating,smooths,anti-wrinkle,dream": [
     "10304"
   ],
   "brow,brush,natural,bristles,premium": [
@@ -29957,7 +29954,7 @@
   "serum,arbutin,gentle,skin,tone": [
     "10306"
   ],
-  "laxative,natural,psyllium,fiber,bulk": [
+  "laxative,natural,psyllium,bulk-forming,doctor-recommended": [
     "10307"
   ],
   "face,peel,alpha,beta,retinol": [
@@ -30005,7 +30002,7 @@
   "serum,thickens,strengthens,scalp,instant": [
     "10322"
   ],
-  "cream,retinol,dermatologist,anti-wrinkle,spf-15": [
+  "cream,retinol,dermatologist,anti-wrinkle,spf": [
     "10323"
   ],
   "foundation,sunscreen,mineral,sheer,protective": [
@@ -30215,7 +30212,7 @@
   "top-coat,quick-dry,spray,professional,lustrous": [
     "10389"
   ],
-  "curl-spray,alcohol-free,silky,hair,transform": [
+  "curl-spray,alcohol-free,silky,hair,transforms": [
     "10390"
   ],
   "mineral,glow,nude,sheer,adaptive": [
@@ -30260,13 +30257,13 @@
   "hair-mousse,nourishing,whipped,curl,creamy": [
     "10407"
   ],
-  "nail,polish,gel,soak,pink": [
+  "nail-polish,soak-off,gel,pink,uv": [
     "10408"
   ],
   "fragrance,spicy,wooden,men,fresh": [
     "10409"
   ],
-  "hair-dryer,ceramic,tourmaline,lightweight,powerful": [
+  "hair-dryer,ceramic,tourmaline,lightweight,high-pressure": [
     "10410"
   ],
   "volume,booster,root,lift,luxurious": [
@@ -30278,7 +30275,7 @@
   "brush,iron,tangle-free,professional,grip": [
     "10412"
   ],
-  "eyeliner,waterproof,kohl,black,sephora": [
+  "eyeliner,lacquered,smoky,black,sephora": [
     "10413"
   ],
   "makeup,creamy,stick,sun,tone": [
@@ -30311,7 +30308,7 @@
   "comb,detangling,faux-tortoiseshell,hand-polished,scalp-gentle": [
     "10422"
   ],
-  "sanding,bands,professional,nail,fine": [
+  "sanding,bands,professional,nail,durable": [
     "10423"
   ],
   "nail,drill,electric,professional,turbo": [
@@ -30359,7 +30356,7 @@
   "styling,spray,heat-activated,firm,hold": [
     "10437"
   ],
-  "hair-growth,natural,plant-based,treatment,28oz": [
+  "hair-growth,natural,plant-based,treatment,first": [
     "10438"
   ],
   "hair-tie,no-crease,soft,stretchy,elastic": [
@@ -30380,7 +30377,7 @@
   "acne-gel,clearing,aha-bha,skin,treatment": [
     "10445"
   ],
-  "comb,switch,blade,women,unique": [
+  "comb,switch,blade,women,cut": [
     "10446"
   ],
   "cleanser,gentle,daily,feminine,refreshing": [
@@ -30566,7 +30563,7 @@
   "hand-soap,foaming,non-toxic,family,giggles": [
     "10510"
   ],
-  "perfume,masculine,cedar,musk,twilight": [
+  "perfume,masculine,cedar,musk,swiss": [
     "10511"
   ],
   "eye-screen,mineral,spf-30,dark-circles,fine-lines": [
@@ -30596,7 +30593,7 @@
   "shampoo,color,brightens,silver,conditioning": [
     "10520"
   ],
-  "comb,protect,lumiere,hair,winter": [
+  "comb,protect,argan,frizz,high": [
     "10521"
   ],
   "hair,powder,unisex,volumizing,holds": [
@@ -30722,6 +30719,9 @@
   "shampoo,conditioner,argan,organic,duo": [
     "10560"
   ],
+  "shampoo,toning,violet,blonde,colour": [
+    "10561"
+  ],
   "cream,anti-aging,snail,natural,healing": [
     "10562"
   ],
@@ -30746,7 +30746,7 @@
   "shampoo,conditioner,blonde,renew,brighten": [
     "10566"
   ],
-  "eyebrow,conditioning,plant-based,daily,growth": [
+  "eyebrow,growth,plant,daily,stimulant": [
     "10567"
   ],
   "nail-art,glitter,rhinestone,12-color,tweezer-tool": [
@@ -30764,7 +30764,7 @@
   "makeup,brush,set,natural,starter": [
     "10570"
   ],
-  "oil,vanilla,natural,focusing,herbal": [
+  "essential-oil,vanilla,natural,focusing,balancing": [
     "10571"
   ],
   "manicure,gel,white,pink,soak-off": [
@@ -30854,7 +30854,7 @@
   "face-spritz,vitamin-c,energizing,refresh,ongo": [
     "10596"
   ],
-  "nail-polish,chip-resistant,quick-drying,long-lasting,professional": [
+  "nail-polish,quick-drying,chip-resistant,long-lasting,manicure": [
     "10597"
   ],
   "styling-cream,quick,weightless,curls,fast": [
@@ -30875,7 +30875,7 @@
   "conditioner,leave-in,sensory,passionflower,aloe": [
     "10393"
   ],
-  "fragrance,romantic,apple,musk,sandalwood": [
+  "fragrance,romantic,floral,women,musk": [
     "10603"
   ],
   "perfume,women,secret,obsession,spray": [
@@ -30893,7 +30893,7 @@
   "perfume,women,spray,elegant,unique": [
     "10609"
   ],
-  "perfume,feminine,crystal,miniature,versatile": [
+  "perfume,women,miniature,crystal,bright": [
     "10610"
   ],
   "concealer,healing,green,blemish,long-lasting": [
@@ -31040,7 +31040,7 @@
   "eyeliner,waterproof,carded,pewter,self-sharpening": [
     "10661"
   ],
-  "shampoo,scalp,therapeutic,neem,sensitive": [
+  "shampoo,scalp,therapeutic,neem,sulfate-free": [
     "10662"
   ],
   "glitter,crackle,chroma,set,collection": [
@@ -31061,7 +31061,7 @@
   "body-lotion,quick-dry,gel,tan,expose": [
     "8234"
   ],
-  "eye-brightener,concealer,photo-op,under-eye,immediate": [
+  "eye-brightener,immediate,photo-op,cosmetic,under-eye": [
     "10666"
   ],
   "eyeshadow,cosmetic,soho,glam,smoky": [
@@ -31145,7 +31145,7 @@
   "nail,polish,bond,girl,collectible": [
     "10690"
   ],
-  "back-scrubber,cleanses,dual-bristle,body-massage,invigorating": [
+  "back-scrubber,cleanses,dual-bristle,body,invigorating": [
     "10691"
   ],
   "wrap,adhesive,silk,pure,strengthen": [
@@ -31168,6 +31168,9 @@
   ],
   "perfume,daytime,musk,vanilla,ginger": [
     "10698"
+  ],
+  "conditioner,deep,moist,hair,aussie": [
+    "10699"
   ],
   "facial,ozone,high-frequency,medical,therapeutic": [
     "10700"
@@ -31208,6 +31211,9 @@
   "borry-pin,curved,secure,hair,sleep": [
     "10710"
   ],
+  "finishing-spray,texture,satin-matte,high-impact,rebel-style": [
+    "9481"
+  ],
   "hairspray,strengthening,antifade,unisex,control": [
     "10711"
   ],
@@ -31225,10 +31231,6 @@
   ],
   "moisturizer,cellulite,reduce,clinical,advanced": [
     "10717"
-  ],
-  "cosmetic,travel,roll-up,hanger,mary-kay": [
-    "10718",
-    "10990"
   ],
   "hair-color,permanent,light-blonde,tube,goldwell": [
     "10719"
@@ -31261,7 +31263,7 @@
   "perfume,women,fantasy,set,fragrance": [
     "10730"
   ],
-  "primer,anti-aging,facial,skincare,brilliance": [
+  "primer,anti-aging,facial,olay,micro-sculpt": [
     "10731"
   ],
   "lipstick,natural,beige,honey,creme": [
@@ -31315,7 +31317,7 @@
   "oil,pure,maracuja,amazonian,nourishing": [
     "10747"
   ],
-  "lip-balm,plumping,nude,sparkly,mature": [
+  "lip-balm,plumping,nude,sparkly,adult": [
     "10748"
   ],
   "hair-dryer,nano,titanium,ionic,compact": [
@@ -31339,7 +31341,7 @@
   "menstrual,relief,cranberry,tab,50ct": [
     "10757"
   ],
-  "nail,corrector,pen,gold,sally-hansen": [
+  "nail,corrector,pen,gold,artistic": [
     "10758"
   ],
   "serum,anti-cellulite,advanced,topical,fat-reducing": [
@@ -31543,7 +31545,7 @@
   "beauty-bar,moisturizing,white,deep,cream": [
     "8456"
   ],
-  "shampoo,detox,citrus,male,potent": [
+  "shampoo,detoxifying,citrus,amazonian,follicle": [
     "10823"
   ],
   "wig,hold,extreme,lace,alcohol-free": [
@@ -31555,7 +31557,7 @@
   "serum,anti-aging,collagen,at-home,clinical": [
     "8716"
   ],
-  "day-cream,sunscreen,platinum,mature,anti-aging": [
+  "day-cream,sunscreen,platinum,mature,spf-25": [
     "10827"
   ],
   "fragrance,floral,fruity,women,vanilla": [
@@ -31661,7 +31663,7 @@
   "nail-art,3d-design,fimo-cane,decorative,cuttable": [
     "10860"
   ],
-  "fragrance,mist,amber,women,soft": [
+  "fragrance,spray,amber,women,romantic": [
     "10861"
   ],
   "hand-soap,antibacterial,white-tea,vitamin-e,pump": [
@@ -31727,7 +31729,7 @@
   "primer,vitamin,rejuvenating,skin,radiant": [
     "10879"
   ],
-  "shampoo,blonde,renew,bright,tone-restoring": [
+  "shampoo,conditioner,white,blonde,shine": [
     "10880"
   ],
   "foundation,silicone,clay,enriches,skin": [
@@ -31769,7 +31771,7 @@
   "nail-polish,shimmer,pearlescent,sheer,luxury": [
     "10890"
   ],
-  "beauty,natural,essential,gift,kit": [
+  "beauty,natural,essential,gift,trial": [
     "10891"
   ],
   "nail-lacquer,limited,edition,germany,mini": [
@@ -31786,9 +31788,6 @@
   ],
   "facial,removal,cloth,refreshing,make-up": [
     "10895"
-  ],
-  "wash-cloth,soft,nylon,japanese,patented": [
-    "10896"
   ],
   "perfume,refillable,glass,roll-on,mini": [
     "10897"
@@ -31868,7 +31867,7 @@
   "concealer,covers,dark,circles,long": [
     "10920"
   ],
-  "conditioning,deep,penetrating,unisex,acai": [
+  "conditioner,repair,deep,penetrating,fortifying": [
     "10921"
   ],
   "nail,lacquer,blue,mini,spin": [
@@ -31880,7 +31879,7 @@
   "curling-iron,nano-titanium,smooth-curls,styling,advanced-heat": [
     "10924"
   ],
-  "nail-lacquer,long-lasting,new-design,affordable,kleancolor": [
+  "nail-lacquer,sheer,limited,beige,eco-friendly": [
     "10925"
   ],
   "pedicure,therapeutic,precision,foot,active": [
@@ -31907,7 +31906,7 @@
   "jar,pump,plastic,4oz,dome-lid": [
     "10932"
   ],
-  "brush,nail,acrylic,synthetic,design": [
+  "nail,art,acrylic,brush,synthetic": [
     "10933"
   ],
   "styling-iron,ceramic,tourmaline,professional,revlon": [
@@ -31967,7 +31966,7 @@
   "ring,nail,metal,gold,cute": [
     "10960"
   ],
-  "utensil,reusable,bamboo,on-the-go,hijiki": [
+  "utensil,reusable,bamboo,to-go,hijiki": [
     "10963"
   ],
   "brow,powder,dark,brown,tinting": [
@@ -32051,7 +32050,7 @@
   "powder,mineral,translucent,fair,pressed": [
     "10992"
   ],
-  "shampoo,conditioner,emu-oil,hair,natural": [
+  "shampoo,conditioner,emu-oil,hair,nourishing": [
     "10993"
   ],
   "cream,keratin,awapuhi,condition,hair": [
@@ -32072,7 +32071,7 @@
   "facial-scrub,exfoliating,cocoa-butter,gentle,smooth": [
     "10999"
   ],
-  "shampoo,rosemary-mint,all-hair-types,professionals,fragrance": [
+  "shampoo,rosemary-mint,all-hair-types,professionals,bottle": [
     "4107"
   ],
   "body-lotion,moisturizing,vitamin-e,aloe,pure-grace": [
@@ -32108,7 +32107,7 @@
   "hairpiece,false,fringe,dark-brown,clip": [
     "11008"
   ],
-  "nail-polish,glitter,formaldehyde-free,collection,nicki-minaj": [
+  "nail-polish,collection,branded,feminine,vibrant": [
     "11009"
   ],
   "oil,keratin,shine,non-greasy,unisex": [
@@ -32192,7 +32191,7 @@
   "eyeliner,conditioning,phyto-peptide,healthy,espresso": [
     "11034"
   ],
-  "eyeshadow,palette,limited,edition,urban": [
+  "eyeshadow,limited,edition,cosmetic,palette": [
     "11035"
   ],
   "brush,porcelain,bristles,medium,volume": [
@@ -32207,7 +32206,7 @@
   "cuticle-pusher,non-scratch,curved,natural,precise": [
     "11039"
   ],
-  "makeup-brush,professional,mineral,set,studio": [
+  "makeup,brush,set,professional,mineral": [
     "11040"
   ],
   "sunscreen,physical,ocean-tested,moisturizing,protective": [
@@ -32222,7 +32221,7 @@
   "nail-color,magnetic,ionic,beauty,women": [
     "11045"
   ],
-  "nail-polish,magnetic,chip-resistant,quick-drying,magnetix": [
+  "nail,magnet,polish,durable,quick": [
     "11046"
   ],
   "makeup,mineral,pure,starter,large": [
@@ -32285,7 +32284,7 @@
   "mask,therapeutic,sulfur,acne,soothing": [
     "11063"
   ],
-  "night-cream,anti-aging,meaningful,cindy,beauty": [
+  "night-cream,anti-aging,meaningful,cindy,cosmetic": [
     "11065"
   ],
   "rollers,magnetic,smooth,curl,volume": [
@@ -32300,7 +32299,7 @@
   "eye-cream,natural,goji-berry,adult,rejuvenating": [
     "11068"
   ],
-  "moisturizer,anti-aging,peptide,goji,facial": [
+  "moisturizer,anti-aging,goji,peptide,facial": [
     "6614"
   ],
   "peel,glycolic,acid,professional,night": [
@@ -32429,7 +32428,7 @@
   "atomizer,refillable,travel,mini,colorful": [
     "11114"
   ],
-  "conditioner,sulfate-free,damage,hair,reconstruct": [
+  "conditioner,sulfate-free,damage-repair,hair,blonde": [
     "11115"
   ],
   "shampoo,moisturizing,shea,butter,hair": [
@@ -32492,7 +32491,7 @@
   "face-cream,moisturizing,medium-weight,skin-balance,jergens": [
     "8358"
   ],
-  "retinol,moisturizer,micro-encapsulated,skin,revival": [
+  "retinol,moisturizer,micro-encapsulated,skin,radiant": [
     "10937"
   ],
   "serum,anti-wrinkle,peptide,dermatologist,neuropeptide": [
@@ -32654,7 +32653,7 @@
   "cleanser,gentle,microbead,radiant,daily": [
     "4177"
   ],
-  "serum,anti-frizz,moisture,hair,silky": [
+  "serum,anti-frizz,leave-in,hair,moisture": [
     "11183"
   ],
   "flat-iron,heat-protection,lotion,smooth,thermal": [
@@ -32711,7 +32710,7 @@
   "nail-color,extreme-wear,mint-sorbet,trendy,strong": [
     "11203"
   ],
-  "sunless-tanner,emollient,natural,vegetarian,plant-based": [
+  "sunless-tanner,emollient,natural,vegetarian,body": [
     "7364"
   ],
   "wig,adjustable,dark-brown,sexy-wave,synthetic": [
@@ -32876,7 +32875,7 @@
   "nail-polish,colorful,red-orange,essential,cheerful": [
     "11256"
   ],
-  "cream,deep-conditioning,oatmeal,soft,skin": [
+  "cream,deep-conditioning,oatmeal,skin,moisturizing": [
     "11257"
   ],
   "nail-polish,metallic,rare,hard-to-find,nicki-minaj": [
@@ -32915,7 +32914,7 @@
   "soap,pine,handmade,aromatic,karma": [
     "11270"
   ],
-  "shampoo,solid,organic,hippy,karma": [
+  "shampoo,solid,karma,hippy,scented": [
     "11271"
   ],
   "moisturizer,oil-free,sensitive,spf,lightweight": [
@@ -32951,7 +32950,7 @@
   "cosmetic,brush,elite,set,coastal": [
     "11280"
   ],
-  "cream,anti-aging,spf-25,daytime,facial": [
+  "cream,renewal,spf,daytime,facial": [
     "8719"
   ],
   "nail-art,glitter,powder,round,wheel": [
@@ -33110,7 +33109,7 @@
   "compact,10x,led,pink,crystal": [
     "11337"
   ],
-  "conditioner,organic,african,hair,repair": [
+  "conditioner,organic,african,leave-in,herbal": [
     "11338"
   ],
   "lotion,moisturizing,natural,butters,growth": [
@@ -33155,7 +33154,7 @@
   "eye-shadow,palette,insurance,cosmetic,luxury": [
     "11350"
   ],
-  "nail,art,brush,dust,remover": [
+  "nail-art,clean,dust,brush,professional": [
     "11351"
   ],
   "mascara,waterproof,lash,catching,brush": [
@@ -33239,7 +33238,7 @@
   "body-wash,nourishing,moisturizing,winter,dove": [
     "11376"
   ],
-  "eye-cream,instant,firm,quick,lift": [
+  "eye-cream,instant,firm,lift,quick": [
     "5244"
   ],
   "brush,foundation,smooth,poreless,upward": [
@@ -33281,7 +33280,7 @@
   "body-cream,moisturizing,sea-minerals,vitamin-e,almond-oil": [
     "4554"
   ],
-  "co-cologne-spray,masculine,green-spices,men,invigorating": [
+  "co-cologne,masculine,green,spicy,spray": [
     "11387"
   ],
   "peel,exfoliate,moisturizing,lactic,level1": [
@@ -33393,7 +33392,7 @@
   "nail,polish,sparkly,pink,poppy": [
     "11420"
   ],
-  "shampoo,control,substantive,hair,long": [
+  "shampoo,long-lasting,substantive,control,hair": [
     "11421"
   ],
   "face,lift,organic,anti-aging,true": [
@@ -33438,7 +33437,7 @@
   "spray,root,boost,floral,hair": [
     "11432"
   ],
-  "body-lotion,natural,emollient,spf,daily": [
+  "body-lotion,natural,emollient,daily,spf": [
     "11433"
   ],
   "comb,pocket,fine,short,styling": [
@@ -33543,7 +33542,7 @@
   "hand-therapy,moisturising,shea-butter,gardeners,pump": [
     "11466"
   ],
-  "hybrid,intense,hydrating,treatment,hair": [
+  "hydrator,intense,moisturizing,dry,hair": [
     "11469"
   ],
   "facial-scrub,exfoliating,walnut,rosemary-mint,natural": [
@@ -33570,7 +33569,7 @@
   "acne-treatment,medicated,spot,adult,blackhead": [
     "8764"
   ],
-  "hair-treatment,silicon,bamboo,leave-in,conditioner": [
+  "hair,treatment,bamboo,silicone,leave-in": [
     "11477"
   ],
   "facial-sponge,single-use,cleanser,oily-skin,40-count": [
@@ -33600,7 +33599,7 @@
   "cleanser,soothes,redness,sensitive,clinical": [
     "11486"
   ],
-  "foundation,whipped,us-made,light,custom": [
+  "foundation,whipped,us-made,light,mineral": [
     "11487"
   ],
   "moisture,vitamin,organic,lotion,spf": [
@@ -33816,7 +33815,7 @@
   "comb,handmade,coarse,thick,wet": [
     "11557"
   ],
-  "hand-soap,gentle,essential,lavender,refill": [
+  "hand-soap,gentle,lavender,refill,natural": [
     "11558"
   ],
   "makeup,compact,elegant,shell,multiuse": [
@@ -33873,10 +33872,10 @@
   "conditioner,moisturizing,featherweight,fine-hair,silk-fibers": [
     "11578"
   ],
-  "primer,smooth,skin,texture,revive": [
+  "primer,smooth,skin,texture,revitalize": [
     "11579"
   ],
-  "soap,lavender,organic,gentle,calming": [
+  "soap,lavender,liquid,organic,calming": [
     "11580"
   ],
   "hair-dryer,ionic,professional,soft-bonnet,800w": [
@@ -33891,7 +33890,7 @@
   "eye-cream,dark-circles,vitamin-k,professional,corrective": [
     "11583"
   ],
-  "lipgloss,ph-powered,pink,glossy,covergirl": [
+  "gloss,pink,ph-powered,lip,formula": [
     "8095"
   ],
   "body-lotion,nourishing,pure,honey,almond": [
@@ -34104,7 +34103,7 @@
   "eye-remover,herbal,nourishing,liquid,hydrating": [
     "11642"
   ],
-  "clip,metal,rust-resistant,single-prong,curl": [
+  "clip,metal,snap,black,hair": [
     "11643"
   ],
   "brush,cosmetic,liquid,powder,buildable": [
@@ -34125,7 +34124,7 @@
   "blush,brightening,powder,facial,luminoso": [
     "8725"
   ],
-  "extensions,invisible,closure,human,black": [
+  "extensions,invisible,remy,black,closure": [
     "11647"
   ],
   "perfume,women,signature,edt,beckham": [
@@ -34193,6 +34192,9 @@
   ],
   "moisturizer,green-tea,refining,acne,luxury": [
     "11669"
+  ],
+  "beauty-bar,moisturizing,pink,women,dermatologist": [
+    "11670"
   ],
   "hair-clip,boutique,floral,decorative,set": [
     "11671"
@@ -34284,7 +34286,7 @@
   "contour,angled,soft,cheek,unique": [
     "4888"
   ],
-  "cleanser,gentle,honey,unscented,enzymatic": [
+  "cleanser,gentle,honey,unscented,creamy": [
     "1846"
   ],
   "eyeshadow,creaseproof,velvet,single,mocha": [
@@ -34350,13 +34352,13 @@
   "hair-texturizer,unisex,whipped,mega,marshmallow": [
     "11712"
   ],
-  "hair-color,ammonia-free,peroxide-free,reflective-shine,deep-brunette": [
+  "hair-color,ammonia-free,peroxide-free,reflective-shine,professional": [
     "11713"
   ],
   "oil,conditioning,natural,moroccan,treatment": [
     "9317"
   ],
-  "brush-guard,powder,kabuki,small,protective": [
+  "brush-guard,protective,powder,kabuki,small": [
     "11715"
   ],
   "serum,brightening,gel,skin,bleaching": [
@@ -34548,7 +34550,7 @@
   "perfume,spray,delicate,women,slim": [
     "10218"
   ],
-  "sunscreen,spf50,natural,tropical,hydration": [
+  "sunscreen,spf-50,natural,tropical,hydration": [
     "11291"
   ],
   "serum,stem,cellular,face,activator": [
@@ -34698,7 +34700,7 @@
   "soap,lavender,shea,provence,triple-milled": [
     "11805"
   ],
-  "body,exfoliating,glove,spa,dual": [
+  "exfoliating,glove,spa,women,men": [
     "11806"
   ],
   "eye-cream,organic,cucumber,pure,hydrating": [
@@ -34839,7 +34841,7 @@
   "serum,enhancing,longer,fuller,bolder": [
     "11846"
   ],
-  "gel-polish,soak-off,ocean-wave,little-princess,uv-cure": [
+  "gel-polish,soak-off,uv-cure,little-princess,ocean-wave": [
     "11847"
   ],
   "scrub,daily,dermalogica,travel,microfoliant": [
@@ -34884,7 +34886,7 @@
   "beauty-bar,exfoliating,moisturizing,gentle,creamy": [
     "11861"
   ],
-  "straightening-iron,ceramic,tourmaline,5-tempature,hair": [
+  "straightening-iron,ceramic,tourmaline,5-tempature,quick-heat": [
     "11862"
   ],
   "capsule,organic,weight,loss,support": [
@@ -34917,7 +34919,7 @@
   "machine,exfoliate,diamond,facial,rejuvenate": [
     "11871"
   ],
-  "top,coat,shiny,strong,nail": [
+  "top-coat,fast-drying,anti-chipping,shiny,nail": [
     "11872"
   ],
   "stamping,plate,stainless,blue,single": [
@@ -34959,7 +34961,7 @@
   "perfume,women,zesty,independent,vibrant": [
     "11734"
   ],
-  "shampoo,humectant,moisture,hair,professional": [
+  "shampoo,moisturizing,humectant,hair,suave": [
     "7352"
   ],
   "conditioner,herbal,kiwi,lime,unisex": [
@@ -35067,7 +35069,7 @@
   "acne-treatment,benzoyl-peroxide,oil-free,prescription-grade,cleanser": [
     "11919"
   ],
-  "hair-powder,mattifying,lightweight,control,volume": [
+  "hair-powder,mattifying,lightweight,volume,control": [
     "11920"
   ],
   "blush,creamy,luminous,silky,long-lasting": [
@@ -35076,7 +35078,7 @@
   "brush,concealer,dual,soft,fine": [
     "11922"
   ],
-  "nail,brush,kolinsky,red,wood": [
+  "nail,brush,kolinsky,red,wooden": [
     "8880"
   ],
   "shader,soft,angled,beveled,brow": [
@@ -35160,7 +35162,7 @@
   "shampoo,protein,masque,color,revive": [
     "11377"
   ],
-  "lip-balm,argan-infused,natural,dry-lips,protective": [
+  "lip-butter,argan-infused,natural,dry-lips,protective": [
     "11944"
   ],
   "moisturizer,mineral,talc-free,sensitive,hypoallergenic": [
@@ -35169,7 +35171,7 @@
   "cleansing,mineral,pure,deep,skincare": [
     "6960"
   ],
-  "toner,hydrating,aloe-vera,retinol,adult": [
+  "toner,aloe-vera,witch-hazel,retinol,skincare": [
     "11946"
   ],
   "gloss,stain,longwear,transparent,blissful": [
@@ -35178,7 +35180,7 @@
   "concealer,mineral,multi-tasking,soft,honey": [
     "11948"
   ],
-  "eye,contour,elixir,repair,intensive": [
+  "eye,contour,repair,elixir,intensive": [
     "11949"
   ],
   "shampoo,conditioner,organic,moisturizing,therapeutic": [
@@ -35283,7 +35285,7 @@
   "serum,hyaluronic,pure,original,anti-aging": [
     "11921"
   ],
-  "nail,art,marbleizing,brush,acrylic": [
+  "nail,art,marbleizing,brush,dotting": [
     "11978"
   ],
   "wand,disposable,flexible,professional,bulk": [
@@ -35313,7 +35315,7 @@
   "exfoliating,medicated,glycolic,salicylic,acne": [
     "11987"
   ],
-  "eyeliner,lasting,smudgeproof,water-resistant,dramatic": [
+  "eyeliner,smooth,gentle,defining,soft": [
     "11757"
   ],
   "nail-polish,holographic,shimmer,black,femme-fatale": [
@@ -35343,7 +35345,7 @@
   "acne-treatment,clear,electronic,adult,zit-zapper": [
     "11994"
   ],
-  "skin,blur,instant,smoother,5second": [
+  "skin,blur,instant,smoother,five": [
     "11995"
   ],
   "skin,toning,natural,pregnant,oil": [
@@ -35448,7 +35450,7 @@
   "hair-dryer,3-in-1,1875-watt,unisex,ionic": [
     "12019"
   ],
-  "eye-cream,regenerating,daily,youth,code": [
+  "eye-cream,regenerating,daily,skincare,youth": [
     "12020"
   ],
   "conditioner,humectant,moisturizing,dry,hair": [
@@ -35460,7 +35462,7 @@
   "shampoo,moisturizing,tea-tree,lavender,mint": [
     "12022"
   ],
-  "leave-in,moisturizing,humectress,spray,luxury": [
+  "conditioner,moisturizing,leave-in,luxe,humectress": [
     "6792"
   ],
   "sunscreen,moisturizing,zinc-oxide,daily,transparent": [
@@ -35504,9 +35506,6 @@
   ],
   "powder,oil-control,travel-size,loose,light": [
     "12036"
-  ],
-  "nail-lacquer,colorful,long-wearing,trendsetter,bold": [
-    "12037"
   ],
   "fragrance,sporty,floral,men,daytime": [
     "12038"
@@ -35553,7 +35552,7 @@
   "perfume,women,floral,patchouli,secret": [
     "12053"
   ],
-  "towel,absorbent,cotton,client,economy": [
+  "towel,absorbent,cotton,economy,12x12": [
     "11535"
   ],
   "body-butter,aromatherapy,orange,grapefruit,caffeine": [
@@ -35667,7 +35666,7 @@
   "serum,grow,strengthen,hemp,tamanu": [
     "12080"
   ],
-  "shampoo,gentle,watermelon,kids,2-in-1": [
+  "shampoo,gentle,watermelon,kids,2in1": [
     "8459"
   ],
   "skin-oil,vitamin-e,liquid,14000-iu,anti-aging": [
@@ -35721,7 +35720,7 @@
   "elastic,braid,gold,clear,magic": [
     "12089"
   ],
-  "mascara,waterproof,eye-brightening,hazel,black-gold": [
+  "mascara,waterproof,eyebrightening,hazel,blackgold": [
     "12090"
   ],
   "face,protect,soothe,men,triple": [
