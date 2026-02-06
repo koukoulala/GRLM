@@ -14,6 +14,10 @@ CUDA_VISIBLE_DEVICES=0,1 nohup bash examples/GRLM/grlm_indomain_beauty.sh > ./lo
 
 CUDA_VISIBLE_DEVICES=0,1 nohup python -u s5_beauty_eval.py > ../logs/s5_beauty_eval.out 2>&1 &
 
+python s7_build_easyr1_data.py --dataset beauty --test_size 1000
+
+CUDA_VISIBLE_DEVICES=0,1 nohup bash examples/grlm_beauty_grpo.sh > ./logs/grlm_beauty_grpo.out 2>&1 &
+
 bash deploy_env.sh
 
 CUDA_VISIBLE_DEVICES=0,1 nohup bash ./recipe/grlm/run_grlm_grpo.sh > ../logs/run_grlm_grpo.out 2>&1 &
