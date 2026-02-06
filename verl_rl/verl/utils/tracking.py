@@ -34,7 +34,7 @@ class Tracking:
         logger: Dictionary of initialized logger instances for each backend.
     """
 
-    supported_backend = ["wandb", "mlflow", "swanlab", "vemlp_wandb", "tensorboard", "console", "clearml"]
+    supported_backend = ["wandb", "mlflow", "swanlab", "vemlp_wandb", "tensorboard", "console", "clearml", "file"]
 
     def __init__(self, project_name, experiment_name, default_backend: str | list[str] = "console", config=None):
         if isinstance(default_backend, str):
@@ -127,6 +127,10 @@ class Tracking:
         if "clearml" in default_backend:
             self.logger["clearml"] = ClearMLLogger(project_name, experiment_name, config)
 
+        # File logger for experiment_log.jsonl (like EasyR1)
+        if "file" in default_backend:
+            self.logger["file"] = _FileLoggerAdapter(project_name, experiment_name, config)
+
     def log(self, data, step, backend=None):
         for default_backend, logger_instance in self.logger.items():
             if backend is None or default_backend in backend:
@@ -141,6 +145,9 @@ class Tracking:
             self.logger["vemlp_wandb"].finish(exit_code=0)
         if "tensorboard" in self.logger:
             self.logger["tensorboard"].finish()
+
+        if "file" in self.logger:
+            self.logger["file"].finish()
 
         if "clearnml" in self.logger:
             self.logger["clearnml"].finish()
@@ -196,6 +203,112 @@ class ClearMLLogger:
 
     def finish(self):
         self._task.mark_completed()
+
+
+class _FileLoggerAdapter:
+    """File logger that writes experiment logs to jsonl file (like EasyR1's experiment_log.jsonl).
+    
+    This adapter creates:
+    - experiment_config.json: Contains the full config at initialization
+    - experiment_log.jsonl: Contains per-step metrics in JSON Lines format
+    - generations.log: Placeholder for generation logs
+    """
+    
+    def __init__(self, project_name, experiment_name, config):
+        import json
+        import os
+        
+        # Determine the output directory from config
+        if config is not None:
+            # Try to get output directory from config
+            if isinstance(config, dict):
+                self.output_dir = config.get("trainer", {}).get("default_local_dir", "./output/ckpts")
+            else:
+                # OmegaConf or similar
+                try:
+                    self.output_dir = config.trainer.default_local_dir
+                except:
+                    self.output_dir = "./output/ckpts"
+        else:
+            self.output_dir = "./output/ckpts"
+        
+        # Create output directory
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Save experiment config
+        config_path = os.path.join(self.output_dir, "experiment_config.json")
+        try:
+            if hasattr(config, 'to_dict'):
+                config_dict = config.to_dict()
+            elif hasattr(config, '__dict__'):
+                from omegaconf import OmegaConf
+                config_dict = OmegaConf.to_container(config, resolve=True)
+            else:
+                config_dict = dict(config) if config else {}
+            
+            with open(config_path, "w") as f:
+                json.dump(config_dict, f, indent=2, default=str)
+            print(f"Saved experiment config to {config_path}")
+        except Exception as e:
+            print(f"Warning: Could not save experiment config: {e}")
+        
+        # Initialize log files
+        self.log_path = os.path.join(self.output_dir, "experiment_log.jsonl")
+        self.gen_path = os.path.join(self.output_dir, "generations.log")
+        
+        # Clear/create the log files
+        with open(self.log_path, "w") as f:
+            pass  # Create empty file
+        with open(self.gen_path, "w") as f:
+            pass  # Create empty file
+            
+        print(f"Initialized file logger:")
+        print(f"  - Experiment log: {self.log_path}")
+        print(f"  - Generations log: {self.gen_path}")
+    
+    def log(self, data, step):
+        """Log metrics to experiment_log.jsonl file."""
+        import json
+        
+        # Unflatten the data for better readability
+        unflattened_data = self._unflatten_dict(data)
+        
+        log_entry = {"step": step, **unflattened_data}
+        
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(log_entry, default=self._json_serializer) + "\n")
+    
+    def _unflatten_dict(self, d, sep='/'):
+        """Convert flat dict with '/' separators to nested dict."""
+        result = {}
+        for key, value in d.items():
+            parts = key.split(sep)
+            current = result
+            for part in parts[:-1]:
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            current[parts[-1]] = value
+        return result
+    
+    def _json_serializer(self, obj):
+        """Custom JSON serializer for objects not serializable by default."""
+        import numpy as np
+        import torch
+        
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
+        if hasattr(obj, '__dict__'):
+            return str(obj)
+        return str(obj)
+    
+    def finish(self):
+        """Cleanup when logging is finished."""
+        print(f"File logger finished. Logs saved to {self.output_dir}")
 
 
 class _TensorboardAdapter:

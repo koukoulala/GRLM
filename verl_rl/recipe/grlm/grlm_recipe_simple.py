@@ -413,6 +413,36 @@ def hierarchical_reward(prediction: str, ground_truth: str) -> float:
         return 1.0
 
 
+def first_item_hit_reward(prediction: str, ground_truth: str) -> float:
+    """Calculate Pass@1 exact match reward (from grlm_recipe.py).
+    
+    This is the actual reward used in grlm_recipe.py training.
+    Binary reward: 1.0 if first predicted item exactly matches any ground truth item.
+    
+    Note: Uses sorted word tuples for comparison (order-independent within item).
+    
+    Args:
+        prediction: Model generated text
+        ground_truth: Ground truth text
+        
+    Returns:
+        1.0 if exact match, 0.0 otherwise
+    """
+    pred_items = _extract_all_items(prediction)
+    gt_items = _extract_all_items(ground_truth)
+    
+    if not pred_items or not gt_items:
+        return 0.0
+    
+    # Get first predicted item (sorted tuple for order-independent comparison)
+    first_pred_item = tuple(sorted(pred_items[0]))
+    
+    # Check if it matches any ground truth item
+    gt_set = set(tuple(sorted(gt)) for gt in gt_items)
+    
+    return 1.0 if first_pred_item in gt_set else 0.0
+
+
 def compute_score(
     data_source: str,
     solution_str: str,
@@ -431,24 +461,32 @@ def compute_score(
         
     Returns:
         Dictionary containing various reward scores.
+        
+    Note:
+        - hierarchical_reward: Sequential word matching (1=0.6, 2=0.7, 3=0.8, 4=0.9, 5=1.0)
+        - jaccard_reward: Jaccard similarity (partial credit for word overlap)
+        - exact_match_reward: Binary exact match (from grlm_recipe.py, order-independent)
+        
+        Default uses hierarchical_reward as main signal for better gradient.
     """
     prediction = solution_str
     
-    # Calculate rewards
+    # Calculate all reward variants
     format_score = format_reward(prediction)
     jaccard_score = pass_at_1_reward(prediction, ground_truth)
     hierarchical_score = hierarchical_reward(prediction, ground_truth)
+    exact_match_score = first_item_hit_reward(prediction, ground_truth)
     
-    # Use hierarchical reward as main signal (like EasyR1 config)
-    # Format weight = 0.1
-    format_weight = 0.1
+    # Use hierarchical as default main signal (provides better gradient than exact match)
+    # Note: grlm_recipe.py uses exact_match (first_item_hit) but that's binary (0 or 1)
+    # Hierarchical provides smoother reward signal for training
     main_reward = hierarchical_score
-    overall = main_reward + format_weight * format_score
     
     return {
-        "score": overall,  # Main reward signal for GRPO
+        "score": main_reward,  # Main reward signal for GRPO (no format bonus)
         "format_reward": format_score,
         "jaccard_reward": jaccard_score,
         "hierarchical_reward": hierarchical_score,
-        "pass_at_1": jaccard_score,
+        "exact_match_reward": exact_match_score,  # Binary match from grlm_recipe.py
+        "pass_at_1": exact_match_score,
     }
