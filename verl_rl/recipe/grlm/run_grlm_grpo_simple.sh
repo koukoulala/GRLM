@@ -16,6 +16,14 @@ set -e
 # - prompt: instruction + input + output (ends at itemN-2)
 # - ground_truth: valid_ground_truth (itemN-1)
 # - test_ground_truth: held out for s5_beauty_eval.py
+#
+# Logging:
+# - experiment_log.jsonl will be saved to $OUTPUT_DIR/ckpts/
+# - Use trainer.logger to enable different backends (console, file, wandb, etc.)
+#
+# Checkpoint:
+# - trainer.save_freq: Save checkpoint every N steps (default: 50)
+# - trainer.max_actor_ckpt_to_keep: Max checkpoints to keep (default: None=unlimited)
 # ============================================================================
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
@@ -81,6 +89,19 @@ export OUTPUT_DIR=${OUTPUT_DIR:-"./output"}
 export WANDB_MODE=${WANDB_MODE:-offline}
 
 # ============================================================================
+# Checkpoint & Logging Configuration
+# ============================================================================
+# Checkpoint frequency (save every N steps)
+export SAVE_FREQ=${SAVE_FREQ:-50}
+# Max checkpoints to keep (set to limit disk usage, e.g., 3)
+export MAX_CKPT_TO_KEEP=${MAX_CKPT_TO_KEEP:-3}
+# Validation/test frequency
+export TEST_FREQ=${TEST_FREQ:-50}
+# Logger backend: console, file, wandb, tensorboard, swanlab
+# Use "console,file" to get both console output and experiment_log.jsonl
+export LOGGER_BACKEND=${LOGGER_BACKEND:-"console,file"}
+
+# ============================================================================
 # Network Configuration
 # ============================================================================
 export TCP_NIC=$(ifconfig 2>/dev/null | grep -B1 " "$(hostname -i 2>/dev/null)" " | grep -o "^\w*" || echo "eth0")
@@ -101,6 +122,10 @@ echo "Learning Rate: $LEARNING_RATE"
 echo "Beam Size: $BEAM_SIZE"
 echo "Beam Max Tokens: $BEAM_MAX_TOKENS"
 echo "Mode: Single-stage beam search (no CoT)"
+echo "Save Freq: $SAVE_FREQ steps"
+echo "Max Checkpoints: $MAX_CKPT_TO_KEEP"
+echo "Logger: $LOGGER_BACKEND"
+echo "Output Dir: $OUTPUT_DIR"
 echo "==================================="
 
 # ============================================================================
@@ -168,13 +193,15 @@ python3 -u -m recipe.grlm.main_grlm_ppo \
     trainer.default_hdfs_dir=null \
     trainer.n_gpus_per_node=$N_GPUS \
     trainer.nnodes=$N_NODES \
-    trainer.save_freq=50 \
-    trainer.test_freq=50 \
+    trainer.save_freq=$SAVE_FREQ \
+    trainer.test_freq=$TEST_FREQ \
     trainer.project_name=$PROJECT_NAME \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.default_local_dir=$OUTPUT_DIR/ckpts \
     trainer.total_epochs=2 \
     trainer.val_before_train=True \
+    trainer.logger=$LOGGER_BACKEND \
+    ++trainer.max_actor_ckpt_to_keep=$MAX_CKPT_TO_KEEP \
     ++trainer.log_val_generations=10 \
     ++trainer.validation_data_dir=$OUTPUT_DIR/val_generations \
     ++trainer.rollout_data_dir=$OUTPUT_DIR/rollout_generations \
