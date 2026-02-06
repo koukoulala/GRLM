@@ -255,13 +255,196 @@ class GrlmvLLMRollout(vLLMRollout):
         return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
 
     @torch.no_grad()
+    def _single_stage_beam_generation(self, prompts: DataProto, **kwargs) -> DataProto:
+        """
+        Single-stage beam search generation for GRLM (no CoT).
+        
+        This is for GRLM models that were NOT trained with CoT.
+        Directly applies beam search on the prompt without CoT sampling.
+        
+        Data format (from s7_build_rl_data.py):
+        - prompt: instruction + input + output (ends at itemN-2)
+        - Model generates: "Item text ID: [w1, w2, w3, w4, w5] Title: xxx"
+        """
+        idx = prompts.batch["input_ids"]
+        attention_mask = prompts.batch["attention_mask"]
+        position_ids = prompts.batch["position_ids"]
+        eos_token_id = prompts.meta_info["eos_token_id"]
+        batch_size = idx.size(0)
+
+        # Prepare vllm inputs
+        non_tensor_batch = prompts.non_tensor_batch
+        if "raw_prompt_ids" not in non_tensor_batch:
+            non_tensor_batch["raw_prompt_ids"] = np.array(
+                [_pre_process_inputs(self.pad_token_id, idx[i]) for i in range(batch_size)], dtype=object
+            )
+
+        if "multi_modal_data" in non_tensor_batch:
+            vllm_inputs = []
+            for raw_prompt_ids, multi_modal_data in zip(
+                non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data"), strict=True
+            ):
+                vllm_inputs.append({"prompt_token_ids": raw_prompt_ids, "multi_modal_data": multi_modal_data})
+        else:
+            vllm_inputs = [
+                {"prompt_token_ids": raw_prompt_ids} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
+            ]
+
+        for input_data in vllm_inputs:
+            if isinstance(input_data["prompt_token_ids"], np.ndarray):
+                input_data["prompt_token_ids"] = input_data["prompt_token_ids"].tolist()
+
+        # Beam search parameters
+        beam_width = kwargs.get("beam_size", getattr(self.config, "beam_size", 32))
+        max_tokens = kwargs.get(
+            "beam_max_tokens",
+            getattr(self.config, "beam_max_tokens", 64)
+        )
+
+        print(f"[GRLM SingleStage] Beam search params: beam_width={beam_width}, max_tokens={max_tokens}, batch_size={batch_size}")
+
+        if BeamSearchParams is None:
+            raise ImportError("BeamSearchParams not available, cannot run beam search")
+
+        beam_params = BeamSearchParams(
+            beam_width=beam_width,
+            max_tokens=max_tokens,
+        )
+
+        # Direct beam search on prompt (no CoT stage)
+        beam_outputs = self.inference_engine.beam_search(
+            prompts=vllm_inputs,
+            params=beam_params,
+        )
+
+        # Post-process beam search results
+        return_all_beams = kwargs.get("return_all_beams", True)
+        n_beams_to_return = beam_width
+
+        print(f"[GRLM SingleStage] Post-process: return_all_beams={return_all_beams}, n_beams={n_beams_to_return}")
+
+        response = []
+
+        if return_all_beams:
+            expanded_idx = []
+            beam_indices = []
+
+            for i, output in enumerate(beam_outputs):
+                original_prompt_len = len(vllm_inputs[i]["prompt_token_ids"])
+
+                num_seqs = len(output.sequences)
+                for seq_idx in range(n_beams_to_return):
+                    if seq_idx < num_seqs:
+                        best_seq = output.sequences[seq_idx]
+                        full_seq = best_seq.tokens
+                        response_ids = full_seq[original_prompt_len:]
+                    else:
+                        # Fallback to first sequence if not enough beams
+                        best_seq = output.sequences[0]
+                        full_seq = best_seq.tokens
+                        response_ids = full_seq[original_prompt_len:]
+                    response.append(response_ids)
+                    expanded_idx.append(i)
+                    beam_indices.append(seq_idx)
+
+            idx = idx[expanded_idx]
+            attention_mask = attention_mask[expanded_idx]
+            position_ids = position_ids[expanded_idx]
+
+            # Expand non_tensor_batch
+            expanded_non_tensor_batch = {}
+            for key, val in non_tensor_batch.items():
+                if isinstance(val, np.ndarray):
+                    expanded_non_tensor_batch[key] = val[expanded_idx]
+                elif isinstance(val, list):
+                    expanded_non_tensor_batch[key] = [val[i] for i in expanded_idx]
+                else:
+                    expanded_non_tensor_batch[key] = val
+            non_tensor_batch = expanded_non_tensor_batch
+
+            non_tensor_batch["_beam_indices"] = np.array(beam_indices, dtype=np.int64)
+            batch_size = len(response)
+
+            print(f"[GRLM SingleStage] Expanded: original_bs={len(beam_outputs)}, expanded_bs={batch_size}")
+        else:
+            # Return only the best beam for each prompt
+            beam_idxs = non_tensor_batch.get("beam_idx", None)
+
+            for i, output in enumerate(beam_outputs):
+                original_prompt_len = len(vllm_inputs[i]["prompt_token_ids"])
+
+                seq_idx = 0
+                if beam_idxs is not None:
+                    seq_idx = beam_idxs[i]
+
+                if seq_idx >= len(output.sequences):
+                    seq_idx = 0
+
+                best_seq = output.sequences[seq_idx]
+                full_seq = best_seq.tokens
+                response_ids = full_seq[original_prompt_len:]
+                response.append(response_ids)
+
+        # Pad responses
+        response = pad_2d_list_to_length(response, self.pad_token_id, max_length=self.config.response_length).to(idx.device)
+
+        if self.config.calculate_log_probs:
+            rollout_log_probs = torch.zeros_like(response, dtype=torch.float32)
+
+        seq = torch.cat([idx, response], dim=-1)
+
+        # Position IDs & Attention Mask Update
+        response_length = response.size(1)
+        delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
+        delta_position_id = delta_position_id.unsqueeze(0).expand(batch_size, -1)
+
+        if position_ids.dim() == 3:
+            delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+
+        response_position_ids = position_ids[..., -1:] + delta_position_id
+        position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+
+        response_attention_mask = get_response_mask(
+            response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype
+        )
+        attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+
+        batch = TensorDict(
+            {
+                "prompts": idx,
+                "responses": response,
+                "input_ids": seq,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+            },
+            batch_size=batch_size,
+        )
+        if self.config.calculate_log_probs:
+            batch["rollout_log_probs"] = rollout_log_probs
+
+        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+
+    @torch.no_grad()
     def generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
         """
-        Generate sequences using two-stage generation.
+        Generate sequences using the configured generation method.
+        
+        Supports:
+        - two_stage: CoT sampling + beam search (for models with CoT training)
+        - single_stage_beam: Direct beam search (for models without CoT)
         """
         for key in ["max_tokens", "temperature", "n", "top_p", "top_k",
-                    "stage2_beam_size", "stage2_max_tokens", "return_all_beams"]:
+                    "stage2_beam_size", "stage2_max_tokens", "return_all_beams",
+                    "beam_size", "beam_max_tokens"]:
             if key in prompts.meta_info:
                 kwargs[key] = prompts.meta_info[key]
 
-        return self._two_stage_generation(prompts, **kwargs)
+        # Check which generation mode to use
+        rollout_name = getattr(self.config, "name", "two_stage")
+        
+        if rollout_name == "single_stage_beam":
+            return self._single_stage_beam_generation(prompts, **kwargs)
+        else:
+            # Default: two-stage generation
+            return self._two_stage_generation(prompts, **kwargs)
+

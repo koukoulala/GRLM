@@ -171,6 +171,7 @@ uv.lock
 # custom .gitignore
 *.json
 *.jsonl
+*.parquet
 ckpts/
 logs/
 cache/
@@ -180,4 +181,5 @@ ms_cache/
 om_cache/
 saves/
 output/
+outputs/
 wandb/
