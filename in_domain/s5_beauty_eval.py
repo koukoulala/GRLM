@@ -367,7 +367,9 @@ reverse_mapping, word_to_keys = create_reverse_mapping(tid2item_id)
 def main():
     # Model paths
     ckpts = [
-        "/data/xiaoyukou/LLaMA-Factory/saves/grlm/indomain_beauty",
+        #"/data/xiaoyukou/LLaMA-Factory/saves/grlm/indomain_beauty",
+        #"/data/xiaoyukou/EasyR1/checkpoints/grlm_beauty_grpo/global_step_357/actor/huggingface"
+        "/data/xiaoyukou/GRLM/verl_rl/outputs/grpo_simple_beam_b4_bs16_jaccard/ckpts/global_step_1600/actor/huggingface"
         ]
 
     for ckpt in ckpts:
@@ -449,13 +451,13 @@ def main():
         
         # Save detailed results
         bac = ckpt.replace("/","_")
-        output_file = f"./beauty/rec_res/beauty_eval_info.json"
+        output_file = f"./beauty/rec_res_rl/beauty_eval_info_bs4.json"
         print(f"\nSaving detailed results to: {output_file}")
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(all_results, f, ensure_ascii=False, indent=2)
         
         # Save recall results
-        recall_file = f"./beauty/rec_res/beauty_recall_results.json"
+        recall_file = f"./beauty/rec_res_rl/beauty_recall_results_bs4.json"
         with open(recall_file, 'w', encoding='utf-8') as f:
             json.dump(recall_metrics, f, ensure_ascii=False, indent=2)
         print(f"Recall results saved to: {recall_file}")

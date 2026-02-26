@@ -61,7 +61,7 @@ export TEMPERATURE=${TEMPERATURE:-1}
 # ============================================================================
 export USE_DYNAMIC_BSZ=${USE_DYNAMIC_BSZ:-True}
 export MAX_TOKENS_PER_GPU=${MAX_TOKENS_PER_GPU:-40960}
-export TRAIN_BATCH_SIZE=$((N_GPUS * N_NODES))
+export TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-4}
 
 # ============================================================================
 # Rollout Configuration - Single-Stage Beam Search
@@ -70,36 +70,36 @@ export TRAIN_BATCH_SIZE=$((N_GPUS * N_NODES))
 export ROLLOUT_N=${ROLLOUT_N:-1}
 
 # Beam search width - how many candidates to generate per prompt
-export BEAM_SIZE=${BEAM_SIZE:-32}
+export BEAM_SIZE=${BEAM_SIZE:-16}
 
 # Response length for GRLM recommendation task
 # "Item text ID: [w1, w2, w3, w4, w5] Title: xxx" is about 30-50 tokens
-export RESPONSE_LENGTH=${RESPONSE_LENGTH:-64}
+export RESPONSE_LENGTH=${RESPONSE_LENGTH:-30}
 
 # Number of tokens to generate in beam search (GRLM item format)
 # "[w1, w2, w3, w4, w5]" is about 15-20 tokens
-export BEAM_MAX_TOKENS=${BEAM_MAX_TOKENS:-64}
+export BEAM_MAX_TOKENS=${BEAM_MAX_TOKENS:-30}
 
 # ============================================================================
 # Output Configuration
 # ============================================================================
 export PROJECT_NAME=${PROJECT_NAME:-"GRLM_RL"}
-export EXPERIMENT_NAME=${EXPERIMENT_NAME:-"grpo_simple_beam"}
-export OUTPUT_DIR=${OUTPUT_DIR:-"./output"}
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-"grpo_simple_beam_b4_bs16_jaccard"}
+export OUTPUT_DIR=${OUTPUT_DIR:-"./outputs/grpo_simple_beam_b4_bs16_jaccard"}
 export WANDB_MODE=${WANDB_MODE:-offline}
 
 # ============================================================================
 # Checkpoint & Logging Configuration
 # ============================================================================
 # Checkpoint frequency (save every N steps)
-export SAVE_FREQ=${SAVE_FREQ:-50}
+export SAVE_FREQ=${SAVE_FREQ:-100}
 # Max checkpoints to keep (set to limit disk usage, e.g., 3)
 export MAX_CKPT_TO_KEEP=${MAX_CKPT_TO_KEEP:-3}
 # Validation/test frequency
-export TEST_FREQ=${TEST_FREQ:-50}
+export TEST_FREQ=${TEST_FREQ:-100}
 # Logger backend: console, file, wandb, tensorboard, swanlab
-# Use "console,file" to get both console output and experiment_log.jsonl
-export LOGGER_BACKEND=${LOGGER_BACKEND:-"console,file"}
+# Note: Must use list format [val1,val2] for Hydra configuration
+export LOGGER_BACKEND=${LOGGER_BACKEND:-"[console,file]"}
 
 # ============================================================================
 # Network Configuration
@@ -146,8 +146,8 @@ python3 -u -m recipe.grlm.main_grlm_ppo \
     data.truncation='error' \
     data.custom_cls.path=$SCRIPT_DIR/grlm_recipe_simple.py \
     data.custom_cls.name=GrlmDataset \
-    data.reward_fn_key='source' \
-    ++data.data_source_key='source' \
+    data.reward_fn_key='data_source' \
+    ++data.data_source_key='data_source' \
     ++data.enable_think=False \
     ++data.enable_nonthink=False \
     ++data.use_force_prefix=False \
@@ -177,7 +177,7 @@ python3 -u -m recipe.grlm.main_grlm_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
     actor_rollout_ref.rollout.name=single_stage_beam \
     ++actor_rollout_ref.rollout.backend=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
     ++actor_rollout_ref.rollout.max_length=$RESPONSE_LENGTH \
     ++actor_rollout_ref.rollout.beam_size=$BEAM_SIZE \
     ++actor_rollout_ref.rollout.beam_max_tokens=$BEAM_MAX_TOKENS \

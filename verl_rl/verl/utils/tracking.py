@@ -252,19 +252,15 @@ class _FileLoggerAdapter:
         except Exception as e:
             print(f"Warning: Could not save experiment config: {e}")
         
-        # Initialize log files
+        # Initialize log file
         self.log_path = os.path.join(self.output_dir, "experiment_log.jsonl")
-        self.gen_path = os.path.join(self.output_dir, "generations.log")
         
-        # Clear/create the log files
+        # Clear/create the log file
         with open(self.log_path, "w") as f:
-            pass  # Create empty file
-        with open(self.gen_path, "w") as f:
             pass  # Create empty file
             
         print(f"Initialized file logger:")
         print(f"  - Experiment log: {self.log_path}")
-        print(f"  - Generations log: {self.gen_path}")
     
     def log(self, data, step):
         """Log metrics to experiment_log.jsonl file."""

@@ -174,9 +174,11 @@ class GrlmDataset(Dataset):
         # NO think/no_think suffix - GRLM was not trained with CoT
         row[self.prompt_key] = prompt_messages
 
-        # Ensure reward_model field exists
-        if "reward_model" not in row:
-            row["reward_model"] = {"style": "rule", "ground_truth": ""}
+        # Build reward_model field from answer (ground truth)
+        # Data format from s7_build_rl_data.py: 'answer' contains the ground truth
+        # e.g. "Item text ID: [w1, w2, w3, w4, w5]"
+        ground_truth = row.get("answer", "")
+        row["reward_model"] = {"style": "rule", "ground_truth": ground_truth}
 
         return row
 
@@ -226,68 +228,126 @@ class GrlmDataset(Dataset):
     def __len__(self) -> int:
         return len(self.dataframe)
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        row = self.dataframe[index]
-
-        messages = row[self.prompt_key]
-        
-        # Apply chat template
-        if self.processor is not None:
-            images = row.get(self.image_key, None)
-            videos = row.get(self.video_key, None)
-            prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            kwargs = {}
-            if images:
-                kwargs["images"] = images
-            if videos:
-                kwargs["videos"] = videos
-            inputs = self.processor(text=prompt, **kwargs, return_tensors="pt")
-            input_ids = inputs["input_ids"].squeeze(0)
-            attention_mask = inputs["attention_mask"].squeeze(0)
+    def resume_dataset_state(self) -> None:
+        """Resume dataset state for checkpoint loading."""
+        self.serialize_dataset = not hasattr(self, "original_data_files")
+        if not self.serialize_dataset:
+            self._download(use_origin_parquet=True)
+            self._read_files_and_tokenize()
         else:
-            prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=False)
-            input_ids = inputs["input_ids"].squeeze(0)
-            attention_mask = inputs["attention_mask"].squeeze(0)
+            logger.warning("resume with serialized dataloader, consider restarting from scratch for better perf")
 
-        # Truncation handling
-        if input_ids.shape[-1] > self.max_prompt_length:
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        """Get item - aligned with grlm_recipe.py (two-stage) __getitem__."""
+        row: dict[str, Any] = dict(self.dataframe[index])
+        messages = row.pop(self.prompt_key)
+
+        # Ensure messages is a list of dicts
+        if isinstance(messages, str):
+            try:
+                messages = ast.literal_eval(messages)
+            except (ValueError, SyntaxError):
+                messages = [{"role": "user", "content": messages}]
+
+        model_inputs: dict[str, Any] = {}
+
+        if self.processor is not None:
+            from verl.utils.dataset.vision_utils import process_image, process_video
+
+            raw_prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            multi_modal_data: dict[str, Any] = {}
+
+            images = None
+            if self.image_key in row and row.get(self.image_key):
+                images = [process_image(image) for image in row.pop(self.image_key)]
+                multi_modal_data["image"] = images
+
+            videos = None
+            if self.video_key in row and row.get(self.video_key):
+                videos = [process_video(video) for video in row.pop(self.video_key)]
+                multi_modal_data["video"] = [video.numpy() for video in videos]
+
+            model_inputs = self.processor(
+                text=[raw_prompt],
+                images=images,
+                videos=videos,
+                return_tensors="pt",
+            )
+
+            input_ids = model_inputs.pop("input_ids")
+            attention_mask = model_inputs.pop("attention_mask")
+
+            row["multi_modal_data"] = multi_modal_data
+            if self.return_multi_modal_inputs:
+                mm_inputs = dict(model_inputs)
+                mm_inputs.pop("second_per_grid_ts", None)
+                row["multi_modal_inputs"] = mm_inputs
+        else:
+            raw_prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
+            input_ids = model_inputs.pop("input_ids")
+            attention_mask = model_inputs.pop("attention_mask")
+
+        input_ids, attention_mask = verl_F.postprocess_data(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=self.max_prompt_length,
+            pad_token_id=self.tokenizer.pad_token_id,
+            left_pad=True,
+            truncation=self.truncation,
+        )
+
+        if (
+            self.processor is not None
+            and hasattr(self.processor, "image_processor")
+            and "Qwen2VLImageProcessor" in self.processor.image_processor.__class__.__name__
+        ):
+            from verl.models.transformers.qwen2_vl import get_rope_index
+
+            position_ids = [
+                get_rope_index(
+                    self.processor,
+                    input_ids=input_ids[0],
+                    image_grid_thw=model_inputs.get("image_grid_thw"),
+                    video_grid_thw=model_inputs.get("video_grid_thw"),
+                    second_per_grid_ts=model_inputs.get("second_per_grid_ts"),
+                    attention_mask=attention_mask[0],
+                )
+            ]
+        else:
+            position_ids = compute_position_id_with_mask(attention_mask)
+
+        row["input_ids"] = input_ids[0]
+        row["attention_mask"] = attention_mask[0]
+        row["position_ids"] = position_ids[0]
+
+        raw_prompt_ids = self.tokenizer.encode(raw_prompt, add_special_tokens=False)
+        if len(raw_prompt_ids) > self.max_prompt_length:
             if self.truncation == "left":
-                input_ids = input_ids[-self.max_prompt_length:]
-                attention_mask = attention_mask[-self.max_prompt_length:]
+                raw_prompt_ids = raw_prompt_ids[-self.max_prompt_length:]
             elif self.truncation == "right":
-                input_ids = input_ids[:self.max_prompt_length]
-                attention_mask = attention_mask[:self.max_prompt_length]
+                raw_prompt_ids = raw_prompt_ids[:self.max_prompt_length]
             elif self.truncation == "error":
-                raise ValueError(
-                    f"Prompt length {input_ids.shape[-1]} > max_prompt_length {self.max_prompt_length}. "
-                    "Consider increasing max_prompt_length or enabling truncation."
+                raise RuntimeError(
+                    f"Prompt length {len(raw_prompt_ids)} exceeds max_prompt_length={self.max_prompt_length}."
                 )
 
-        position_ids = compute_position_id_with_mask(attention_mask)
+        row["raw_prompt_ids"] = raw_prompt_ids
+        if self.return_raw_chat:
+            row["raw_prompt"] = messages
+        if self.return_full_prompt:
+            row["full_prompts"] = raw_prompt
 
-        # Build output sample
-        sample = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "position_ids": position_ids,
-        }
+        extra_info = row.get("extra_info", {}) or {}
+        row["index"] = extra_info.get("index", index)
+        row["tools_kwargs"] = extra_info.get("tools_kwargs", {})
+        row["interaction_kwargs"] = extra_info.get("interaction_kwargs", {})
 
-        # Add ground truth for reward function
-        reward_model = row.get("reward_model", {})
-        if isinstance(reward_model, str):
-            try:
-                reward_model = ast.literal_eval(reward_model)
-            except (ValueError, SyntaxError):
-                reward_model = {}
+        # Ensure source/data_source field exists
+        if "source" not in row and "data_source" not in row:
+            row["data_source"] = "grlm_rec"
 
-        ground_truth = reward_model.get("ground_truth", row.get("answer", ""))
-        sample["ground_truth"] = ground_truth
-
-        # Add data source
-        sample["source"] = row.get("source", row.get("data_source", "grlm"))
-
-        return sample
+        return row
 
     def __getstate__(self) -> dict[str, Any]:
         if not self.serialize_dataset:
@@ -477,10 +537,10 @@ def compute_score(
     hierarchical_score = hierarchical_reward(prediction, ground_truth)
     exact_match_score = first_item_hit_reward(prediction, ground_truth)
     
-    # Use hierarchical as default main signal (provides better gradient than exact match)
-    # Note: grlm_recipe.py uses exact_match (first_item_hit) but that's binary (0 or 1)
-    # Hierarchical provides smoother reward signal for training
-    main_reward = hierarchical_score
+    # Use jaccard as main signal for densest gradient signal
+    # jaccard provides continuous reward (0-1) based on word overlap
+    # hierarchical is too sparse (only non-zero when consecutive words match)
+    main_reward = jaccard_score
     
     return {
         "score": main_reward,  # Main reward signal for GRPO (no format bonus)

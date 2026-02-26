@@ -711,10 +711,10 @@ class RayPPOTrainer:
             val_kwargs = self.config.actor_rollout_ref.rollout.val_kwargs
             rollout_config = self.config.actor_rollout_ref.rollout
             use_beam_search_val = val_kwargs.get("use_beam_search", False)
-            is_two_stage_rollout_val = rollout_config.get("name") == "two_stage"
+            is_two_stage_rollout_val = rollout_config.get("name") in ("two_stage", "single_stage_beam")
 
             # Only repeat if NOT using beam search (beam search will expand outputs internally)
-            # For two-stage rollout, we DO repeat (for different CoT samples), beam expansion happens in rollout
+            # For two-stage/single_stage_beam rollout, beam expansion happens in rollout
             if not use_beam_search_val:
                 # repeat test batch for sampling-based generation
                 test_batch = test_batch.repeat(
@@ -1323,7 +1323,7 @@ class RayPPOTrainer:
                 # Two-stage rollout: still repeat (for different CoT samples), but beam expansion happens in rollout
                 rollout_config = self.config.actor_rollout_ref.rollout
                 use_beam_search_train = rollout_config.get("use_beam_search", False)
-                is_two_stage_rollout = rollout_config.get("name") == "two_stage"
+                is_two_stage_rollout = rollout_config.get("name") in ("two_stage", "single_stage_beam")
                 rollout_n = self.config.actor_rollout_ref.rollout.n
 
                 if not use_beam_search_train:

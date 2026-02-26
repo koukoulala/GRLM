@@ -23,8 +23,9 @@ class GrlmActorRolloutRefWorker(ActorRolloutRefWorker):
     """
 
     def _build_rollout(self, trust_remote_code=False):
-        # We only override the two_stage rollout path
-        if self.config.rollout.name == "two_stage":
+        # We override both two_stage and single_stage_beam rollout paths
+        # Both use GrlmvLLMRollout but with different generation logic
+        if self.config.rollout.name in ["two_stage", "single_stage_beam"]:
             from verl.workers.sharding_manager.fsdp_vllm import FSDPVLLMShardingManager
             from verl.utils.profiler import log_gpu_memory_usage
 

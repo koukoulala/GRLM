@@ -301,7 +301,7 @@ class GrlmvLLMRollout(vLLMRollout):
             getattr(self.config, "beam_max_tokens", 64)
         )
 
-        print(f"[GRLM SingleStage] Beam search params: beam_width={beam_width}, max_tokens={max_tokens}, batch_size={batch_size}")
+        print(f"[GRLM SingleStage] Beam search params: beam_width={beam_width}, max_tokens={max_tokens}, batch_size={batch_size}", flush=True)
 
         if BeamSearchParams is None:
             raise ImportError("BeamSearchParams not available, cannot run beam search")
@@ -311,17 +311,25 @@ class GrlmvLLMRollout(vLLMRollout):
             max_tokens=max_tokens,
         )
 
-        # Direct beam search on prompt (no CoT stage)
-        beam_outputs = self.inference_engine.beam_search(
-            prompts=vllm_inputs,
-            params=beam_params,
-        )
+        # Batch beam search to avoid OOM / extremely slow processing on large batches
+        # vLLM's beam_search is not as efficient as generate() for large batches
+        beam_search_batch_size = kwargs.get("beam_search_batch_size", getattr(self.config, "beam_search_batch_size", 16))
+        beam_outputs = []
+        for start in range(0, len(vllm_inputs), beam_search_batch_size):
+            end = min(start + beam_search_batch_size, len(vllm_inputs))
+            sub_inputs = vllm_inputs[start:end]
+            print(f"[GRLM SingleStage] Beam search sub-batch [{start}:{end}] / {len(vllm_inputs)}", flush=True)
+            sub_outputs = self.inference_engine.beam_search(
+                prompts=sub_inputs,
+                params=beam_params,
+            )
+            beam_outputs.extend(sub_outputs)
 
         # Post-process beam search results
         return_all_beams = kwargs.get("return_all_beams", True)
         n_beams_to_return = beam_width
 
-        print(f"[GRLM SingleStage] Post-process: return_all_beams={return_all_beams}, n_beams={n_beams_to_return}")
+        print(f"[GRLM SingleStage] Post-process: return_all_beams={return_all_beams}, n_beams={n_beams_to_return}", flush=True)
 
         response = []
 
@@ -365,7 +373,7 @@ class GrlmvLLMRollout(vLLMRollout):
             non_tensor_batch["_beam_indices"] = np.array(beam_indices, dtype=np.int64)
             batch_size = len(response)
 
-            print(f"[GRLM SingleStage] Expanded: original_bs={len(beam_outputs)}, expanded_bs={batch_size}")
+            print(f"[GRLM SingleStage] Expanded: original_bs={len(beam_outputs)}, expanded_bs={batch_size}", flush=True)
         else:
             # Return only the best beam for each prompt
             beam_idxs = non_tensor_batch.get("beam_idx", None)
