@@ -1,0 +1,279 @@
+{
+  "1": {
+    "user_id": "1",
+    "user_shopping_events": [
+      "2 days 15 hours ago | Searched | hair care products for color-treated hair",
+      "1 week 1 day ago | Browsed | Phyto Phytocitrus Restructuring Mask for Unisex",
+      "1 week 3 days ago | Clicked | Matrix Biolage Colorcaretherapie Color Care Shampoo"
+    ],
+    "system_time": "9/21/2025",
+    "journey": {
+      "title": "Color-Treated Hair Care Essentials",
+      "query": "Best shampoo and conditioner for color-treated hair",
+      "description": "A shopping journey focused on maintaining vibrant color-treated hair with professional-grade products.",
+      "product_ids": [
+        "1",
+        "2",
+        "4",
+        "9"
+      ]
+    }
+  },
+  "2": {
+    "user_id": "1",
+    "user_shopping_events": [
+      "3 days ago | Searched | concealer and cosmetic tools",
+      "5 days ago | Browsed | Home Travel Folding Lighted Cosmetic Mirror",
+      "1 week ago | Clicked | My Spots Are Consealed Light Color"
+    ],
+    "system_time": "9/21/2025",
+    "journey": {
+      "title": "Everyday Makeup Touch-Up Kit",
+      "query": "Travel-friendly makeup mirror and concealer",
+      "description": "A journey to find compact cosmetic tools and concealers for daily touch-ups and travel use.",
+      "product_ids": [
+        "6",
+        "7",
+        "8"
+      ]
+    }
+  },
+  "3": {
+    "user_id": "2",
+    "user_shopping_events": [
+      "1 day ago | Searched | sulfate-free smoothing shampoo",
+      "3 days ago | Browsed | L'Oreal Paris EverSleek Sulfate-Free Smoothing System",
+      "1 week ago | Clicked | Dove Damage Therapy Intensive Repair Conditioner"
+    ],
+    "system_time": "10/05/2025",
+    "journey": {
+      "title": "Frizz-Free Hair Smoothing Routine",
+      "query": "Sulfate-free anti-frizz hair products",
+      "description": "Exploring sulfate-free shampoos and conditioners for frizz control and smooth, sleek hair results.",
+      "product_ids": [
+        "9",
+        "10",
+        "11",
+        "13",
+        "14",
+        "15"
+      ]
+    }
+  },
+  "4": {
+    "user_id": "2",
+    "user_shopping_events": [
+      "12 hours ago | Searched | flat iron for hair straightening",
+      "2 days ago | Browsed | Remington S9520 Salon Collection Ceramic Hair Straightener",
+      "4 days ago | Clicked | Garnier Nutrisse Haircolor"
+    ],
+    "system_time": "10/05/2025",
+    "journey": {
+      "title": "Hair Styling & Color Transformation",
+      "query": "Professional ceramic flat iron and hair color",
+      "description": "A journey for users seeking to transform their hair with styling tools and at-home color treatments.",
+      "product_ids": [
+        "16",
+        "17",
+        "18",
+        "19",
+        "20"
+      ]
+    }
+  },
+  "5": {
+    "user_id": "3",
+    "user_shopping_events": [
+      "6 hours ago | Searched | leave-in conditioner for damaged hair",
+      "1 day ago | Browsed | Silicon Mix Intensive Leave in Hair Shine",
+      "3 days ago | Clicked | NYX Jumbo Eye Pencil"
+    ],
+    "system_time": "11/12/2025",
+    "journey": {
+      "title": "Hair Repair & Beauty Picks",
+      "query": "Intensive hair treatment and eye makeup",
+      "description": "Combining hair repair treatments with essential eye makeup products for a complete beauty refresh.",
+      "product_ids": [
+        "21",
+        "22",
+        "23",
+        "24",
+        "25"
+      ]
+    }
+  },
+  "6": {
+    "user_id": "4",
+    "user_shopping_events": [
+      "1 day ago | Searched | argan oil hair treatment",
+      "2 days ago | Browsed | One'n Only Argan Oil Leave-In Treatment",
+      "5 days ago | Clicked | Hair One Cleanser and Conditioner with Argan Oil"
+    ],
+    "system_time": "11/20/2025",
+    "journey": {
+      "title": "Argan Oil Hair Revival Collection",
+      "query": "Argan oil shampoo conditioner and treatment set",
+      "description": "A comprehensive argan oil product journey for restoring dry and damaged hair to a healthy shine.",
+      "product_ids": [
+        "30",
+        "31",
+        "32",
+        "33",
+        "34"
+      ]
+    }
+  },
+  "7": {
+    "user_id": "5",
+    "user_shopping_events": [
+      "5 hours ago | Searched | nail art supplies and tools",
+      "1 day 8 hours ago | Browsed | PUEEN 2013 Nail Art Stamp Collection",
+      "3 days ago | Clicked | Nail Art Brushes Professional Set"
+    ],
+    "system_time": "12/01/2025",
+    "journey": {
+      "title": "Nail Art Starter Kit",
+      "query": "Nail art stamp plates brushes and gems",
+      "description": "Building a complete nail art toolkit with stamping plates, brushes, decorative gems, and tape stripes.",
+      "product_ids": [
+        "35",
+        "36",
+        "37",
+        "38",
+        "39"
+      ]
+    }
+  },
+  "8": {
+    "user_id": "6",
+    "user_shopping_events": [
+      "8 hours ago | Searched | anti-aging skincare routine",
+      "1 day ago | Browsed | Olay Regenerist Micro-Sculpting Serum",
+      "2 days ago | Clicked | Simple Protecting Light Moisturizer Spf 15",
+      "4 days ago | Browsed | Nexxus Youth Renewal Rejuvenating Shampoo"
+    ],
+    "system_time": "12/15/2025",
+    "journey": {
+      "title": "Anti-Aging Skincare & Hair Renewal",
+      "query": "Best anti-aging face serum and youth renewal shampoo",
+      "description": "A holistic anti-aging journey covering both skincare serums and youth-renewal hair care products.",
+      "product_ids": [
+        "41",
+        "43",
+        "44",
+        "46",
+        "47",
+        "50"
+      ]
+    }
+  },
+  "9": {
+    "user_id": "7",
+    "user_shopping_events": [
+      "4 hours ago | Searched | sensitive skin body wash and sunscreen",
+      "1 day ago | Browsed | Dove Body Wash Sensitive Skin",
+      "3 days ago | Clicked | Coppertone Sensitive Skin Lotion SPF 50"
+    ],
+    "system_time": "01/10/2026",
+    "journey": {
+      "title": "Sensitive Skin Care Essentials",
+      "query": "Gentle body wash and SPF lotion for sensitive skin",
+      "description": "Products curated for sensitive skin including gentle cleansers, fragrance-free sunscreen, and keratin treatments.",
+      "product_ids": [
+        "63",
+        "65",
+        "66",
+        "67",
+        "68",
+        "69"
+      ]
+    }
+  },
+  "10": {
+    "user_id": "8",
+    "user_shopping_events": [
+      "10 hours ago | Searched | baby eczema cream and face mask",
+      "2 days ago | Browsed | Eucerin Baby Eczema Relief Body Creme",
+      "5 days ago | Clicked | Biore Self Heating One Minute Mask"
+    ],
+    "system_time": "01/18/2026",
+    "journey": {
+      "title": "Skin Relief & Deep Cleansing",
+      "query": "Eczema relief cream and pore cleansing mask",
+      "description": "A journey combining eczema relief solutions with deep pore cleansing treatments for healthier skin.",
+      "product_ids": [
+        "71",
+        "72",
+        "73",
+        "74",
+        "75"
+      ]
+    }
+  },
+  "11": {
+    "user_id": "9",
+    "user_shopping_events": [
+      "3 hours ago | Searched | temporary hair color purple violet",
+      "1 day ago | Browsed | Color Me by Giuliano Temporary Hair Color - Violet",
+      "2 days ago | Clicked | BaByliss Pro Porcelain Plate Ceramic Flat Iron"
+    ],
+    "system_time": "02/01/2026",
+    "journey": {
+      "title": "Bold Hair Color & Styling",
+      "query": "Temporary purple hair color and flat iron",
+      "description": "Exploring bold temporary hair colors alongside professional-grade styling tools for a fashion-forward look.",
+      "product_ids": [
+        "76",
+        "77",
+        "78",
+        "79",
+        "80"
+      ]
+    }
+  },
+  "12": {
+    "user_id": "10",
+    "user_shopping_events": [
+      "6 hours ago | Searched | eyeshadow palette and makeup brushes",
+      "1 day ago | Browsed | Coastal Scents 26 Shadow Blush Combo Palette",
+      "3 days ago | Clicked | BH Cosmetics 28 Neutral Color Eyeshadow Palette"
+    ],
+    "system_time": "02/10/2026",
+    "journey": {
+      "title": "Complete Eye Makeup Collection",
+      "query": "Neutral eyeshadow palettes and foundation brushes",
+      "description": "Assembling a pro-level eye makeup set with eyeshadow palettes, brushes, and nail art accessories.",
+      "product_ids": [
+        "81",
+        "82",
+        "83",
+        "84",
+        "85",
+        "86"
+      ]
+    }
+  },
+  "13": {
+    "user_id": "11",
+    "user_shopping_events": [
+      "1 day ago | Searched | volumizing shampoo and conditioner",
+      "3 days ago | Browsed | Olay Regenerist Advanced Anti-Aging Eye Roller",
+      "1 week ago | Clicked | Pantene Pro-V Smooth Conditioner"
+    ],
+    "system_time": "02/20/2026",
+    "journey": {
+      "title": "Volume & Anti-Aging Beauty Routine",
+      "query": "Volumizing shampoo and anti-aging eye treatment",
+      "description": "A combined beauty journey for voluminous hair and targeted anti-aging eye care solutions.",
+      "product_ids": [
+        "87",
+        "88",
+        "89",
+        "90",
+        "91",
+        "92",
+        "93"
+      ]
+    }
+  }
+}
