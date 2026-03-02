@@ -23,7 +23,11 @@ import argparse
 import csv
 import json
 import os
+import sys
 from collections import defaultdict
+
+# Increase CSV field size limit to handle very large fields (e.g. long descriptions)
+csv.field_size_limit(sys.maxsize)
 
 
 def read_tsv(filepath, expected_columns=None):
@@ -169,7 +173,7 @@ def parse_args():
     parser.add_argument(
         "--query_products_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/ShoppingJourney/train_shopping_journey_prediction_SID_output_simplified.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/ShoppingJourney_Query_Products_Resolved.tsv",
         help="Path to the ShoppingJourney_Query_Products TSV file "
         "(columns: query_id, SID, GlobalOfferId, Title, SimilarityScore)",
     )
@@ -184,6 +188,13 @@ def parse_args():
         type=int,
         default=3,
         help="Maximum number of distinct related queries to keep per item (default: 3)",
+    )
+    parser.add_argument(
+        "--max_field_length",
+        type=int,
+        default=2000,
+        help="Maximum allowed character length for any single field. "
+        "Items with any field exceeding this limit are removed (default: 2000)",
     )
     return parser.parse_args()
 
@@ -242,6 +253,18 @@ def main():
     print(f"  Max distinct queries for a single GlobalOfferId:    {max_queries_per_item:>10,}")
     print(f"  Avg distinct queries per GlobalOfferId (query file):{avg_queries:>10.2f}")
 
+    # GlobalOfferId overlap statistics
+    desc_tc_overlap = desc_gids & tc_gids
+    query_tc_overlap = query_gids & tc_gids
+    query_desc_overlap = query_gids & desc_gids
+    all_overlap = tc_gids & desc_gids & query_gids
+    print()
+    print("  --- GlobalOfferId overlap between files ---")
+    print(f"  Item_Description  ∩ TitleAndCategory:               {len(desc_tc_overlap):>10,}  ({len(desc_tc_overlap)/len(desc_gids)*100:.2f}% of Desc, {len(desc_tc_overlap)/len(tc_gids)*100:.2f}% of TC)")
+    print(f"  Query_Products    ∩ TitleAndCategory:               {len(query_tc_overlap):>10,}  ({len(query_tc_overlap)/len(query_gids)*100:.2f}% of Query, {len(query_tc_overlap)/len(tc_gids)*100:.2f}% of TC)")
+    print(f"  Query_Products    ∩ Item_Description:               {len(query_desc_overlap):>10,}  ({len(query_desc_overlap)/len(query_gids)*100:.2f}% of Query, {len(query_desc_overlap)/len(desc_gids)*100:.2f}% of Desc)")
+    print(f"  All three files   ∩:                                {len(all_overlap):>10,}")
+
     # -------------------------------------------------------------------------
     # Step 3: Identify and remove items with conflicting titles
     # -------------------------------------------------------------------------
@@ -269,11 +292,19 @@ def main():
     items = {}
     no_title_count = 0
     conflict_removed_count = 0
+    field_too_long_count = 0
+    max_field_len = args.max_field_length
+
+    # Track removal reason per GlobalOfferId for per-source diagnostics
+    removed_conflict = set()
+    removed_no_title = set()
+    removed_field_long = set()
 
     for gid in sorted(all_gids):
         # Skip items with conflicting titles
         if gid in conflicting_gids:
             conflict_removed_count += 1
+            removed_conflict.add(gid)
             continue
 
         # Determine the title (from any source)
@@ -286,6 +317,7 @@ def main():
         # Skip items without any title
         if not title:
             no_title_count += 1
+            removed_no_title.add(gid)
             continue
 
         # Get category
@@ -307,6 +339,15 @@ def main():
             top_queries = [q for q, _ in sorted_queries[: args.max_queries]]
             related_queries_str = " | ".join(top_queries)
 
+        # Skip items where any field exceeds the max length
+        if (len(title) > max_field_len
+                or len(description) > max_field_len
+                or len(category) > max_field_len
+                or len(related_queries_str) > max_field_len):
+            field_too_long_count += 1
+            removed_field_long.add(gid)
+            continue
+
         items[gid] = {
             "title": title,
             "description": description,
@@ -316,7 +357,27 @@ def main():
 
     print(f"  Items removed due to conflicting titles:            {conflict_removed_count:>10,}")
     print(f"  Items removed due to missing title:                 {no_title_count:>10,}")
+    print(f"  Items removed due to field length > {max_field_len}:  {field_too_long_count:>10,}")
     print(f"  Total items in final output:                        {len(items):>10,}")
+
+    # Per-source-file breakdown of removal reasons
+    source_labels = [
+        ("TitleAndCategory", tc_gids),
+        ("Item_Description", desc_gids),
+        ("Query_Products", query_gids),
+    ]
+    print()
+    print("  --- Per-source breakdown of removed GlobalOfferIds ---")
+    for label, gid_set in source_labels:
+        s_kept = len(gid_set & set(items.keys()))
+        s_conflict = len(gid_set & removed_conflict)
+        s_no_title = len(gid_set & removed_no_title)
+        s_field_long = len(gid_set & removed_field_long)
+        print(f"  {label}:")
+        print(f"    Kept:               {s_kept:>10,}")
+        print(f"    Conflicting title:  {s_conflict:>10,}")
+        print(f"    Missing title:      {s_no_title:>10,}")
+        print(f"    Field too long:     {s_field_long:>10,}")
 
     # -------------------------------------------------------------------------
     # Step 5: Compute and print detailed statistics
