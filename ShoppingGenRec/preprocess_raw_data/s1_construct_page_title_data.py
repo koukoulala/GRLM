@@ -8,10 +8,6 @@ page titles. Performs extensive cleaning and deduplication to produce:
   2. page_title_to_item.json - mapping from every original page title to its
                                assigned item index
 
-Note: Normalization (domain stripping, whitespace fixes) is used ONLY for
-filtering and deduplication. The final output preserves the original page
-title text, selecting the shortest (cleanest) variant per group.
-
 Cleaning pipeline:
   1. Strip domain prefixes (e.g., "Amazon.com :") and suffixes (e.g., "| HSN")
      for deduplication purposes only
@@ -86,19 +82,24 @@ KNOWN_DOMAINS = sorted([
 # Matching is done on the FULL title after stripping special characters and
 # lowercasing. Only exact whole-sentence matches are considered non-product.
 NON_PRODUCT_PHRASES = {
+    # Status / availability
     "just reduced",
+    "sold out",
+    "this item is sold out",
+    # Promotional / sale pages
     "weekly ads",
     "weekly ad",
+    "weekly ads discover deals on groceries and goods aldi us",
     "2025 woom black friday cyber monday sale",
-    "privacy policy",
-    "privacy policy winn dixie",
     "clearance home",
     "clearance under 25",
-    "this item is sold out",
+    # Policy pages
+    "privacy policy",
+    "privacy policy winn dixie",
+    # Non-product content pages
     "shop all electric bikes",
-    "sold out",
-    "weekly ads discover deals on groceries and goods aldi us",
     "40 years of metallica night 1",
+    "watch 40 years of metallica night 1"
 }
 
 
@@ -450,7 +451,7 @@ def parse_args():
         "--sequence_data_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/SequenceData_Plat.tsv",
+                "Data/1108_1208_SequenceData_Plat_Sampled_100000_User.tsv",
         help="Path to the SequenceData_Plat TSV file "
              "(columns: UserId, PageTitle, GlobalOfferId, Timestamp, Source, Query)",
     )
@@ -467,16 +468,10 @@ def parse_args():
         help="Jaccard similarity threshold for near-duplicate merging (default: 0.8)",
     )
     parser.add_argument(
-        "--min_title_words",
-        type=int,
-        default=2,
-        help="Minimum number of content words for a title to be kept (default: 2)",
-    )
-    parser.add_argument(
         "--min_title_chars",
         type=int,
-        default=5,
-        help="Minimum number of characters for a title to be kept (default: 5)",
+        default=20,
+        help="Minimum number of characters for a title to be kept (default: 20)",
     )
     parser.add_argument(
         "--max_title_chars",
@@ -619,7 +614,6 @@ def main():
     filter_stats = {
         "empty_after_norm": 0,
         "too_short_chars": 0,
-        "too_short_words": 0,
         "too_long": 0,
         "non_product": 0,
         "kept": 0,
@@ -649,14 +643,6 @@ def main():
                 removed_examples["too_long"].append(best_orig[:80] + "...")
             continue
 
-        # Check word count
-        content_words = get_content_words(title)
-        if len(content_words) < args.min_title_words:
-            filter_stats["too_short_words"] += 1
-            if len(removed_examples["short_words"]) < 5:
-                removed_examples["short_words"].append(best_orig)
-            continue
-
         # Check non-product patterns on both original and normalized titles.
         # If either contains a non-product pattern, remove the title.
         if is_non_product_title(title) or is_non_product_title(best_orig):
@@ -672,8 +658,6 @@ def main():
     print(f"  Empty after normalization:          {filter_stats['empty_after_norm']:>10,}")
     print(f"  Too short (< {args.min_title_chars} chars):             "
           f"{filter_stats['too_short_chars']:>10,}")
-    print(f"  Too few content words (< {args.min_title_words}):       "
-          f"{filter_stats['too_short_words']:>10,}")
     print(f"  Too long (> {args.max_title_chars} chars):             "
           f"{filter_stats['too_long']:>10,}")
     print(f"  Non-product patterns:               {filter_stats['non_product']:>10,}")
