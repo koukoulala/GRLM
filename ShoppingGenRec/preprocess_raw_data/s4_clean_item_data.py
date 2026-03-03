@@ -1,5 +1,6 @@
 """
-Clean item.json and page_title_item.json by removing unused entries.
+Clean item.json and page_title_item.json by removing unused entries,
+then merge them into a single merged_clean_item.json.
 
 Reads:
   1. item_sequential_data.txt    - compact sequential data (from s2).
@@ -13,10 +14,10 @@ Reads:
      indices (from s1).
 
 Produces:
-  1. item.json                   - cleaned version containing only entries
-     referenced in item_sequential_data.txt or shopping_journey.json.
-  2. page_title_item.json        - cleaned version containing only entries
-     referenced in item_sequential_data.txt.
+  1. merged_clean_item.json      - merged file containing cleaned items from
+     both item.json and page_title_item.json, all in a unified format with
+     fields: title, description, categories, related_queries.  Page-title
+     entries have empty strings for description, categories, related_queries.
 
 Pipeline:
   1. Read item_sequential_data.txt and collect all referenced item IDs.
@@ -27,7 +28,7 @@ Pipeline:
   3. Merge the GlobalOfferId sets from both sources.
   4. Read item.json and page_title_item.json. Remove entries not in the
      referenced ID sets.
-  5. Write cleaned files and report statistics.
+  5. Merge cleaned entries into unified format and write merged_clean_item.json.
 """
 
 import argparse
@@ -303,21 +304,32 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # --- item.json ---
-    item_output_path = os.path.join(args.output_dir, "item.json")
-    save_json(cleaned_item_data, item_output_path)
-    item_size_mb = os.path.getsize(item_output_path) / (1024 * 1024)
-    print(f"  Written: {item_output_path}")
-    print(f"    Size:    {item_size_mb:.2f} MB")
-    print(f"    Entries: {cleaned_item_count:,}")
+    # --- merged_clean_item.json ---
+    # Merge cleaned item.json and page_title_item.json into a unified format.
+    # All entries use the item.json schema: title, description, categories,
+    # related_queries.  Page-title entries only have title; the rest are "".
+    ITEM_FIELDS = ["title", "description", "categories", "related_queries"]
 
-    # --- page_title_item.json ---
-    pt_output_path = os.path.join(args.output_dir, "page_title_item.json")
-    save_json(cleaned_pt_data, pt_output_path)
-    pt_size_mb = os.path.getsize(pt_output_path) / (1024 * 1024)
-    print(f"\n  Written: {pt_output_path}")
-    print(f"    Size:    {pt_size_mb:.2f} MB")
-    print(f"    Entries: {cleaned_pt_count:,}")
+    merged_data = {}
+    for gid, info in cleaned_item_data.items():
+        merged_data[gid] = {field: info.get(field, "") for field in ITEM_FIELDS}
+
+    for ptid, info in cleaned_pt_data.items():
+        merged_data[ptid] = {
+            "title": info.get("title", ""),
+            "description": "",
+            "categories": "",
+            "related_queries": "",
+        }
+
+    merged_output_path = os.path.join(args.output_dir, "merged_clean_item.json")
+    save_json(merged_data, merged_output_path)
+    merged_size_mb = os.path.getsize(merged_output_path) / (1024 * 1024)
+    merged_count = len(merged_data)
+    print(f"  Written: {merged_output_path}")
+    print(f"    Size:    {merged_size_mb:.2f} MB")
+    print(f"    Entries: {merged_count:,} "
+          f"({cleaned_item_count:,} items + {cleaned_pt_count:,} page titles)")
 
     # =========================================================================
     # Summary
@@ -338,6 +350,8 @@ def main():
           f"(removed {removed_item_count:,})")
     print(f"    page_title_item.json: {original_pt_count:,} -> "
           f"{cleaned_pt_count:,} (removed {removed_pt_count:,})")
+    print(f"  Merged output:")
+    print(f"    merged_clean_item.json:           {merged_count:>12,} entries")
     print()
     print("Done!")
 
