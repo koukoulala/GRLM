@@ -122,10 +122,31 @@ def extract_sids(product_sids_list):
     return sids
 
 
+def _normalize_event_key(event):
+    """Normalize an event string for deduplication.
+
+    Lowercases, strips non-alphanumeric characters (keeping spaces and pipes),
+    and collapses whitespace.
+
+    Args:
+        event: Event description string.
+
+    Returns:
+        Normalized key string for dedup comparison.
+    """
+    key = event.lower()
+    key = re.sub(r"[^a-z0-9\s|]", " ", key)
+    key = re.sub(r"\s+", " ", key)
+    return key.strip()
+
+
 def parse_user_events(events_text):
     """Parse USER-EVENTS text block into a list of event strings.
 
     Strips leading event numbers (e.g., "1 | ") from each event line.
+    Deduplicates events after normalization (lowercase + strip symbols),
+    preserving original text and first-occurrence order.
+
     Input format:  "1 | 1 week ago | Searched | shoes\\n2 | 3 days ago | ..."
     Output format: ["1 week ago | Searched | shoes", "3 days ago | ..."]
 
@@ -133,27 +154,42 @@ def parse_user_events(events_text):
         events_text: Raw text between <USER-EVENTS> and </USER-EVENTS>.
 
     Returns:
-        List of event description strings.
+        Tuple of (deduplicated event list, total raw events before dedup).
     """
     # Normalize: literal backslash-n to actual newline
     text = events_text.replace("\\n", "\n")
     lines = text.strip().split("\n")
 
-    events = []
+    raw_events = []
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        # Strip leading event number: "1 | rest..." -> "rest..."
+        # Only accept lines matching the numbered event format:
+        # "1 | time_ago | action | description"
+        # Lines not starting with a number+pipe (e.g., instruction text,
+        # stray tags) are silently discarded.
         match = re.match(r"^\d+\s*\|\s*(.*)", line)
         if match:
             event = match.group(1).strip()
-        else:
-            event = line
-        if event:
-            events.append(event)
+            if event:
+                raw_events.append(event)
 
-    return events
+    # Deduplicate while preserving order and original text
+    seen_keys = set()
+    deduped = []
+    for event in raw_events:
+        key = _normalize_event_key(event)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(event)
+
+    # Reverse to chronological order (oldest first, newest last)
+    # so the most recent events appear at the end of the prompt,
+    # leveraging LLM recency bias for better attention.
+    deduped.reverse()
+
+    return deduped, len(raw_events)
 
 
 def parse_messages(messages_str):
@@ -168,17 +204,18 @@ def parse_messages(messages_str):
         messages_str: JSON string containing the messages array.
 
     Returns:
-        Tuple of (user_events, system_time, journeys_raw) where:
-          - user_events: list of event strings
+        Tuple of (user_events, raw_event_count, system_time, journeys_raw):
+          - user_events: list of event strings (deduplicated)
+          - raw_event_count: int, number of events before dedup
           - system_time: date string
           - journeys_raw: list of raw journey dicts (with Title, Query,
             ProductSIDs keys)
-        Returns (None, None, None) if parsing fails entirely.
+        Returns (None, None, None, None) if parsing fails entirely.
     """
     try:
         messages = json.loads(messages_str)
     except (json.JSONDecodeError, TypeError):
-        return None, None, None
+        return None, None, None, None
 
     # Collect text by role
     user_text = ""
@@ -203,12 +240,25 @@ def parse_messages(messages_str):
                 assistant_text += content
 
     # --- Extract USER-EVENTS ---
+    # The user text contains multiple bare <USER-EVENTS> mentions in the
+    # instruction portion (e.g., "based on given <USER-EVENTS>",
+    # "event in <USER-EVENTS>."), but only ONE closing </USER-EVENTS> tag
+    # wrapping the real event data.
+    # Use rfind to locate the LAST <USER-EVENTS> opening tag, then find
+    # the </USER-EVENTS> closing tag after it. This is more robust than
+    # regex-based approaches which can mis-anchor on earlier occurrences.
     user_events = []
-    events_match = re.search(
-        r"<USER-EVENTS>\s*(.*?)\s*</USER-EVENTS>", user_text, re.DOTALL,
-    )
-    if events_match:
-        user_events = parse_user_events(events_match.group(1))
+    raw_event_count = 0
+    _OPEN_TAG = "<USER-EVENTS>"
+    _CLOSE_TAG = "</USER-EVENTS>"
+    last_open = user_text.rfind(_OPEN_TAG)
+    if last_open != -1:
+        close_pos = user_text.find(_CLOSE_TAG, last_open)
+        if close_pos != -1:
+            events_block = user_text[
+                last_open + len(_OPEN_TAG):close_pos
+            ].strip()
+            user_events, raw_event_count = parse_user_events(events_block)
 
     # --- Extract SYSTEM-TIME ---
     # Format: <SYSTEM-TIME>\nCurrent system time (UTC): 9/21/2025\n</SYSTEM-TIME>
@@ -236,7 +286,7 @@ def parse_messages(messages_str):
             except (json.JSONDecodeError, AttributeError):
                 continue
 
-    return user_events, system_time, journeys_raw
+    return user_events, raw_event_count, system_time, journeys_raw
 
 
 # =============================================================================
@@ -346,8 +396,13 @@ def main():
     no_system_time = 0
     no_journeys = 0
 
+    # Event dedup statistics
+    total_raw_events = 0
+    total_deduped_events = 0
+
     # SID mapping statistics
     total_journeys = 0
+    total_journeys_kept = 0
     total_sids_found = 0
     total_sids_mapped = 0
     total_sids_unmapped = 0
@@ -370,11 +425,17 @@ def main():
             parse_failures += 1
             continue
 
-        user_events, system_time, journeys_raw = parse_messages(messages_str)
+        user_events, raw_event_count, system_time, journeys_raw = (
+            parse_messages(messages_str)
+        )
 
         if user_events is None:
             parse_failures += 1
             continue
+
+        # Track event dedup statistics
+        total_raw_events += raw_event_count
+        total_deduped_events += len(user_events)
 
         if not user_events:
             no_events += 1
@@ -404,15 +465,23 @@ def main():
                     total_sids_unmapped += 1
                     unmapped_sid_set.add(sid)
 
+            total_journeys += 1
+
+            # Skip journeys with no mapped products
             if not product_ids:
                 empty_product_ids_journeys += 1
+                continue
 
             journeys.append({
                 "title": title,
                 "query": query,
                 "product_ids": product_ids,
             })
-            total_journeys += 1
+            total_journeys_kept += 1
+
+        # Only store entries that have at least one journey with products
+        if not journeys:
+            continue
 
         results[uuid] = {
             "user_shopping_events": user_events,
@@ -428,13 +497,20 @@ def main():
     print(f"  Entries without system time: {no_system_time:>12,}")
     print(f"  Entries without journeys: {no_journeys:>12,}")
 
+    print(f"\n  --- Event Dedup ---")
+    print(f"  Total raw events (before dedup): {total_raw_events:>12,}")
+    print(f"  Total events (after dedup): {total_deduped_events:>12,}")
+    print(f"  Duplicate events removed: "
+          f"{total_raw_events - total_deduped_events:>12,}")
+
     print(f"\n  --- SID Mapping ---")
     print(f"  Total journeys extracted: {total_journeys:>12,}")
+    print(f"  Journeys with empty product_ids: {empty_product_ids_journeys:>12,}")
+    print(f"  Journeys kept (with products): {total_journeys_kept:>12,}")
     print(f"  Total ProductSIDs found: {total_sids_found:>12,}")
     print(f"  SIDs mapped to GlobalOfferId: {total_sids_mapped:>12,}")
     print(f"  SIDs unmapped: {total_sids_unmapped:>12,}")
     print(f"  Distinct unmapped SIDs: {len(unmapped_sid_set):>12,}")
-    print(f"  Journeys with empty product_ids: {empty_product_ids_journeys:>12,}")
 
     if unmapped_sid_set:
         sample = sorted(unmapped_sid_set)[:5]
@@ -529,7 +605,7 @@ def main():
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, "shopping_journey.json")
+    output_path = os.path.join(args.output_dir, "shopping_journeys.json")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
@@ -538,7 +614,7 @@ def main():
     print(f"  Output written to: {output_path}")
     print(f"  File size: {file_size_mb:.2f} MB")
     print(f"  Total entries: {len(results):,}")
-    print(f"  Total journeys: {total_journeys:,}")
+    print(f"  Total journeys (with products): {total_journeys_kept:,}")
 
     # =========================================================================
     # Summary
@@ -559,7 +635,8 @@ def main():
     print(f"    SIDs unmapped:                    {total_sids_unmapped:>12,}")
     print(f"  Output:")
     print(f"    Entries:                          {len(results):>12,}")
-    print(f"    Journeys:                         {total_journeys:>12,}")
+    print(f"    Journeys (total extracted):       {total_journeys:>12,}")
+    print(f"    Journeys (kept with products):    {total_journeys_kept:>12,}")
     print(f"    Entries with journeys:            {entries_with_journeys:>12,}")
     print()
     print("Done!")
