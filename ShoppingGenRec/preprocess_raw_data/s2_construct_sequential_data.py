@@ -12,21 +12,25 @@ Pipeline:
   1. Read TSV (UserId, PageTitle, GlobalOfferId, Timestamp, Source, Query)
   2. Temporal deduplication: within each user, collapse actions within a
      configurable time window (default: 5s), keeping the highest-priority
-     source (msnClick > others > bingPAQuery)
+     source (Click-types > others > Query-types)
   3. GlobalOfferId validation: load item.json, check all non-empty
      GlobalOfferIds. If any user has an unresolvable GlobalOfferId, discard
      that user's entire sequence
   4. PageTitle mapping: load page_title_to_item.json. For rows whose source
      indicates a PageTitle interaction, map PageTitle to its index. Rows with
      unmappable PageTitles are removed
-  5. Minimum sequence length filter: users whose item sequence (msnClick +
-     PageTitle contributions) is shorter than the threshold are discarded
+  5. Minimum sequence length filter: users whose item sequence (valid
+     GlobalOfferId + valid PageTitle contributions) is shorter than the
+     threshold are discarded
   6. Generate output files
 
 Item identifiers in item_sequential_data.txt:
-  - msnClick with valid GlobalOfferId -> GlobalOfferId (e.g., "88880989482")
-  - Source containing "PageTitle" with valid mapping -> page title index
-    (e.g., "P0", "P123")
+  - Any source with non-empty valid GlobalOfferId -> GlobalOfferId
+    (e.g., "88880989482")
+  - Any source with non-empty PageTitle that has a valid mapping -> page
+    title index (e.g., "P0", "P123")
+  - If an action has both valid GlobalOfferId and valid PageTitle, the
+    GlobalOfferId takes precedence
 
 full_sequential_data.json format per action:
   - Timestamp: original timestamp string
@@ -51,12 +55,13 @@ csv.field_size_limit(sys.maxsize)
 # Constants
 # =============================================================================
 
-# Source priority for temporal deduplication (lower value = higher priority)
-SOURCE_PRIORITY = {
-    "msnClick": 0,       # highest: explicit product click
-    "bingPAQuery": 100,  # lowest: search query result
-}
-_DEFAULT_SOURCE_PRIORITY = 50  # middle priority for all other sources
+# Source priority keywords for temporal deduplication.
+# Sources containing "Click" get high priority (kept first);
+# sources containing "Query" get low priority (dropped first);
+# all others fall in between.
+_PRIORITY_CLICK = 0    # highest: explicit click actions
+_PRIORITY_DEFAULT = 50 # middle: other interactions
+_PRIORITY_QUERY = 100  # lowest: search query results
 
 
 # =============================================================================
@@ -101,6 +106,9 @@ def get_source_priority(source):
     """Get the deduplication priority for a source type.
 
     Lower value = higher priority (kept first during dedup).
+    Sources containing "Click" -> highest priority (0).
+    Sources containing "Query" -> lowest priority (100).
+    All others -> middle priority (50).
 
     Args:
         source: Source string (e.g., "msnClick", "bingPAQuery").
@@ -108,7 +116,11 @@ def get_source_priority(source):
     Returns:
         Integer priority value.
     """
-    return SOURCE_PRIORITY.get(source, _DEFAULT_SOURCE_PRIORITY)
+    if "Click" in source:
+        return _PRIORITY_CLICK
+    if "Query" in source:
+        return _PRIORITY_QUERY
+    return _PRIORITY_DEFAULT
 
 
 def parse_timestamp(ts_str):
@@ -131,21 +143,6 @@ def parse_timestamp(ts_str):
         return ts
     except (ValueError, TypeError):
         return None
-
-
-def is_page_title_source(source):
-    """Check if a source type indicates a PageTitle interaction.
-
-    Sources like "Flyout_PageTitle", "SAN_PageTitle" contain "PageTitle"
-    as a substring.
-
-    Args:
-        source: Source string.
-
-    Returns:
-        True if the source is a PageTitle-type interaction.
-    """
-    return "PageTitle" in source
 
 
 def deduplicate_within_time_window(actions, window_seconds=5):
@@ -438,12 +435,13 @@ def main():
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 5: Mapping PageTitles using page_title_to_item.json")
+    print("Step 5: Mapping actions to items (GlobalOfferId / PageTitle)")
     print("=" * 70)
 
-    total_pt_source_rows = 0
-    mapped_pt_rows = 0
-    unmapped_pt_rows = 0
+    total_actions_with_pt = 0
+    actions_with_gid = 0
+    actions_with_mapped_pt = 0
+    actions_no_gid_no_pt = 0
     unmapped_pt_set = set()
 
     for user_id in list(user_actions.keys()):
@@ -451,26 +449,37 @@ def main():
         filtered = []
 
         for action in actions:
-            if is_page_title_source(action["Source"]):
-                total_pt_source_rows += 1
-                pt = action["PageTitle"]
-                if pt and pt in page_title_to_item:
-                    mapped_pt_rows += 1
-                    action["_page_title_index"] = page_title_to_item[pt]
-                    filtered.append(action)
-                else:
-                    unmapped_pt_rows += 1
-                    if pt:
-                        unmapped_pt_set.add(pt)
+            gid = action["GlobalOfferId"]
+            pt = action["PageTitle"]
+
+            has_valid_gid = bool(gid and gid in item_data_keys)
+            has_valid_pt = bool(pt and pt in page_title_to_item)
+
+            if has_valid_gid:
+                actions_with_gid += 1
+                filtered.append(action)
+            elif has_valid_pt:
+                actions_with_mapped_pt += 1
+                filtered.append(action)
+            elif pt:
+                # Has PageTitle but not in mapping -> track as unmapped
+                total_actions_with_pt += 1
+                unmapped_pt_set.add(pt)
+                # Still keep if it has a valid query (will be in full_seq)
+                # but won't contribute to item_sequential_data.txt
+                filtered.append(action)
             else:
+                # No valid GID, no PageTitle at all -> keep for full_seq
+                actions_no_gid_no_pt += 1
                 filtered.append(action)
 
         user_actions[user_id] = filtered
 
     remaining_actions = sum(len(v) for v in user_actions.values())
-    print(f"  Total PageTitle-source rows: {total_pt_source_rows:>12,}")
-    print(f"  Mapped successfully: {mapped_pt_rows:>12,}")
-    print(f"  Unmapped (removed): {unmapped_pt_rows:>12,}")
+    print(f"  Actions with valid GlobalOfferId: {actions_with_gid:>12,}")
+    print(f"  Actions with valid PageTitle mapping: {actions_with_mapped_pt:>12,}")
+    print(f"  Actions with unmapped PageTitle: {total_actions_with_pt:>12,}")
+    print(f"  Actions with no GID/PageTitle: {actions_no_gid_no_pt:>12,}")
     print(f"  Distinct unmapped PageTitles: {len(unmapped_pt_set):>12,}")
     print(f"  Remaining actions: {remaining_actions:>12,}")
 
@@ -501,16 +510,18 @@ def main():
         actions.sort(key=lambda a: a["_timestamp"])
 
         # Build item sequence (for item_sequential_data.txt)
+        # Priority: valid GlobalOfferId first, then valid PageTitle mapping.
+        # Both are source-agnostic — any source can contribute either type.
         item_sequence = []
         for action in actions:
-            source = action["Source"]
             gid = action["GlobalOfferId"]
+            pt = action["PageTitle"]
 
-            if source == "msnClick" and gid and gid in item_data_keys:
+            if gid and gid in item_data_keys:
                 item_sequence.append(gid)
-                item_type_counts["GlobalOfferId (msnClick)"] += 1
-            elif is_page_title_source(source) and "_page_title_index" in action:
-                item_sequence.append(action["_page_title_index"])
+                item_type_counts["GlobalOfferId"] += 1
+            elif pt and pt in page_title_to_item:
+                item_sequence.append(page_title_to_item[pt])
                 item_type_counts["PageTitle index"] += 1
 
         # Apply minimum sequence length filter on item sequence
@@ -656,7 +667,7 @@ def main():
     print(f"    Removed by temporal dedup:        {removed_dedup:>12,}")
     print(f"    Users discarded (invalid GID):    "
           f"{len(users_with_invalid_gid):>12,}")
-    print(f"    Rows removed (unmapped PageTitle):{unmapped_pt_rows:>12,}")
+    print(f"    Rows removed (unmapped PageTitle):{total_actions_with_pt:>12,}")
     print(f"    Users discarded (short sequence): {users_too_short:>12,}")
     print(f"  Output:")
     print(f"    Final users:                      {len(final_users):>12,}")

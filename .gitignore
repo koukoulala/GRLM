@@ -187,3 +187,5 @@ wandb/
 # Un-ignore ShoppingGenRec/raw_data_mock
 !ShoppingGenRec/raw_data_mock/
 !ShoppingGenRec/raw_data_mock/**
+
+ShoppingGenRec/raw_data/**
