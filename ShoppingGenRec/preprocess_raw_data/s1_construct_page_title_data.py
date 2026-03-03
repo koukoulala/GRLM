@@ -451,7 +451,7 @@ def parse_args():
         "--sequence_data_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/1108_1208_SequenceData_Plat_Sampled_100000_User.tsv",
+                "Data/1108_1208_SequenceData_Plat_Sampled_500000_User.tsv",
         help="Path to the SequenceData_Plat TSV file "
              "(columns: UserId, PageTitle, GlobalOfferId, Timestamp, Source, Query)",
     )
