@@ -142,9 +142,9 @@ def parse_args():
     parser.add_argument(
         "--shopping_journey_file",
         type=str,
-        default="./raw_data/shopping_journey.json",
-        help="Path to shopping_journey.json (from s3). "
-             "(default: ./raw_data/shopping_journey.json)",
+        default="./raw_data/shopping_journeys.json",
+        help="Path to shopping_journeys.json (from s3). "
+             "(default: ./raw_data/shopping_journeys.json)",
     )
     parser.add_argument(
         "--item_file",

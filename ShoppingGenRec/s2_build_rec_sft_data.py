@@ -10,10 +10,9 @@ The sequence is split as:
 
 Usage:
     python s4_build_rec_sft_data.py \
-        --id2meta_file ./processed/sum_data/id2meta.json \
-        --sequential_file ./raw_data/sequential_data.txt \
-        --output_dir ./processed/sft_data \
-        --output_prefix shopping \
+        --id2meta_file ./processed/id2meta.json \
+        --sequential_file ./raw_data/item_sequential_data.txt \
+        --output_dir ./sft_data \
         --max_seq_len 20
 """
 
@@ -40,7 +39,6 @@ def create_sft_data(
     parent_asin2meta: dict,
     user_interactions: list,
     output_dir: str,
-    output_prefix: str,
     max_seq_len: int = 20,
     min_items: int = 3,
     multi_input_prob: float = 0.0,
@@ -50,8 +48,7 @@ def create_sft_data(
     Args:
         parent_asin2meta: Item ID to metadata mapping.
         user_interactions: Raw lines of user interaction data.
-        output_dir: Directory for auxiliary outputs (item_id2tid).
-        output_prefix: Prefix for auxiliary output files.
+        output_dir: Directory for all outputs.
         max_seq_len: Maximum sequence length to use (last N items).
         min_items: Minimum items in sequence (need >= 3 for train/valid/test split).
         multi_input_prob: Probability of using multiple items as input (0=disabled).
@@ -60,8 +57,10 @@ def create_sft_data(
     """
     sft_data = []
     skipped_users = 0
+    skip_reasons = {"id_not_found": 0, "empty_summary": 0, "too_short": 0}
     total_sequences = 0
     item_id2tid = {}
+    seq_len_list = []  # track sequence lengths for statistics
 
     for line in tqdm(user_interactions, desc="Building rec SFT data"):
         line = line.strip()
@@ -85,11 +84,13 @@ def create_sft_data(
         for item_id in item_ids:
             if item_id not in parent_asin2meta:
                 valid_sequence = False
+                skip_reasons["id_not_found"] += 1
                 break
             meta = parent_asin2meta[item_id]
             summary_words = meta.get("summary_words", [])
             if "" in summary_words:
                 valid_sequence = False
+                skip_reasons["empty_summary"] += 1
                 break
             valid_words = [
                 word.replace("[", "").replace("]", "")
@@ -98,6 +99,7 @@ def create_sft_data(
             ]
             if len(valid_words) < 5:
                 valid_sequence = False
+                skip_reasons["empty_summary"] += 1
                 break
             all_summary_words.extend(valid_words[:5])
             item_id_list.append(item_id)
@@ -106,12 +108,15 @@ def create_sft_data(
 
         # Need at least 3 items (train items + valid + test)
         if not valid_sequence or len(item_id_list) < min_items:
+            if valid_sequence and len(item_id_list) < min_items:
+                skip_reasons["too_short"] += 1
             skipped_users += 1
             continue
 
         # Need at least 15 summary words (3 items * 5 words)
         if len(all_summary_words) < 15:
             skipped_users += 1
+            skip_reasons["too_short"] += 1
             continue
 
         # Split: last 2 items are valid/test, rest are train (input + output)
@@ -154,17 +159,33 @@ def create_sft_data(
         sft_sample["test_ground_truth_msg"] = meta_msg_list[-1]
         sft_data.append(sft_sample)
         total_sequences += 1
+        seq_len_list.append(len(item_id_list))
 
     print(f"\nData statistics:")
-    print(f"  Total users: {len(user_interactions)}")
-    print(f"  Skipped: {skipped_users}")
-    print(f"  Generated samples: {total_sequences}")
+    print(f"  Total users:          {len(user_interactions):>10,}")
+    print(f"  Skipped:              {skipped_users:>10,}")
+    print(f"    - ID not found:     {skip_reasons['id_not_found']:>10,}")
+    print(f"    - Empty/bad summary:{skip_reasons['empty_summary']:>10,}")
+    print(f"    - Too short seq:    {skip_reasons['too_short']:>10,}")
+    print(f"  Generated samples:    {total_sequences:>10,}")
+
+    if seq_len_list:
+        import numpy as np
+        arr = np.array(seq_len_list)
+        print(f"\n  Sequence length stats:")
+        print(f"    Min:    {arr.min()}")
+        print(f"    Max:    {arr.max()}")
+        print(f"    Mean:   {arr.mean():.2f}")
+        print(f"    Median: {np.median(arr):.1f}")
+        print(f"    P25:    {np.percentile(arr, 25):.1f}")
+        print(f"    P75:    {np.percentile(arr, 75):.1f}")
+        print(f"    P95:    {np.percentile(arr, 95):.1f}")
 
     # Save id2tid mappings
     tid_dir = os.path.join(output_dir, "item_id2tid")
     os.makedirs(tid_dir, exist_ok=True)
 
-    with open(os.path.join(tid_dir, f"{output_prefix}_item_id2tid.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(tid_dir, "item_id2tid.json"), "w", encoding="utf-8") as f:
         json.dump(item_id2tid, f, ensure_ascii=False, indent=2)
 
     # Build reverse mapping: tid -> item_ids
@@ -175,7 +196,7 @@ def create_sft_data(
             value2keys[tid_str] = []
         value2keys[tid_str].append(key)
 
-    with open(os.path.join(tid_dir, f"{output_prefix}_tid2item_id.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(tid_dir, "tid2item_id.json"), "w", encoding="utf-8") as f:
         json.dump(value2keys, f, ensure_ascii=False, indent=2)
 
     print(f"  item_id2tid: {len(item_id2tid)} items")
@@ -211,8 +232,8 @@ def _create_instruction_sample(
     for i in range(num_output_items):
         meta = meta_msg_list[num_input_items + i]
         output_text += "Item text ID: [" + ", ".join(meta["summary_words"]) + "]"
-        title = meta.get("title", "")
-        output_text += f" Title: {title}.\n" if title else " Title: None.\n"
+        #title = meta.get("title", "")
+        #output_text += f" Title: {title}.\n" if title else " Title: None.\n"
 
     return {
         "instruction": instruction,
@@ -259,32 +280,23 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        required=True,
-        help="Path to id2meta JSON from step 2",
+        default="./processed/id2meta.json",
+        help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--sequential_file",
         type=str,
-        required=True,
-        help="Path to sequential interaction data file",
+        default="./raw_data/item_sequential_data.txt",
+        help="Path to sequential interaction data file "
+             "(default: ./raw_data/item_sequential_data.txt)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        required=True,
-        help="Base output directory for auxiliary files (item_id2tid/)",
-    )
-    parser.add_argument(
-        "--output_file",
-        type=str,
-        required=True,
-        help="Output path for SFT rec data JSON",
-    )
-    parser.add_argument(
-        "--output_prefix",
-        type=str,
-        default="shopping",
-        help="Prefix for auxiliary output files (default: shopping)",
+        default="./sft_data",
+        help="Output directory. SFT data saved to <output_dir>/rec_sft.json, "
+             "auxiliary mappings to <output_dir>/item_id2tid/ "
+             "(default: ./sft_data)",
     )
     parser.add_argument(
         "--max_seq_len",
@@ -310,16 +322,38 @@ def main():
         args.id2meta_file, args.sequential_file
     )
 
+    output_dir = args.output_dir
+    output_file = os.path.join(output_dir, "rec_sft.json")
+
     sft_data = create_sft_data(
         parent_asin2meta,
         user_interactions,
-        args.output_dir,
-        args.output_prefix,
+        output_dir,
         max_seq_len=args.max_seq_len,
         multi_input_prob=args.multi_input_prob,
     )
 
-    save_sft_data(sft_data, args.output_file)
+    save_sft_data(sft_data, output_file)
+
+    # ---- Show example cases ----
+    print(f"\n{'='*70}")
+    print("Example cases (first 3):")
+    print(f"{'='*70}")
+    for idx, sample in enumerate(sft_data[:3]):
+        print(f"\n--- Example {idx + 1} ---")
+        print(f"  User ID:        {sample['metadata']['user_id']}")
+        print(f"  Seq length:     {sample['item_id_len']} items")
+        print(f"  Input items:    {sample['metadata']['num_input_items']}")
+        print(f"  Output items:   {sample['metadata']['total_items'] - 2 - sample['metadata']['num_input_items']}")
+        print(f"  Valid GT ID:    {sample['valid_ground_truth_id']}")
+        print(f"  Valid GT TID:   {sample['valid_ground_truth_tid']}")
+        print(f"  Test GT ID:     {sample['test_ground_truth_id']}")
+        print(f"  Test GT TID:    {sample['test_ground_truth_tid']}")
+        print(f"  Instruction:    {sample['instruction']}")
+        print(f"  Input (trunc):  {sample['input']}")
+        print(f"  Output (trunc): {sample['output']}")
+    print(f"\n{'='*70}")
+
     print(f"\nDone! Generated {len(sft_data)} training samples")
 
 

@@ -1,11 +1,12 @@
 """Step 3: Build Meta-to-TID SFT Data
 
 Creates SFT training data for teaching the model to generate text IDs (TID)
-from product metadata (title + description -> 5-word summary).
+from product metadata (title + description + categories + related_queries
+-> 5-word summary).
 
 Usage:
     python s3_build_meta2tid_sft_data.py \
-        --id2meta_file ./processed/sum_data/id2meta.json \
+        --id2meta_file ./processed/id2meta.json \
         --output_file ./processed/sft_data/meta2tid_sft.json
 """
 
@@ -18,8 +19,19 @@ def prepare_data(item: dict) -> dict:
     """Prepare a single SFT training sample."""
     title = item.get("title", "")
     title_str = f"Title: {title}" if title else ""
+
     description = item.get("description", "")
+    if description and len(description) > 150:
+        description = description[:150] + "..."
     desc_str = f"Description: {description}" if description else ""
+
+    categories = item.get("categories", "")
+    categories_str = f"Categories: {categories}" if categories else ""
+
+    related_queries = item.get("related_queries", "")
+    if related_queries and len(related_queries) > 150:
+        related_queries = related_queries[:150] + "..."
+    related_queries_str = f"Related Queries: {related_queries}" if related_queries else ""
 
     return {
         "instruction": (
@@ -36,7 +48,8 @@ def prepare_data(item: dict) -> dict:
             "7. Output format: [word1, word2, word3, word4, word5]"
         ),
         "input": (
-            f"\n\nProduct Information:\n{title_str}\n{desc_str}\n\n"
+            f"\n\nProduct Information:\n{title_str}\n{desc_str}"
+            f"\n{categories_str}\n{related_queries_str}\n\n"
             "Please provide exactly five words separated by commas:"
         ),
         "output": "[" + ", ".join(item.get("summary_words", [])) + "]",
@@ -50,13 +63,13 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        required=True,
-        help="Path to id2meta JSON from step 2",
+        default="./processed/id2meta.json",
+        help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_file",
         type=str,
-        required=True,
+        default="./sft_data/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
     )
     return parser.parse_args()
