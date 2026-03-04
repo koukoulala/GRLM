@@ -172,6 +172,7 @@ uv.lock
 *.json
 *.jsonl
 *.parquet
+*.npy
 ckpts/
 logs/
 cache/
