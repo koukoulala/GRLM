@@ -141,11 +141,11 @@ GUIDELINES:
 1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings)
 2. WORD ORDER: Order words by importance (most important aspect first)
 3. CONTENT FOCUS: Focus on these aspects in order:
-   a) Main product category/type (e.g., "doll", "puzzle", "car")
-   b) Key function or purpose (e.g., "educational", "remote-control")
-   c) Distinctive features (e.g., "wooden", "electronic", "collectible")
-   d) Target audience (e.g., "toddler", "boys", "family")
-   e) Unique selling point (e.g., "glow-in-dark", "interactive")
+   a) Main product category/type (e.g., "sneakers", "laptop", "car")
+   b) Brand, Seller, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible", "dyson")
+   c) Gender or Target Audience (e.g., "women", "men", "unisex", "kids", "family", "toddler", "pet")
+   d) Style, Formality, or Occasion (e.g., "minimalist", "formal", "outdoor", "vintage")
+   e) Key Physical Attribute, Price Tier, or Unique Selling Point (e.g., "leather", "budget-friendly", "wireless", "glow-in-dark")
 4. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
 5. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items. Each product should have some unique aspects.
 
