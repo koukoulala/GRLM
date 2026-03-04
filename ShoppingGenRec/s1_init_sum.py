@@ -1,9 +1,15 @@
-"""Step 1: Generate Product Summaries using LLM
+"""Step 1: Generate Product Summaries & Build ID-to-Metadata Mapping
 
-Uses a causal LLM (e.g., Qwen3-4B) to generate 5-word summaries for each
-product, leveraging similar items context from step 0.  The model first
-determines whether the input describes a real product or is just a general
-marketing sentence.  Non-product entries receive an empty summary ([]).
+Uses vLLM offline inference to generate 5-word summaries for each product,
+leveraging similar items context from step 0.  The model first determines
+whether the input describes a real product or is just a general marketing
+sentence.  Non-product entries receive an empty summary ([]).
+
+After inference, builds an id2meta.json mapping (previously s2_build_id2meta.py)
+that maps each item ID to its full metadata including summary words.
+
+vLLM handles batching, KV-cache management, and continuous batching
+automatically, achieving 10-30x throughput vs HuggingFace generate().
 
 Inputs (from s0_init_emb.py):
     - merged_clean_item.json   : unified item metadata (title, description,
@@ -12,15 +18,16 @@ Inputs (from s0_init_emb.py):
 
 Outputs:
     - summaries_with_similarity.jsonl : per-item results with LLM output
+    - id2meta.json                    : item ID -> metadata mapping
     - statistics.json                 : word frequency & conflict stats
     - failed_items.json               : items that did not produce 5 words
 
 Usage:
-    python s1_init_sum.py \
+    python s1_init_sum_meta.py \
         --item_file ./raw_data/merged_clean_item.json \
         --similarity_file ./processed/similarities.json \
-        --output_dir ./processed/sum_data \
-        --summary_model /path/to/Qwen3-4B \
+        --output_dir ./processed/ \
+        --summary_model /path/to/Qwen3-8B \
         --num_gpus 2
 """
 
@@ -30,21 +37,19 @@ import re
 import random
 import argparse
 from collections import Counter
-import numpy as np
-import torch
-import torch.multiprocessing as mp
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from tqdm import tqdm
 import time
+
+from transformers import AutoTokenizer
+from vllm import LLM, SamplingParams
+from tqdm import tqdm
 
 SEED = 42
 random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-torch.cuda.manual_seed_all(SEED)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
 
+
+# =============================================================================
+# Data Loading
+# =============================================================================
 
 def load_data(file_path):
     """Load item JSON file."""
@@ -63,6 +68,10 @@ def load_similarities(similarity_file):
     with open(similarity_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
+# =============================================================================
+# Prompt Construction
+# =============================================================================
 
 def prepare_prompt(item, top_similar_items, all_items_dict):
     """Prepare prompt including information from the 5 most similar items.
@@ -87,6 +96,11 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
     categories_text = f"Categories: {categories}" if categories else ""
 
     related_queries = item.get("related_queries", "")
+    if related_queries:
+        if len(related_queries) > 150:
+            related_queries = related_queries[:150] + "..."
+        else:
+            related_queries = related_queries
     related_queries_text = f"Related Queries: {related_queries}" if related_queries else ""
 
     # Prepare similar items information
@@ -150,7 +164,7 @@ TOP 5 SIMILAR PRODUCTS (for reference):
 {similar_items_text}
 
 ANALYSIS GUIDANCE:
-1. First, check whether the PRODUCT INFORMATION describes a specific, concrete product. 
+1. First, check whether the PRODUCT INFORMATION describes a specific, concrete product.
 2. If it IS a product, identify what it has in common with similar products (shared category, features, audience)
 3. Then, identify what makes this product unique or different
 4. Use consistent vocabulary for shared characteristics
@@ -164,97 +178,9 @@ Output:
     return prompt
 
 
-def process_batch_on_gpu(
-    rank, data_slice, output_queue, model_name, similarities_dict, all_items_dict
-):
-    """Process data slice on specific GPU."""
-    torch.cuda.set_device(rank)
-    device = torch.device(f"cuda:{rank}")
-    print(f"Rank {rank}: Loading model on {device}...")
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        pretrained_model_name_or_path=model_name,
-        torch_dtype=torch.float16,
-        device_map=f"cuda:{rank}",
-        trust_remote_code=True,
-    )
-    model.eval()
-
-    print(f"Rank {rank}: Processing {len(data_slice)} items")
-    results = []
-
-    for i in tqdm(range(len(data_slice)), desc=f"Rank {rank}"):
-        batch_items = [data_slice[i]]
-        batch_results = process_single_batch(
-            batch_items, model, tokenizer, device, similarities_dict, all_items_dict
-        )
-        results.extend(batch_results)
-
-    output_queue.put((rank, results))
-    print(f"Rank {rank}: Completed {len(results)} items")
-
-
-def process_single_batch(
-    items, model, tokenizer, device, similarities_dict, all_items_dict
-):
-    """Process a single batch of items."""
-    prompts = []
-    for item in items:
-        item_id = item["id"]
-        top_similar_items = similarities_dict.get(item_id, [])[:5]
-        prompt = prepare_prompt(item, top_similar_items, all_items_dict)
-        messages = [{"role": "user", "content": prompt}]
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
-        prompts.append(text)
-
-    tokenizer.padding_side = "left"
-    model_inputs = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        return_attention_mask=True,
-        max_length=32768,
-    ).to(device)
-
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **model_inputs,
-            max_new_tokens=50,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            early_stopping=True,
-        )
-
-    results = []
-    for item, input_ids, output_ids in zip(
-        items, model_inputs.input_ids, generated_ids
-    ):
-        generated_output_ids = output_ids[len(input_ids) :].tolist()
-        content = tokenizer.decode(generated_output_ids, skip_special_tokens=True).strip("\n")
-
-        item_id = item["id"]
-        similar_item_ids = [
-            sim["item_id"] for sim in similarities_dict.get(item_id, [])[:5]
-        ]
-
-        words = parse_summary_words(content)
-
-        item_copy = item.copy()
-        item_copy["llm_output"] = content
-        item_copy["summary_words"] = words
-        item_copy["similar_item_ids"] = similar_item_ids
-        results.append(item_copy)
-
-    return results
-
+# =============================================================================
+# Parsing
+# =============================================================================
 
 def parse_summary_words(content: str) -> list:
     """Parse 5-word summary or empty list from LLM output.
@@ -273,10 +199,8 @@ def parse_summary_words(content: str) -> list:
     if re.search(r"^\s*\[\s*\]\s*$", content_stripped):
         return []
 
-    # Also handle [] appearing anywhere in  output with nothing else meaningful
-    # e.g. model outputs "This is not a product.\n[]"
+    # Also handle [] appearing anywhere in output with nothing else meaningful
     if "[]" in content_stripped:
-        # Check if there's also a non-empty bracket — if not, treat as empty
         non_empty_bracket = re.search(r"\[[^\]]+\]", content_stripped)
         if not non_empty_bracket:
             return []
@@ -302,7 +226,7 @@ def parse_summary_words(content: str) -> list:
             if line.startswith("[") and line.endswith("]"):
                 inner = line[1:-1].strip()
                 if not inner:
-                    return []  # empty list on its own line
+                    return []
                 if "," in inner:
                     words = [
                         word.strip().lower().strip("\"'") for word in inner.split(",")
@@ -322,7 +246,6 @@ def parse_summary_words(content: str) -> list:
                     word.strip().lower().strip("\"'[]") for word in content.split()
                 ]
 
-    # Filter out empty strings produced by splitting
     words = [w for w in words if w]
     words = words[:5]
     while len(words) < 5:
@@ -331,27 +254,28 @@ def parse_summary_words(content: str) -> list:
     return words
 
 
-def analyze_statistics(all_items, similarities_dict):
+# =============================================================================
+# Statistics
+# =============================================================================
+
+def analyze_statistics(all_items):
     """Analyze summary statistics, separating products from non-products."""
     print("\n" + "=" * 50)
     print("Statistical Analysis Results")
     print("=" * 50)
 
-    # Separate product items (5 words) from non-product items (empty list)
     product_items = []
     non_product_items = []
-    failed_items = []  # items that are neither valid 5-word nor empty-list
+    failed_items = []
 
     for item in all_items:
         words = item.get("summary_words", [])
         non_empty_words = [w for w in words if w]
         if len(words) == 0:
-            # Model determined this is not a product
             non_product_items.append(item)
         elif len(non_empty_words) == 5:
             product_items.append(item)
         else:
-            # Has some words but not exactly 5 non-empty ones
             failed_items.append(item)
 
     total = len(all_items)
@@ -364,7 +288,6 @@ def analyze_statistics(all_items, similarities_dict):
     print(f"   Failed parsing:           {len(failed_items):>10,} "
           f"({len(failed_items) / total * 100:.2f}%)")
 
-    # Word frequency analysis (only on valid product items)
     all_words = []
     word_freq = Counter()
     word_by_position = [Counter() for _ in range(5)]
@@ -378,7 +301,8 @@ def analyze_statistics(all_items, similarities_dict):
 
     word_freq.update(all_words)
 
-    print(f"\n1. Vocabulary (products only): {len(all_words)} total, {len(word_freq)} unique")
+    print(f"\n1. Vocabulary (products only): {len(all_words)} total, "
+          f"{len(word_freq)} unique")
     print("   Top 20 words:")
     for word, count in word_freq.most_common(20):
         print(f"     {word}: {count}")
@@ -395,7 +319,6 @@ def analyze_statistics(all_items, similarities_dict):
         for word, count in counter.most_common(10):
             print(f"     {word}: {count}")
 
-    # Conflict analysis (only among valid products)
     summary_tuples = [tuple(item.get("summary_words", [])) for item in product_items]
     tuple_counter = Counter(summary_tuples)
     duplicate_tuples = [
@@ -407,13 +330,11 @@ def analyze_statistics(all_items, similarities_dict):
     print(f"\n2. Conflicts (products): {len(duplicate_tuples)} duplicates, "
           f"rate={conflict_rate:.4f}")
 
-    # Show some non-product examples
     if non_product_items:
         print(f"\n3. Non-product examples (first 5):")
         for item in non_product_items[:5]:
             print(f"     ID={item['id']}, Title={item.get('title', 'N/A')}")
 
-    # Show some failed examples
     if failed_items:
         print(f"\n4. Failed parsing examples (first 5):")
         for item in failed_items[:5]:
@@ -433,9 +354,107 @@ def analyze_statistics(all_items, similarities_dict):
     }, failed_items, non_product_items
 
 
+# =============================================================================
+# vLLM Inference
+# =============================================================================
+
+def build_all_prompts(data, similarities_dict, all_items_dict, tokenizer):
+    """Build formatted prompts for all items using the tokenizer's chat template.
+
+    Returns:
+        List of formatted prompt strings ready for vLLM generate().
+    """
+    prompts = []
+    for item in tqdm(data, desc="Building prompts"):
+        item_id = item["id"]
+        top_similar_items = similarities_dict.get(item_id, [])[:5]
+        raw_prompt = prepare_prompt(item, top_similar_items, all_items_dict)
+        messages = [{"role": "user", "content": raw_prompt}]
+        formatted = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        prompts.append(formatted)
+    return prompts
+
+
+def run_vllm_inference(
+    prompts,
+    model_name,
+    num_gpus,
+    gpu_memory_utilization,
+    max_model_len,
+    chunk_size=100000,
+):
+    """Run vLLM offline inference on all prompts.
+
+    vLLM internally handles continuous batching, PagedAttention,
+    and scheduling.  We pass prompts in chunks (default 100K) to allow
+    progress tracking.
+
+    Args:
+        prompts: List of formatted prompt strings.
+        model_name: Path to the model.
+        num_gpus: Number of GPUs for tensor parallelism.
+        gpu_memory_utilization: Fraction of GPU memory to use (0-1).
+        max_model_len: Maximum context length for the model.
+        chunk_size: Number of prompts per generate() call.
+
+    Returns:
+        List of generated text strings, aligned with input prompts.
+    """
+    print(f"\nInitializing vLLM engine ...")
+    print(f"  Model: {model_name}")
+    print(f"  Tensor parallel size: {num_gpus}")
+    print(f"  GPU memory utilization: {gpu_memory_utilization}")
+    print(f"  Max model length: {max_model_len}")
+
+    llm = LLM(
+        model=model_name,
+        tensor_parallel_size=num_gpus,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        trust_remote_code=True,
+        seed=SEED,
+    )
+
+    sampling_params = SamplingParams(max_tokens=50, temperature=0, top_p=1.0)
+
+    all_outputs = []
+    total = len(prompts)
+    num_chunks = (total + chunk_size - 1) // chunk_size
+
+    for chunk_idx in range(num_chunks):
+        start = chunk_idx * chunk_size
+        end = min(start + chunk_size, total)
+        chunk_prompts = prompts[start:end]
+        print(f"\nProcessing chunk {chunk_idx + 1}/{num_chunks} "
+              f"(items {start:,}-{end - 1:,}, size={len(chunk_prompts):,}) ...")
+
+        chunk_start_time = time.time()
+        outputs = llm.generate(chunk_prompts, sampling_params)
+        chunk_elapsed = time.time() - chunk_start_time
+
+        throughput = len(chunk_prompts) / chunk_elapsed if chunk_elapsed > 0 else 0
+        print(f"  Chunk done in {chunk_elapsed:.1f}s "
+              f"({throughput:.1f} items/s)")
+
+        for output in outputs:
+            generated_text = output.outputs[0].text.strip()
+            all_outputs.append(generated_text)
+
+    return all_outputs
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate 5-word product summaries using LLM"
+        description="Generate 5-word product summaries using vLLM"
     )
     parser.add_argument(
         "--item_file",
@@ -452,95 +471,178 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./processed/sum_data",
+        default="./processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
         "--summary_model",
         type=str,
-        default="/data/xiaoyukou/ckpts/Qwen3-4B-Instruct-2507",
-        help="Path to summary LLM",
+        # default="/data/xiaoyukou/ckpts/Qwen3-8B",
+        default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
+        help="Path to summary LLM (must be vLLM-supported, e.g. Qwen3.5-9B)",
     )
     parser.add_argument(
         "--num_gpus",
         type=int,
         default=None,
-        help="Number of GPUs (default: all available)",
+        help="Number of GPUs for tensor parallelism (default: all available)",
+    )
+    parser.add_argument(
+        "--gpu_memory_utilization",
+        type=float,
+        default=0.90,
+        help="Fraction of GPU memory for vLLM KV-cache (default: 0.90)",
+    )
+    parser.add_argument(
+        "--max_model_len",
+        type=int,
+        default=4096,
+        help="Maximum model context length. Our prompts are ~500-800 tokens + "
+             "50 output tokens, so 4096 is sufficient. Lower saves GPU memory "
+             "and increases throughput. (default: 4096)",
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=100000,
+        help="Number of prompts per vLLM generate() call for progress "
+             "tracking (default: 100000)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Debug mode: only process 100 items, print sample prompt "
+             "and first few LLM outputs (default: False)",
+    )
+    parser.add_argument(
+        "--id2meta_file",
+        type=str,
+        default=None,
+        help="Output path for id2meta JSON. If not set, defaults to "
+             "<output_dir>/id2meta.json",
     )
     return parser.parse_args()
 
 
+# =============================================================================
+# Main
+# =============================================================================
+
 def main():
     args = parse_args()
-    num_gpus = args.num_gpus or torch.cuda.device_count()
 
-    print(f"Loading data: {args.item_file}")
-    data = load_data(args.item_file)
-    print(f"Loaded {len(data)} items")
+    import torch
+    available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
+
+    print(f"PyTorch: {torch.__version__}, "
+          f"CUDA: {torch.cuda.is_available()}, "
+          f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+    print(f"Using {num_gpus} GPU(s) for tensor parallelism")
+
+    debug = args.debug
+    if debug:
+        print("\n*** DEBUG MODE: processing only 100 items ***\n")
+
+    # ---- Load data ----
+    print(f"\nLoading data: {args.item_file}")
+    full_data = load_data(args.item_file)
+    print(f"Loaded {len(full_data)} items")
+
+    # Build full items dict BEFORE trimming, so similarity lookups work
+    all_items_dict = {item["id"]: item for item in full_data}
+
+    if debug:
+        data = full_data[:100]
+        print(f"DEBUG: trimmed to {len(data)} items for processing")
+    else:
+        data = full_data
 
     print(f"Loading similarities: {args.similarity_file}")
     similarities_dict = load_similarities(args.similarity_file)
     print(f"Loaded similarities for {len(similarities_dict)} items")
 
-    all_items_dict = {item["id"]: item for item in data}
+    # ---- Build prompts ----
+    print("\nBuilding prompts (applying chat template with enable_thinking=False) ...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.summary_model, trust_remote_code=True
+    )
+    prompts = build_all_prompts(data, similarities_dict, all_items_dict, tokenizer)
+    print(f"Built {len(prompts)} prompts")
 
-    # Split data across GPUs
-    chunk_size = len(data) // num_gpus
-    data_chunks = []
-    for i in range(num_gpus):
-        start = i * chunk_size
-        end = len(data) if i == num_gpus - 1 else start + chunk_size
-        data_chunks.append(data[start:end])
+    if debug:
+        print(f"\n{'='*60}")
+        print("[DEBUG] Full sample prompt (first item):")
+        print(prompts[0])
+        print(f"{'='*60}")
+        # Print a few more prompts (truncated) so we can see if similarities work
+        for idx in range(1, min(5, len(prompts))):
+            print(f"\n[DEBUG] Prompt #{idx+1} (item ID: {data[idx]['id']}):")
+            print(prompts[idx])
+            print(f"{'='*60}")
+        print()
 
-    processes = []
-    output_queue = mp.Queue()
+    # ---- vLLM inference ----
     start_time = time.time()
+    generated_texts = run_vllm_inference(
+        prompts,
+        model_name=args.summary_model,
+        num_gpus=num_gpus,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len,
+        chunk_size=args.chunk_size,
+    )
+    inference_time = time.time() - start_time
+    print(f"\nTotal vLLM inference time: {inference_time:.1f}s "
+          f"({len(data) / inference_time:.1f} items/s)")
 
-    for rank in range(num_gpus):
-        p = mp.Process(
-            target=process_batch_on_gpu,
-            args=(
-                rank,
-                data_chunks[rank],
-                output_queue,
-                args.summary_model,
-                similarities_dict,
-                all_items_dict,
-            ),
-        )
-        processes.append(p)
-        p.start()
-
+    # ---- Parse results ----
+    print("\nParsing LLM outputs ...")
     all_results = []
-    for _ in range(num_gpus):
-        rank, results = output_queue.get()
-        print(f"Received {len(results)} results from Rank {rank}")
-        all_results.extend(results)
+    for item, gen_text in zip(data, generated_texts):
+        words = parse_summary_words(gen_text)
+        item_id = item["id"]
+        similar_item_ids = [
+            sim["item_id"] for sim in similarities_dict.get(item_id, [])[:5]
+        ]
+        result = item.copy()
+        result["llm_output"] = gen_text
+        result["summary_words"] = words
+        result["similar_item_ids"] = similar_item_ids
+        all_results.append(result)
 
-    for p in processes:
-        p.join()
+    # Print first few debug examples
+    num_debug_show = 10 if debug else 3
+    print(f"\n{'='*60}")
+    print(f"First {num_debug_show} LLM outputs:")
+    for idx, res in enumerate(all_results[:num_debug_show]):
+        print(f"\n  [{idx+1}] ID={res['id']}")
+        print(f"      Title: {res.get('title', 'N/A')[:120]}")
+        print(f"      LLM raw output: {res['llm_output']}")
+        print(f"      Parsed words:   {res['summary_words']}")
+    print(f"\n{'='*60}")
 
-    print(f"Total time: {time.time() - start_time:.2f}s")
-
-    # Save results
+    # ---- Save results ----
     os.makedirs(args.output_dir, exist_ok=True)
     output_file = os.path.join(args.output_dir, "summaries_with_similarity.jsonl")
-    print(f"Saving results to: {output_file}")
+    print(f"\nSaving results to: {output_file}")
     with open(output_file, "w", encoding="utf-8") as f:
         for item in all_results:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
-    stats, failed_items, non_product_items = analyze_statistics(
-        all_results, similarities_dict
-    )
+    # ---- Statistics ----
+    stats, failed_items, non_product_items = analyze_statistics(all_results)
 
     stats_file = os.path.join(args.output_dir, "statistics.json")
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     print(f"Statistics saved to: {stats_file}")
 
-    # Save failed items (items that did not produce exactly 5 words)
-    # Includes both failed-parse items and non-product items
+    # ---- Failed items ----
     all_problematic = []
     for item in failed_items:
         all_problematic.append({
@@ -564,24 +666,38 @@ def main():
     print(f"Failed/non-product items saved to: {failed_file} "
           f"({len(all_problematic)} items)")
 
-    # Show examples
-    print("\nExamples (valid products):")
-    shown = 0
+    # ---- Build id2meta mapping (previously s2_build_id2meta.py) ----
+    print("\nBuilding id2meta mapping ...")
+    id2meta = {}
+    skipped_count = 0
     for item in all_results:
-        if shown >= 3:
-            break
         words = item.get("summary_words", [])
-        if len([w for w in words if w]) == 5:
-            print(f"  ID={item['id']}, Title={item.get('title', 'N/A')}")
-            print(f"  Summary: {words}")
-            shown += 1
+        non_empty_words = [w for w in words if w]
+        if len(non_empty_words) != 5:
+            skipped_count += 1
+            continue
+        # Normalize multi-word summaries (join with hyphen)
+        item["summary_words"] = [
+            "-".join(word.split()) for word in words
+        ]
+        item_id = item.get("id")
+        if item_id:
+            id2meta[item_id] = item
 
+    id2meta_file = args.id2meta_file or os.path.join(args.output_dir, "id2meta.json")
+    with open(id2meta_file, "w", encoding="utf-8") as f:
+        json.dump(id2meta, f, ensure_ascii=False, indent=2)
+    print(f"id2meta saved to: {id2meta_file}")
+    print(f"  Mapped items: {len(id2meta):,} "
+          f"(skipped {skipped_count:,} without valid 5-word summary)")
+
+    # ---- Final summary ----
     print(f"\nCompleted! Total: {len(all_results)}, "
           f"Products: {stats['valid_product_count']}, "
           f"Non-products: {stats['non_product_count']}, "
           f"Failed: {stats['failed_count']}")
+    print(f"Throughput: {len(data) / inference_time:.1f} items/s")
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
     main()

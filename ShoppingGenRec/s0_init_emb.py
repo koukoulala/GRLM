@@ -66,17 +66,25 @@ def process_batch_on_gpu(
     batch_size: int = 16,
     max_length: int = 512,
 ):
-    """Process data slice on specific GPU, save results to disk."""
-    torch.cuda.set_device(rank)
-    device = torch.device(f"cuda:{rank}")
-    print(f"Rank {rank}: Loading model on {device}...")
-
-    model = AutoModel.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16,
-        device_map=f"cuda:{rank}",
-        trust_remote_code=True,
-    )
+    """Process data slice on specific GPU (or CPU fallback), save results to disk."""
+    if torch.cuda.is_available():
+        torch.cuda.set_device(rank)
+        device = torch.device(f"cuda:{rank}")
+        print(f"Rank {rank}: Loading model on {device}...")
+        model = AutoModel.from_pretrained(
+            model_name,
+            dtype=torch.float16,
+            device_map=f"cuda:{rank}",
+            trust_remote_code=True,
+        )
+    else:
+        device = torch.device("cpu")
+        print(f"Rank {rank}: No GPU available, loading model on CPU...")
+        model = AutoModel.from_pretrained(
+            model_name,
+            dtype=torch.float32,
+            trust_remote_code=True,
+        )
     model.eval()
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
 
@@ -190,7 +198,9 @@ def compute_similarities_faiss(
     nlist: int = 4096,
     nprobe: int = 128,
 ) -> Dict:
-    """Compute top-k cosine similarities using FAISS ANN with GPU acceleration.
+    """Compute top-k cosine similarities using FAISS ANN.
+
+    Automatically uses GPU if faiss-gpu is available, otherwise falls back to CPU.
 
     FAISS IVFFlat works in 3 stages:
     1. Train: K-means clusters the embedding space into `nlist` Voronoi cells.
@@ -206,12 +216,16 @@ def compute_similarities_faiss(
         embeddings: L2-normalized float32 array of shape (N, dim).
         item_ids: List of item ID strings, aligned with embeddings.
         k: Number of top similar items to return per item.
-        faiss_gpu_id: Which GPU to use for FAISS search.
+        faiss_gpu_id: Which GPU to use for FAISS search (ignored if GPU unavailable).
         nlist: Number of IVF clusters (higher = faster but less accurate).
         nprobe: Number of clusters to search (higher = more accurate but slower).
     """
     n, dim = embeddings.shape
-    print(f"Computing Top-{k} similarities for {n} items using FAISS GPU ...")
+
+    # Check if FAISS GPU is available
+    use_gpu = hasattr(faiss, "StandardGpuResources")
+    mode_str = "FAISS GPU" if use_gpu else "FAISS CPU"
+    print(f"Computing Top-{k} similarities for {n} items using {mode_str} ...")
     print(f"  Index: IVFFlat, nlist={nlist}, nprobe={nprobe}, dim={dim}")
     start_time = time.time()
 
@@ -222,30 +236,31 @@ def compute_similarities_faiss(
     effective_nlist = min(nlist, n // 40) if n > 0 else 1
     effective_nlist = max(effective_nlist, 1)
 
-    # Build IVFFlat index on GPU for inner product (cosine sim on normalized vecs)
+    # Build IVFFlat index for inner product (cosine sim on normalized vecs)
     quantizer = faiss.IndexFlatIP(dim)
-    cpu_index = faiss.IndexIVFFlat(quantizer, dim, effective_nlist, faiss.METRIC_INNER_PRODUCT)
+    index = faiss.IndexIVFFlat(quantizer, dim, effective_nlist, faiss.METRIC_INNER_PRODUCT)
 
-    # Move index to GPU for faster training and search
-    gpu_res = faiss.StandardGpuResources()
-    gpu_index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, cpu_index)
+    # Move index to GPU if available
+    if use_gpu:
+        gpu_res = faiss.StandardGpuResources()
+        index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, index)
 
     print(f"  Training index on {n} vectors ...")
-    gpu_index.train(embeddings)
+    index.train(embeddings)
     print(f"  Adding {n} vectors to index ...")
-    gpu_index.add(embeddings)
-    gpu_index.nprobe = min(nprobe, effective_nlist)
+    index.add(embeddings)
+    index.nprobe = min(nprobe, effective_nlist)
 
     # Batch search: search k+1 to exclude self, then filter
     print(f"  Searching top-{k+1} neighbors ...")
     search_k = min(k + 1, n)
-    # Search in batches to avoid GPU OOM on very large datasets
+    # Search in batches to avoid OOM on very large datasets
     search_batch_size = 100000
     all_distances = []
     all_indices = []
     for start in range(0, n, search_batch_size):
         end = min(start + search_batch_size, n)
-        D_batch, I_batch = gpu_index.search(embeddings[start:end], search_k)
+        D_batch, I_batch = index.search(embeddings[start:end], search_k)
         all_distances.append(D_batch)
         all_indices.append(I_batch)
     D = np.vstack(all_distances)
