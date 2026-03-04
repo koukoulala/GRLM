@@ -142,7 +142,7 @@ GUIDELINES:
 2. WORD ORDER: Order words by importance (most important aspect first)
 3. CONTENT FOCUS: Focus on these aspects in order:
    a) Main product category/type (e.g., "sneakers", "laptop", "car")
-   b) Brand, Seller, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible", "dyson")
+   b) Brand, Seller, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible", "Walmart")
    c) Gender or Target Audience (e.g., "women", "men", "unisex", "kids", "family", "toddler", "pet")
    d) Style, Formality, or Occasion (e.g., "minimalist", "formal", "outdoor", "vintage")
    e) Key Physical Attribute, Price Tier, or Unique Selling Point (e.g., "leather", "budget-friendly", "wireless", "glow-in-dark")
