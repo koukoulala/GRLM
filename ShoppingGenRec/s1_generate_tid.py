@@ -1,6 +1,6 @@
 """Step 1: Generate Product Summaries & Build ID-to-Metadata Mapping
 
-Uses vLLM offline inference to generate 5-word summaries for each product,
+Uses vLLM offline inference to generate 7-word summaries for each product,
 leveraging similar items context from step 0.  The model first determines
 whether the input describes a real product or is just a general marketing
 sentence.  Non-product entries receive an empty summary ([]).
@@ -20,7 +20,7 @@ Outputs:
     - summaries_with_similarity.jsonl : per-item results with LLM output
     - id2meta.json                    : item ID -> metadata mapping
     - statistics.json                 : word frequency & conflict stats
-    - failed_items.json               : items that did not produce 5 words
+    - failed_items.json               : items that did not produce 7 words
 
 Usage:
     python s1_init_sum_meta.py \
@@ -135,23 +135,25 @@ First, carefully analyze the PRODUCT INFORMATION below. Determine whether it des
 If the information is just a general marketing slogan, a brand tagline, a vague browsing/search phrase, or does NOT describe a concrete product, output ONLY an empty list: []
 
 STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
-Generate exactly FIVE words to summarize this product following these guidelines:
+Generate exactly SEVEN words to summarize this product following these guidelines:
 
 GUIDELINES:
 1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings)
 2. WORD ORDER: Order words by importance (most important aspect first)
 3. CONTENT FOCUS: Focus on these aspects in order:
    a) Main product category/type (e.g., "sneakers", "laptop", "car")
-   b) Brand, Seller, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible", "Walmart")
-   c) Gender or Target Audience (e.g., "women", "men", "unisex", "kids", "family", "toddler", "pet")
-   d) Style, Formality, or Occasion (e.g., "minimalist", "formal", "outdoor", "vintage")
-   e) Key Physical Attribute, Price Tier, or Unique Selling Point (e.g., "leather", "budget-friendly", "wireless", "glow-in-dark")
+   b) Key Physical Attribute, Specific Model, Color, or Material (e.g., "WH-1000XM5", "leather", "red")
+   c) Brand, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible")
+   d) Seller or Retailer (e.g., "Walmart", "Amazon")
+   e) Gender or Target Audience (e.g., "women", "men", "unisex", "kids", "family", "toddler", "pet")
+   f) Style, Formality, or Occasion (e.g., "minimalist", "formal", "outdoor", "vintage")
+   g) Unique Selling Point or Price Tier (e.g., "budget-friendly", "wireless", "glow-in-dark")
 4. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
 5. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items. Each product should have some unique aspects.
 
 OUTPUT FORMAT:
 - If NOT a real product: []
-- If a real product: [word1, word2, word3, word4, word5]
+- If a real product: [word1, word2, word3, word4, word5, word6, word7]
 - NO ADDITIONAL TEXT. Do not include any explanations, thoughts, or other content.
 
 PRODUCT INFORMATION:
@@ -169,8 +171,8 @@ ANALYSIS GUIDANCE:
 3. Then, identify what makes this product unique or different
 4. Use consistent vocabulary for shared characteristics
 5. Include distinctive vocabulary for unique aspects
-6. Ensure words cover the five required aspects in order
-7. Finally, output exactly five words in this exact format: [word1, word2, word3, word4, word5], or [] if not a product.
+6. Ensure words cover the seven required aspects in order
+7. Finally, output exactly seven words in this exact format: [word1, word2, word3, word4, word5, word6, word7], or [] if not a product.
 
 Output:
 """
@@ -183,12 +185,12 @@ Output:
 # =============================================================================
 
 def parse_summary_words(content: str) -> list:
-    """Parse 5-word summary or empty list from LLM output.
+    """Parse 7-word summary or empty list from LLM output.
 
     Returns:
-        A list of 5 word strings for valid products, or an empty list []
+        A list of 7 word strings for valid products, or an empty list []
         for non-product entries.  If parsing fails, returns a list with
-        fewer than 5 non-empty words (some may be "").
+        fewer than 7 non-empty words (some may be "").
     """
     if not content:
         return []
@@ -247,8 +249,8 @@ def parse_summary_words(content: str) -> list:
                 ]
 
     words = [w for w in words if w]
-    words = words[:5]
-    while len(words) < 5:
+    words = words[:7]
+    while len(words) < 7:
         words.append("")
 
     return words
@@ -273,7 +275,7 @@ def analyze_statistics(all_items):
         non_empty_words = [w for w in words if w]
         if len(words) == 0:
             non_product_items.append(item)
-        elif len(non_empty_words) == 5:
+        elif len(non_empty_words) == 7:
             product_items.append(item)
         else:
             failed_items.append(item)
@@ -281,7 +283,7 @@ def analyze_statistics(all_items):
     total = len(all_items)
     print(f"\n0. Item Classification:")
     print(f"   Total items:              {total:>10,}")
-    print(f"   Valid products (5 words): {len(product_items):>10,} "
+    print(f"   Valid products (7 words): {len(product_items):>10,} "
           f"({len(product_items) / total * 100:.2f}%)")
     print(f"   Non-products (empty []):  {len(non_product_items):>10,} "
           f"({len(non_product_items) / total * 100:.2f}%)")
@@ -290,13 +292,13 @@ def analyze_statistics(all_items):
 
     all_words = []
     word_freq = Counter()
-    word_by_position = [Counter() for _ in range(5)]
+    word_by_position = [Counter() for _ in range(7)]
 
     for item in product_items:
         words = item.get("summary_words", [])
         all_words.extend([word for word in words if word])
         for i, word in enumerate(words):
-            if i < 5 and word:
+            if i < 7 and word:
                 word_by_position[i][word] += 1
 
     word_freq.update(all_words)
@@ -309,9 +311,11 @@ def analyze_statistics(all_items):
 
     positions = [
         "Product Category",
-        "Function/Purpose",
-        "Features",
-        "Audience",
+        "Key Attribute",
+        "Brand/Ecosystem",
+        "Seller/Retailer",
+        "Gender/Audience",
+        "Style/Occasion",
         "Unique Point",
     ]
     for i, (pos, counter) in enumerate(zip(positions, word_by_position)):
@@ -420,7 +424,7 @@ def run_vllm_inference(
         seed=SEED,
     )
 
-    sampling_params = SamplingParams(max_tokens=50, temperature=0, top_p=1.0)
+    sampling_params = SamplingParams(max_tokens=80, temperature=0, top_p=1.0)
 
     all_outputs = []
     total = len(prompts)
@@ -454,7 +458,7 @@ def run_vllm_inference(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate 5-word product summaries using vLLM"
+        description="Generate 7-word product summaries using vLLM"
     )
     parser.add_argument(
         "--item_file",
@@ -673,7 +677,7 @@ def main():
     for item in all_results:
         words = item.get("summary_words", [])
         non_empty_words = [w for w in words if w]
-        if len(non_empty_words) != 5:
+        if len(non_empty_words) != 7:
             skipped_count += 1
             continue
         # Normalize multi-word summaries (join with hyphen)
@@ -689,7 +693,7 @@ def main():
         json.dump(id2meta, f, ensure_ascii=False, indent=2)
     print(f"id2meta saved to: {id2meta_file}")
     print(f"  Mapped items: {len(id2meta):,} "
-          f"(skipped {skipped_count:,} without valid 5-word summary)")
+          f"(skipped {skipped_count:,} without valid 7-word summary)")
 
     # ---- Final summary ----
     print(f"\nCompleted! Total: {len(all_results)}, "

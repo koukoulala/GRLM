@@ -97,14 +97,14 @@ def create_sft_data(
                 for word in summary_words
                 if word and word.strip()
             ]
-            if len(valid_words) < 5:
+            if len(valid_words) < 7:
                 valid_sequence = False
                 skip_reasons["empty_summary"] += 1
                 break
-            all_summary_words.extend(valid_words[:5])
+            all_summary_words.extend(valid_words[:7])
             item_id_list.append(item_id)
             meta_msg_list.append(meta)
-            item_id2tid[item_id] = valid_words[:5]
+            item_id2tid[item_id] = valid_words[:7]
 
         # Need at least 3 items (train items + valid + test)
         if not valid_sequence or len(item_id_list) < min_items:
@@ -113,8 +113,8 @@ def create_sft_data(
             skipped_users += 1
             continue
 
-        # Need at least 15 summary words (3 items * 5 words)
-        if len(all_summary_words) < 15:
+        # Need at least 21 summary words (3 items * 7 words)
+        if len(all_summary_words) < 21:
             skipped_users += 1
             skip_reasons["too_short"] += 1
             continue
@@ -134,10 +134,10 @@ def create_sft_data(
             half = num_train_items // 2
             num_input_items = random.randint(2, half)
 
-        input_words = all_summary_words[: num_input_items * 5]
-        test_ground_truth = all_summary_words[-5:]
-        valid_ground_truth = all_summary_words[-10:-5]
-        train_output_words = all_summary_words[num_input_items * 5 : -10]
+        input_words = all_summary_words[: num_input_items * 7]
+        test_ground_truth = all_summary_words[-7:]
+        valid_ground_truth = all_summary_words[-14:-7]
+        train_output_words = all_summary_words[num_input_items * 7 : -14]
 
         sft_sample = _create_instruction_sample(
             input_words,
@@ -211,29 +211,27 @@ def _create_instruction_sample(
 ):
     """Create a single instruction-tuning sample."""
     instruction = (
-        "Based on the user's historical product interaction sequence, predict the "
-        "next product's characteristic words. \nEach product is represented by exactly "
-        "5 characteristic words enclosed in square brackets []. The historical sequence "
-        "shows the user's interaction pattern.\n"
+        "Given the user's product interaction sequence, predict the next products "
+        "in the sequence. Each product is represented by a text ID of exactly 7 "
+        "characteristic words.\n"
     )
 
     # Input: first num_input_items items
     input_text = ""
     for idx in range(num_input_items):
-        words = input_words[idx * 5 : (idx + 1) * 5]
+        words = input_words[idx * 7 : (idx + 1) * 7]
         input_text += "Item text ID: [" + ", ".join(words) + "]"
         title = meta_msg_list[idx].get("title", "")
         input_text += f" Title: {title}.\n" if title else " Title: None.\n"
 
     # Output: items from num_input_items to total_items - 2 (exclusive of valid/test)
-    output_text = ""
+    output_lines = []
     num_output_items = total_items - 2 - num_input_items
-    assert len(output_words) % 5 == 0
+    assert len(output_words) % 7 == 0
     for i in range(num_output_items):
         meta = meta_msg_list[num_input_items + i]
-        output_text += "Item text ID: [" + ", ".join(meta["summary_words"]) + "]"
-        #title = meta.get("title", "")
-        #output_text += f" Title: {title}.\n" if title else " Title: None.\n"
+        output_lines.append("Item text ID: [" + ", ".join(meta["summary_words"]) + "]")
+    output_text = "\n".join(output_lines)
 
     return {
         "instruction": instruction,
