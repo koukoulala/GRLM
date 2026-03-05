@@ -132,7 +132,7 @@ def prepare_batch_prompts(batch_data):
         prompt = (
             "Based on the user's historical product interaction sequence, predict the "
             "next product's characteristic words. \n"
-            "Each product is represented by exactly 5 characteristic words enclosed in "
+            "Each product is represented by exactly 7 characteristic words enclosed in "
             "square brackets []. The historical sequence shows the user's interaction pattern.\n"
         )
         prompt += l
