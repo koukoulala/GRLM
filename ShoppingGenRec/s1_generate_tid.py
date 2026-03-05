@@ -42,6 +42,7 @@ import time
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from tqdm import tqdm
+import torch
 
 SEED = 42
 random.seed(SEED)
@@ -534,7 +535,6 @@ def parse_args():
 def main():
     args = parse_args()
 
-    import torch
     available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
 
@@ -559,8 +559,8 @@ def main():
     all_items_dict = {item["id"]: item for item in full_data}
 
     if debug:
-        data = full_data[:100]
-        print(f"DEBUG: trimmed to {len(data)} items for processing")
+        data = random.sample(full_data, min(100, len(full_data)))
+        print(f"DEBUG: randomly sampled {len(data)} items for processing")
     else:
         data = full_data
 
