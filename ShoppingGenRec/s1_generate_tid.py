@@ -80,28 +80,50 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
     actually describes a concrete product.  If it is a general marketing phrase
     or non-product text, the model should output an empty list [].
     """
+    # Build product information block (skip empty fields to avoid blank lines)
+    info_lines = []
+
     title = item.get("title", "")
-    title_text = f"Title: {title}" if title else ""
+    if title:
+        info_lines.append(f"Title: {title}")
 
     description = item.get("description", "")
     if description:
         if len(description) > 150:
-            description_text = f"Description: {description[:150]}..."
-        else:
-            description_text = f"Description: {description}"
-    else:
-        description_text = ""
+            description = description[:150] + "..."
+        info_lines.append(f"Description: {description}")
 
     categories = item.get("categories", "")
-    categories_text = f"Categories: {categories}" if categories else ""
+    if categories:
+        info_lines.append(f"Categories: {categories}")
 
     related_queries = item.get("related_queries", "")
     if related_queries:
         if len(related_queries) > 150:
             related_queries = related_queries[:150] + "..."
-        else:
-            related_queries = related_queries
-    related_queries_text = f"Related Queries: {related_queries}" if related_queries else ""
+        info_lines.append(f"Related Queries: {related_queries}")
+
+    # Append structured attributes (from s6 enrichment)
+    # Only include Brand, Seller, Model, and non-default Gender/AgeGroup.
+    # Exclude Color, Size, Material (too granular; distracts from core product identity).
+    # Exclude Price, Market (not relevant to product summarization).
+    attributes = item.get("attributes", {})
+    for attr_name in ["Brand", "Seller", "Gender", "Color", "Size"]:
+        attr_val = attributes.get(attr_name, "")
+        if isinstance(attr_val, str):
+            attr_val = attr_val.strip()
+        if attr_val:
+            info_lines.append(f"{attr_name}: {attr_val}") 
+    # Gender: only if specific (skip "Unisex" — it's the default)
+    gender = attributes.get("Gender", "").strip()
+    if gender and gender.lower() != "unisex":
+        info_lines.append(f"Gender: {gender}")
+    # AgeGroup: only if specific (skip "Adult" — it's the default)
+    age_group = attributes.get("AgeGroup", "").strip()
+    if age_group and age_group.lower() != "adult":
+        info_lines.append(f"AgeGroup: {age_group}")
+
+    product_info_text = "\n".join(info_lines) if info_lines else "(no information)"
 
     # Prepare similar items information
     similar_items_info = []
@@ -135,21 +157,23 @@ First, carefully analyze the PRODUCT INFORMATION below. Determine whether it des
 If the information is just a general marketing slogan, a brand tagline, a vague browsing/search phrase, or does NOT describe a concrete product, output ONLY an empty list: []
 
 STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
-Generate exactly SEVEN words to summarize this product following these guidelines:
+Generate exactly SEVEN words to summarize this product. The 7 words should cover as many of the following aspects as possible, ordered by priority. Not every product has all aspects — include only what is available and informative:
 
-GUIDELINES:
+PRIORITY ORDER
+   1. Main product category or type (e.g., "headphone", "sneaker", "light")
+   2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "running")
+   3. Distinctive feature, form factor, sub-type, or specific model (e.g., "over-ear", "sphere", "WH-1000XM5")
+   4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible") — include if known
+   5. Seller or retailer (e.g., "amazon", "walmart") — include if known
+   6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional"); skip generic values like "unisex" or "adult"
+   7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget friendly")
+
+RULES:
 1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings)
-2. WORD ORDER: Order words by importance (most important aspect first)
-3. CONTENT FOCUS: Focus on these aspects in order:
-   a) Main product category/type (e.g., "sneakers", "laptop", "car")
-   b) Key Physical Attribute, Specific Model, Color, or Material (e.g., "WH-1000XM5", "leather", "red")
-   c) Brand, Platform or Ecosystem Compatibility (e.g., "nike", "apple-compatible")
-   d) Seller or Retailer (e.g., "Walmart", "Amazon")
-   e) Gender or Target Audience (e.g., "women", "men", "unisex", "kids", "family", "toddler", "pet")
-   f) Style, Formality, or Occasion (e.g., "minimalist", "formal", "outdoor", "vintage")
-   g) Unique Selling Point or Price Tier (e.g., "budget-friendly", "wireless", "glow-in-dark")
+2. COVERAGE: Try to cover as many available aspects as possible within 7 words. If brand, seller, or a specific audience is present in the product information, it SHOULD appear in the output. Only omit an aspect if the product genuinely lacks that information or the value is too generic to be useful.
+3. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
 4. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
-5. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items. Each product should have some unique aspects.
+5. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
 
 OUTPUT FORMAT:
 - If NOT a real product: []
@@ -157,22 +181,10 @@ OUTPUT FORMAT:
 - NO ADDITIONAL TEXT. Do not include any explanations, thoughts, or other content.
 
 PRODUCT INFORMATION:
-{title_text}
-{description_text}
-{categories_text}
-{related_queries_text}
+{product_info_text}
 
 TOP 5 SIMILAR PRODUCTS (for reference):
 {similar_items_text}
-
-ANALYSIS GUIDANCE:
-1. First, check whether the PRODUCT INFORMATION describes a specific, concrete product.
-2. If it IS a product, identify what it has in common with similar products (shared category, features, audience)
-3. Then, identify what makes this product unique or different
-4. Use consistent vocabulary for shared characteristics
-5. Include distinctive vocabulary for unique aspects
-6. Ensure words cover the seven required aspects in order
-7. Finally, output exactly seven words in this exact format: [word1, word2, word3, word4, word5, word6, word7], or [] if not a product.
 
 Output:
 """
@@ -308,20 +320,6 @@ def analyze_statistics(all_items):
     print("   Top 20 words:")
     for word, count in word_freq.most_common(20):
         print(f"     {word}: {count}")
-
-    positions = [
-        "Product Category",
-        "Key Attribute",
-        "Brand/Ecosystem",
-        "Seller/Retailer",
-        "Gender/Audience",
-        "Style/Occasion",
-        "Unique Point",
-    ]
-    for i, (pos, counter) in enumerate(zip(positions, word_by_position)):
-        print(f"\n   Position {i + 1} ({pos}) top 10:")
-        for word, count in counter.most_common(10):
-            print(f"     {word}: {count}")
 
     summary_tuples = [tuple(item.get("summary_words", [])) for item in product_items]
     tuple_counter = Counter(summary_tuples)
@@ -463,8 +461,8 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item.json",
-        help="Path to item metadata JSON file (merged_clean_item.json from s4)",
+        default="./raw_data/merged_clean_item_with_attr.json",
+        help="Path to item metadata JSON file (merged_clean_item_with_attr.json from s6)",
     )
     parser.add_argument(
         "--similarity_file",
@@ -475,7 +473,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./processed/",
+        default="./processed_tid/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(

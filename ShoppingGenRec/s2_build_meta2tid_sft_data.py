@@ -2,23 +2,34 @@
 
 Creates SFT training data for teaching the model to generate text IDs (TID)
 from product metadata (title + description + categories + related_queries
--> 7-word summary).
++ structured attributes -> 7-word summary).
+
+Reads merged_clean_item_with_attr.json (from preprocess s6) via id2meta.json
+which inherits the enriched attributes.
+
+Supports PageTitle item down-sampling via --pagetitle_sample_prob.
 
 Usage:
-    python s3_build_meta2tid_sft_data.py \
+    python s2_build_meta2tid_sft_data.py \
         --id2meta_file ./processed/id2meta.json \
-        --output_file ./processed/sft_data/meta2tid_sft.json
+        --output_file ./sft_data/meta2tid_sft.json \
+        --pagetitle_sample_prob 0.5
 """
 
 import os
 import json
+import random
 import argparse
+
+# Attributes to include in the product information.
+# Only Brand, Seller, Model, and non-default Gender/AgeGroup.
+# Exclude Color, Size, Material (too granular), Price, Market.
 
 
 def prepare_data(item: dict) -> dict:
     """Prepare a single SFT training sample."""
     info_lines = ["Product Information:"]
-    
+
     title = item.get("title", "")
     if title:
         info_lines.append(f"Title: {title}")
@@ -39,12 +50,28 @@ def prepare_data(item: dict) -> dict:
             related_queries = related_queries[:150] + "..."
         info_lines.append(f"Related Queries: {related_queries}")
 
+    # Append structured attributes (from s6 enrichment)
+    attributes = item.get("attributes", {})
+    for attr_name in ["Brand", "Seller", "Gender", "Color", "Size"]:
+        attr_val = attributes.get(attr_name, "")
+        if isinstance(attr_val, str):
+            attr_val = attr_val.strip()
+        if attr_val:
+            info_lines.append(f"{attr_name}: {attr_val}")
+    gender = attributes.get("Gender", "").strip()
+    if gender and gender.lower() != "unisex":
+        info_lines.append(f"Gender: {gender}")
+    age_group = attributes.get("AgeGroup", "").strip()
+    if age_group and age_group.lower() != "adult":
+        info_lines.append(f"AgeGroup: {age_group}")
+
     input_str = "\n".join(info_lines) + "\n"
 
     return {
         "instruction": (
-            "Summarize the product into a text ID consisting of exactly 7 distinct, base-form words (nouns/adjectives). "
-            "Order by importance (Category, Key Attribute, Brand/Ecosystem, Seller/Retailer, Gender/Audience, Style/Occasion, Unique Point) to highlight its uniqueness. "
+            "Summarize the product into a text ID of exactly 7 base-form words. "
+            "Cover as many aspects as available: category, function, distinctive feature, brand, seller, audience (only if specific), style/occasion. "
+            "Describe the product itself first, then fill remaining slots with brand, seller, and other metadata. "
             "Output strictly in the format: Item text ID: [word1, word2, word3, word4, word5, word6, word7]."
         ),
         "input": input_str,
@@ -68,25 +95,60 @@ def parse_args():
         default="./sft_data/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
     )
+    parser.add_argument(
+        "--pagetitle_sample_prob",
+        type=float,
+        default=0.5,
+        help="Sampling probability for PageTitle items (P-prefixed). "
+             "Set to 1.0 to keep all, 0.0 to exclude all (default: 0.5)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for PageTitle sampling (default: 42)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    random.seed(args.seed)
 
     print(f"Loading metadata: {args.id2meta_file}")
     with open(args.id2meta_file, "r", encoding="utf-8") as f:
         parent_asin2meta = json.load(f)
     print(f"Loaded {len(parent_asin2meta)} product mappings")
 
-    sft_data = [prepare_data(value) for value in parent_asin2meta.values()]
+    sft_data = []
+    num_gid = 0
+    num_ptid = 0
+    num_ptid_total = 0
+    num_ptid_sampled = 0
+
+    for key, value in parent_asin2meta.items():
+        is_pagetitle = key.startswith("P")
+        if is_pagetitle:
+            num_ptid_total += 1
+            # Down-sample PageTitle items
+            if random.random() >= args.pagetitle_sample_prob:
+                continue
+            num_ptid_sampled += 1
+            num_ptid += 1
+        else:
+            num_gid += 1
+
+        sft_data.append(prepare_data(value))
 
     os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
     with open(args.output_file, "w", encoding="utf-8") as f:
         json.dump(sft_data, f, ensure_ascii=False, indent=2)
 
-    print(f"SFT data saved to: {args.output_file}")
+    print(f"\nSFT data saved to: {args.output_file}")
     print(f"Generated {len(sft_data)} training samples")
+    print(f"  GlobalOfferId items:  {num_gid:>10,}")
+    print(f"  PageTitle items:      {num_ptid:>10,} "
+          f"(sampled from {num_ptid_total:,}, prob={args.pagetitle_sample_prob})")
 
 
 if __name__ == "__main__":
