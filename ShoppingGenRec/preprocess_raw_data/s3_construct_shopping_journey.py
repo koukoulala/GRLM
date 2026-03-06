@@ -140,7 +140,7 @@ def _normalize_event_key(event):
     return key.strip()
 
 
-def parse_user_events(events_text):
+def parse_user_events(events_text, reverse_order=False):
     """Parse USER-EVENTS text block into a list of event strings.
 
     Strips leading event numbers (e.g., "1 | ") from each event line.
@@ -152,6 +152,8 @@ def parse_user_events(events_text):
 
     Args:
         events_text: Raw text between <USER-EVENTS> and </USER-EVENTS>.
+        reverse_order: If True, reverse the event order (e.g., to put
+            oldest first). Default is False (keep original order).
 
     Returns:
         Tuple of (deduplicated event list, total raw events before dedup).
@@ -184,15 +186,14 @@ def parse_user_events(events_text):
             seen_keys.add(key)
             deduped.append(event)
 
-    # Reverse to chronological order (oldest first, newest last)
-    # so the most recent events appear at the end of the prompt,
-    # leveraging LLM recency bias for better attention.
-    deduped.reverse()
+    # Optionally reverse to chronological order (oldest first, newest last)
+    if reverse_order:
+        deduped.reverse()
 
     return deduped, len(raw_events)
 
 
-def parse_messages(messages_str):
+def parse_messages(messages_str, reverse_events=False):
     """Parse the messages JSON and extract structured data.
 
     Extracts:
@@ -202,6 +203,7 @@ def parse_messages(messages_str):
 
     Args:
         messages_str: JSON string containing the messages array.
+        reverse_events: If True, reverse the event order.
 
     Returns:
         Tuple of (user_events, raw_event_count, system_time, journeys_raw):
@@ -258,7 +260,9 @@ def parse_messages(messages_str):
             events_block = user_text[
                 last_open + len(_OPEN_TAG):close_pos
             ].strip()
-            user_events, raw_event_count = parse_user_events(events_block)
+            user_events, raw_event_count = parse_user_events(
+                events_block, reverse_order=reverse_events,
+            )
 
     # --- Extract SYSTEM-TIME ---
     # Format: <SYSTEM-TIME>\nCurrent system time (UTC): 9/21/2025\n</SYSTEM-TIME>
@@ -319,6 +323,13 @@ def parse_args():
         type=str,
         default="./raw_data",
         help="Path to the output directory (default: ./raw_data)",
+    )
+    parser.add_argument(
+        "--reverse_events",
+        action="store_true",
+        default=False,
+        help="Reverse user event order (e.g., oldest first). "
+             "Default is False (keep original order from the source data).",
     )
     return parser.parse_args()
 
@@ -426,7 +437,7 @@ def main():
             continue
 
         user_events, raw_event_count, system_time, journeys_raw = (
-            parse_messages(messages_str)
+            parse_messages(messages_str, reverse_events=args.reverse_events)
         )
 
         if user_events is None:

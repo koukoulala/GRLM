@@ -226,7 +226,7 @@ def parse_args():
     parser.add_argument(
         "--raw_attr_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/Resource/Joint_OfferAttributes.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ProductsData.tsv",
         help="Path to RawOfferAttributes.tsv "
     )
     parser.add_argument(
