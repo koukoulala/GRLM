@@ -33,9 +33,9 @@ Pipeline:
   5. Format preceding actions as a shopping event sequence in the style:
        "time_ago | action_type | description"
      where action_type is one of:
-       - Browsed   (actions with a valid PageTitle)
-       - Purchased (actions with a Source containing "Click")
-       - Searched  (actions with a non-empty Query)
+       - Browsed  (actions with a valid PageTitle or GlobalOfferId)
+       - Clicked  (actions with a Source containing "Click")
+       - Searched (actions with a non-empty Query)
   6. Construct instruction/input/output for SFT training.
 
 Usage:
@@ -136,14 +136,13 @@ def format_time_ago(seconds_diff):
 def classify_action(action):
     """Classify an action into one of three event types based on its fields.
 
-    Classification priority (highest to lowest):
-      1. Purchased — Source contains "Click" AND has a valid GlobalOfferId
-      2. Browsed   — has a non-empty PageTitle (mapped index like "P123")
-      3. Searched  — has a non-empty Query
+    Classification logic:
+      1. Clicked  — has a non-empty GlobalOfferId (user clicked on a product)
+      2. Browsed  — has a non-empty PageTitle (user browsed a page)
+      3. Searched — has a non-empty Query (user performed a search)
 
     If an action has both a GlobalOfferId and a PageTitle, the GlobalOfferId
-    (Purchase/Click) takes precedence, consistent with the sequential data
-    construction pipeline.
+    (Clicked) takes precedence.
 
     An action that doesn't match any category returns None.
 
@@ -153,24 +152,19 @@ def classify_action(action):
     Returns:
         Tuple of (event_type: str, description: str) or None if unclassifiable.
     """
-    source = action.get("Source", "")
     gid = action.get("GlobalOfferId", "")
     pt = action.get("PageTitle", "")
     query = action.get("Query", "")
 
-    # Priority 1: Click-type actions with a valid product ID -> Purchase
-    if "Click" in source and gid:
-        return "Purchased", gid
-
-    # Priority 2: Actions with a valid GlobalOfferId (non-click) -> Browsed
+    # Priority 1: Has GlobalOfferId -> Clicked (product click)
     if gid:
-        return "Browsed", gid
+        return "Clicked", gid
 
-    # Priority 3: Actions with a mapped PageTitle -> Browsed
+    # Priority 2: Has PageTitle -> Browsed (page view)
     if pt:
         return "Browsed", pt
 
-    # Priority 4: Actions with a search query -> Searched
+    # Priority 3: Has search query -> Searched
     if query:
         return "Searched", query
 
@@ -365,7 +359,7 @@ def build_event_sequence(
         event_type, raw_desc = result
 
         # Build human-readable description
-        if event_type in ("Purchased", "Browsed"):
+        if event_type in ("Clicked", "Browsed"):
             desc = get_item_description(raw_desc, id2meta, page_title_items)
         else:
             # Searched: use the query text directly
@@ -395,8 +389,8 @@ def create_instruction():
         Instruction string.
     """
     return (
-        "Given the user's search queries, browsing history, and purchase history, "
-        "predict the next product the user will interact (purchase or browse) with. Output strictly in the format: "
+        "Given the user's search queries, browsing history, and click history, "
+        "predict the next product the user will interact with. Output strictly in the format: "
         "Item text ID: [word1, word2, word3, word4, word5, word6, word7].\n"
     )
 

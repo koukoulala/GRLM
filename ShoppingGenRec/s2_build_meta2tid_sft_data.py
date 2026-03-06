@@ -69,9 +69,9 @@ def prepare_data(item: dict) -> dict:
 
     return {
         "instruction": (
-            "Summarize the product into a text ID of exactly 7 base-form words. "
-            "Cover as many aspects as available: category, function, distinctive feature, brand, seller, audience (only if specific), style/occasion. "
-            "Describe the product itself first, then fill remaining slots with brand, seller, and other metadata. "
+            "Summarize the product into a text ID of exactly 7 distinct, base-form words (nouns/adjectives). "
+            "Order by importance (Category, Key Function, Distinctive Feature, Brand, Seller, Audience, Style/Occasion) "
+            "to highlight its uniqueness and cover as many aspects as available. "
             "Output strictly in the format: Item text ID: [word1, word2, word3, word4, word5, word6, word7]."
         ),
         "input": input_str,

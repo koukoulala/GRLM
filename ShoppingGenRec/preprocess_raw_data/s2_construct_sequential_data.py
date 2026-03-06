@@ -585,11 +585,31 @@ def main():
         print(f"    Avg:  {sum(full_seq_lengths) / len(full_seq_lengths):>6.1f}")
 
     # =========================================================================
-    # Step 7: Write output files
+    # Step 7: Final source distribution statistics
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 7: Writing output files")
+    print("Step 7: Final source distribution (after all filtering)")
+    print("=" * 70)
+
+    final_source_counts = defaultdict(int)
+    for user_id, user_data in final_users.items():
+        for action in user_data["actions"]:
+            final_source_counts[action["Source"]] += 1
+
+    total_final_actions = sum(final_source_counts.values())
+    print(f"  Total final actions: {total_final_actions:>12,}")
+    print(f"  Source distribution:")
+    for src, cnt in sorted(final_source_counts.items(), key=lambda x: -x[1]):
+        pct = cnt / total_final_actions * 100 if total_final_actions > 0 else 0
+        print(f"    {src:40s} {cnt:>10,} ({pct:5.1f}%)")
+
+    # =========================================================================
+    # Step 8: Write output files
+    # =========================================================================
+    print()
+    print("=" * 70)
+    print("Step 8: Writing output files")
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -650,7 +670,7 @@ def main():
     print(f"    Total action entries: {total_actions_final:,}")
 
     # =========================================================================
-    # Step 8: Summary
+    # Step 9: Summary
     # =========================================================================
     print()
     print("=" * 70)
