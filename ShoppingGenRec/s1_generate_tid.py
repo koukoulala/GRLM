@@ -109,12 +109,27 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
     # Exclude Color, Size, Material (too granular; distracts from core product identity).
     # Exclude Price, Market (not relevant to product summarization).
     attributes = item.get("attributes", {})
-    for attr_name in ["Brand", "Seller", "Gender", "Color", "Size"]:
+    brand = attributes.get("Brand", "")
+    if isinstance(brand, str):
+        brand = " ".join(brand.split())  # strip + collapse whitespace
+    seller = attributes.get("Seller", "")
+    if isinstance(seller, str):
+        seller = " ".join(seller.split())  # strip + collapse whitespace
+    # If brand and seller are the same (case-insensitive), merge into one line
+    # to prevent LLM from outputting duplicate entries
+    if brand and seller and brand.lower() == seller.lower():
+        info_lines.append(f"Brand/Seller: {brand}")
+    else:
+        if brand:
+            info_lines.append(f"Brand: {brand}")
+        if seller:
+            info_lines.append(f"Seller: {seller}")
+    for attr_name in ["Gender", "Color", "Size"]:
         attr_val = attributes.get(attr_name, "")
         if isinstance(attr_val, str):
             attr_val = attr_val.strip()
         if attr_val:
-            info_lines.append(f"{attr_name}: {attr_val}") 
+            info_lines.append(f"{attr_name}: {attr_val}")
     # Gender: only if specific (skip "Unisex" — it's the default)
     gender = attributes.get("Gender", "").strip()
     if gender and gender.lower() != "unisex":
@@ -161,31 +176,46 @@ STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
 Generate exactly SEVEN words to summarize this product. The 7 words should cover as many of the following aspects as possible, ordered by priority. Not every product has all aspects — include only what is available and informative:
 
 PRIORITY ORDER
-   1. Main product category or type (e.g., "headphone", "sneaker", "light")
-   2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "running")
-   3. Distinctive feature, form factor, sub-type, or specific model (e.g., "over-ear", "sphere", "WH-1000XM5")
-   4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible") — include if known
-   5. Seller or retailer (e.g., "amazon", "walmart") — include if known
-   6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional"); skip generic values like "unisex" or "adult"
-   7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget friendly")
+   1. Main product category or type (e.g., "headphone", "sneaker", "cream")
+   2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "anti-aging")
+   3. Distinctive feature, form factor, or sub-type (e.g., "over-ear", "sphere", "spf-15")
+   4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible", "joss & main") — MUST include if provided
+   5. Seller or retailer (e.g., "amazon", "walmart", "home depot") — MUST include if provided
+   6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional", "cat"); skip generic values like "unisex" or "adult"
+   7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget-friendly")
 
 RULES:
-1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings)
-2. COVERAGE: Try to cover as many available aspects as possible within 7 words. If brand, seller, or a specific audience is present in the product information, it SHOULD appear in the output. Only omit an aspect if the product genuinely lacks that information or the value is too generic to be useful.
-3. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
-4. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
-5. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
+1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings). Use hyphens to combine closely related concepts into a single word (e.g., "anti-aging", "spf-15", "noise-canceling").
+2. DO NOT SPLIT PROPER NOUNS: Brand names and seller names are each ONE comma-separated entry, even if they contain multiple English words. Keep them intact — do NOT split them across entries.
+   - Brand "Home Depot" → one entry "home depot", NOT two entries "home", "depot"
+   - Brand "Joss & Main" → one entry "joss & main", NOT two entries "joss", "main"
+   - Seller "楽天市場" → one entry "楽天市場"
+3. NO DUPLICATES: Every entry in the output list must be distinct. If brand and seller are the same or very similar (e.g., Brand="Hammitt", Seller="Hammitt"), output it only ONCE and use the freed slot for another informative aspect.
+   - Example: Brand="Hammitt", Seller="Hammitt" → include "hammitt" once, NOT twice.
+4. COVERAGE: MUST cover as many available aspects as possible within 7 words. If brand is present, it MUST appear. If seller is present and different from brand, it MUST appear. If a specific audience (not "unisex" or "adult") is present, it MUST appear. Only omit an aspect if the product genuinely lacks that information.
+5. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
+6. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
+7. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
+8. LANGUAGE: Use the same language as the product information. If the product is in Japanese, Chinese, etc., the output words should also be in that language. Do NOT translate to English.
 
 OUTPUT FORMAT:
-- If NOT a real product: []
-- If a real product: [word1, word2, word3, word4, word5, word6, word7]
-- NO ADDITIONAL TEXT. Do not include any explanations, thoughts, or other content.
+- If NOT a real product: <Output>[]</Output>
+- If a real product: <Output>[word1, word2, word3, word4, word5, word6, word7]</Output>
+- Wrap your final answer in <Output></Output> tags. No text outside these tags except thinking.
 
 PRODUCT INFORMATION:
 {product_info_text}
 
 TOP 5 SIMILAR PRODUCTS (for reference):
 {similar_items_text}
+
+ANALYSIS GUIDANCE:
+1. Validate: is this a real product? If not, output []
+2. Pick category + function + feature (first 3 words)
+3. Add brand (keep intact, no splitting). If brand = seller, include once only
+4. Add seller if different from brand (keep intact, no splitting)
+5. Add audience / style / unique trait to fill remaining slots
+6. Verify: no duplicates, exactly 7 entries, same language as input
 
 Output:
 """
@@ -200,13 +230,24 @@ Output:
 def parse_summary_words(content: str) -> list:
     """Parse 7-word summary or empty list from LLM output.
 
+    Handles thinking output (<think>...</think>) by stripping it.
+    Extracts the final answer from <Output>...</Output> tags.
+
     Returns:
         A list of 7 word strings for valid products, or an empty list []
         for non-product entries.  If parsing fails, returns a list with
-        fewer than 7 non-empty words (some may be "").
+        fewer than 7 non-empty words.
     """
     if not content:
         return []
+
+    # Strip <think>...</think> blocks if present
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+
+    # Extract content from <Output>...</Output> tags (use the last match)
+    output_matches = re.findall(r"<Output>(.*?)</Output>", content, flags=re.DOTALL | re.IGNORECASE)
+    if output_matches:
+        content = output_matches[-1].strip()
 
     content_stripped = content.strip()
 
@@ -225,6 +266,8 @@ def parse_summary_words(content: str) -> list:
     match = re.search(pattern, content)
     if match:
         inner_content = match.group(1)
+        # Handle full-width commas and Japanese ideographic commas
+        inner_content = re.sub(r"[，、]", ",", inner_content)
         if "," in inner_content:
             words = [
                 word.strip().lower().strip("\"'[]") for word in inner_content.split(",")
@@ -242,6 +285,7 @@ def parse_summary_words(content: str) -> list:
                 inner = line[1:-1].strip()
                 if not inner:
                     return []
+                inner = re.sub(r"[，、]", ",", inner)
                 if "," in inner:
                     words = [
                         word.strip().lower().strip("\"'") for word in inner.split(",")
@@ -252,6 +296,7 @@ def parse_summary_words(content: str) -> list:
                     ]
                 break
         if not words:
+            content = re.sub(r"[，、]", ",", content)
             if "," in content:
                 words = [
                     word.strip().lower().strip("\"'[]") for word in content.split(",")
@@ -262,9 +307,15 @@ def parse_summary_words(content: str) -> list:
                 ]
 
     words = [w for w in words if w]
-    words = words[:7]
-    while len(words) < 7:
-        words.append("")
+    # Deduplicate words (case-insensitive), preserving order
+    seen = set()
+    deduped = []
+    for w in words:
+        w_lower = w.lower()
+        if w_lower not in seen:
+            seen.add(w_lower)
+            deduped.append(w)
+    words = deduped[:7]
 
     return words
 
@@ -361,8 +412,12 @@ def analyze_statistics(all_items):
 # vLLM Inference
 # =============================================================================
 
-def build_all_prompts(data, similarities_dict, all_items_dict, tokenizer):
+def build_all_prompts(data, similarities_dict, all_items_dict, tokenizer,
+                      enable_thinking=False):
     """Build formatted prompts for all items using the tokenizer's chat template.
+
+    Args:
+        enable_thinking: Whether to enable thinking/reasoning in the chat template.
 
     Returns:
         List of formatted prompt strings ready for vLLM generate().
@@ -377,7 +432,7 @@ def build_all_prompts(data, similarities_dict, all_items_dict, tokenizer):
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
         )
         prompts.append(formatted)
     return prompts
@@ -389,6 +444,7 @@ def run_vllm_inference(
     num_gpus,
     gpu_memory_utilization,
     max_model_len,
+    max_tokens=80,
     chunk_size=100000,
 ):
     """Run vLLM offline inference on all prompts.
@@ -403,6 +459,7 @@ def run_vllm_inference(
         num_gpus: Number of GPUs for tensor parallelism.
         gpu_memory_utilization: Fraction of GPU memory to use (0-1).
         max_model_len: Maximum context length for the model.
+        max_tokens: Maximum number of output tokens per prompt.
         chunk_size: Number of prompts per generate() call.
 
     Returns:
@@ -413,6 +470,7 @@ def run_vllm_inference(
     print(f"  Tensor parallel size: {num_gpus}")
     print(f"  GPU memory utilization: {gpu_memory_utilization}")
     print(f"  Max model length: {max_model_len}")
+    print(f"  Max output tokens: {max_tokens}")
 
     llm = LLM(
         model=model_name,
@@ -423,7 +481,7 @@ def run_vllm_inference(
         seed=SEED,
     )
 
-    sampling_params = SamplingParams(max_tokens=80, temperature=0, top_p=1.0)
+    sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0, top_p=1.0)
 
     all_outputs = []
     total = len(prompts)
@@ -525,6 +583,20 @@ def parse_args():
         help="Output path for id2meta JSON. If not set, defaults to "
              "<output_dir>/id2meta.json",
     )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=80,
+        help="Maximum number of output tokens per prompt. Increase when "
+             "using --enable_thinking (e.g., 512-1024). (default: 80)",
+    )
+    parser.add_argument(
+        "--enable_thinking",
+        action="store_true",
+        default=False,
+        help="Enable thinking/reasoning mode in chat template "
+             "(default: False)",
+    )
     return parser.parse_args()
 
 
@@ -569,11 +641,12 @@ def main():
     print(f"Loaded similarities for {len(similarities_dict)} items")
 
     # ---- Build prompts ----
-    print("\nBuilding prompts (applying chat template with enable_thinking=False) ...")
+    print(f"\nBuilding prompts (enable_thinking={args.enable_thinking}) ...")
     tokenizer = AutoTokenizer.from_pretrained(
         args.summary_model, trust_remote_code=True
     )
-    prompts = build_all_prompts(data, similarities_dict, all_items_dict, tokenizer)
+    prompts = build_all_prompts(data, similarities_dict, all_items_dict, tokenizer,
+                                enable_thinking=args.enable_thinking)
     print(f"Built {len(prompts)} prompts")
 
     if debug:
@@ -596,6 +669,7 @@ def main():
         num_gpus=num_gpus,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_model_len=args.max_model_len,
+        max_tokens=args.max_tokens,
         chunk_size=args.chunk_size,
     )
     inference_time = time.time() - start_time
