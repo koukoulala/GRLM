@@ -249,15 +249,21 @@ def _create_instruction_sample(
 
 
 def save_sft_data(sft_data: list, output_file: str):
-    """Save SFT data (full and simplified versions)."""
+    """Save SFT data (full and training versions).
+
+    Full version (with metadata): <name>_full.json
+    Training version (instruction/input/output only): <name>.json
+    """
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    with open(output_file, "w", encoding="utf-8") as f:
+    # Full version with all metadata
+    full_file = output_file.replace(".json", "_full.json")
+    with open(full_file, "w", encoding="utf-8") as f:
         json.dump(sft_data, f, ensure_ascii=False, indent=2)
-    print(f"Full data saved: {output_file}")
+    print(f"Full data saved: {full_file}")
 
-    # Simplified version (instruction, input, output only)
-    simplified_data = [
+    # Training version (instruction, input, output only)
+    training_data = [
         {
             "instruction": s["instruction"],
             "input": s["input"],
@@ -265,10 +271,9 @@ def save_sft_data(sft_data: list, output_file: str):
         }
         for s in sft_data
     ]
-    simplified_file = output_file.replace(".json", "_simplified.json")
-    with open(simplified_file, "w", encoding="utf-8") as f:
-        json.dump(simplified_data, f, ensure_ascii=False, indent=2)
-    print(f"Simplified data saved: {simplified_file}")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(training_data, f, ensure_ascii=False, indent=2)
+    print(f"Training data saved: {output_file}")
 
 
 def parse_args():
