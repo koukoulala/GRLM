@@ -1,10 +1,11 @@
 """
-Combine item data from three TSV files into a single JSON file (item.json).
+Combine item data from four TSV files into a single JSON file (item.json).
 
 Input TSV files:
   1. TitleAndCategory: SID, GlobalOfferId, Title, Category
   2. Item_Description: SID, GlobalOfferId, Title, Description
   3. ShoppingJourney_Query_Products: query_id, SID, GlobalOfferId, Title, SimilarityScore
+  4. ProductsData: auto-detected columns, uses GlobalOfferId, Title, Description
 
 Output:
   A JSON file keyed by GlobalOfferId, each item containing:
@@ -132,6 +133,29 @@ def collect_queries(rows):
     return data
 
 
+def collect_products_data(rows):
+    """Collect title and description data from ProductsData rows.
+
+    The ProductsData TSV uses auto-detected column names from the header.
+    Extracts GlobalOfferId, Title, and Description fields.
+
+    Returns:
+        A dict: GlobalOfferId -> {"titles": set, "description": str}
+    """
+    data = defaultdict(lambda: {"titles": set(), "description": ""})
+    for row in rows:
+        gid = row.get("GlobalOfferId", "").strip()
+        title = row.get("Title", "").strip()
+        description = row.get("Description", "").strip()
+        if not gid:
+            continue
+        if title:
+            data[gid]["titles"].add(title)
+        if description:
+            data[gid]["description"] = description
+    return data
+
+
 def find_conflicting_title_gids(title_sets_list):
     """Find GlobalOfferIds that have conflicting (multiple distinct) titles
     across all data sources.
@@ -178,6 +202,13 @@ def parse_args():
         "(columns: query_id, SID, GlobalOfferId, Title, SimilarityScore)",
     )
     parser.add_argument(
+        "--products_data_file",
+        type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ProductsData.tsv",
+        help="Path to the ProductsData TSV file "
+        "(columns auto-detected from header; uses GlobalOfferId, Title, Description)",
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="./raw_data",
@@ -215,10 +246,13 @@ def main():
     tc_rows = read_tsv(args.title_category_file, expected_columns=tc_columns)
     desc_rows = read_tsv(args.description_file, expected_columns=desc_columns)
     query_rows = read_tsv(args.query_products_file, expected_columns=query_columns)
+    # ProductsData: auto-detect columns from header row
+    prod_rows = read_tsv(args.products_data_file)
 
     print(f"  TitleAndCategory file:           {len(tc_rows):>10,} rows")
     print(f"  Item_Description file:           {len(desc_rows):>10,} rows")
     print(f"  ShoppingJourney_Query_Products:  {len(query_rows):>10,} rows")
+    print(f"  ProductsData file:               {len(prod_rows):>10,} rows")
 
     # -------------------------------------------------------------------------
     # Step 2: Group data by GlobalOfferId
@@ -231,15 +265,18 @@ def main():
     tc_data = collect_titles_and_categories(tc_rows)
     desc_data = collect_descriptions(desc_rows)
     query_data = collect_queries(query_rows)
+    prod_data = collect_products_data(prod_rows)
 
     tc_gids = set(tc_data.keys())
     desc_gids = set(desc_data.keys())
     query_gids = set(query_data.keys())
-    all_gids = tc_gids | desc_gids | query_gids
+    prod_gids = set(prod_data.keys())
+    all_gids = tc_gids | desc_gids | query_gids | prod_gids
 
     print(f"  Unique GlobalOfferIds in TitleAndCategory:          {len(tc_gids):>10,}")
     print(f"  Unique GlobalOfferIds in Item_Description:          {len(desc_gids):>10,}")
     print(f"  Unique GlobalOfferIds in ShoppingJourney_Query:     {len(query_gids):>10,}")
+    print(f"  Unique GlobalOfferIds in ProductsData:              {len(prod_gids):>10,}")
     print(f"  Total unique GlobalOfferIds (union):                {len(all_gids):>10,}")
 
     # Query stats
@@ -257,13 +294,20 @@ def main():
     desc_tc_overlap = desc_gids & tc_gids
     query_tc_overlap = query_gids & tc_gids
     query_desc_overlap = query_gids & desc_gids
-    all_overlap = tc_gids & desc_gids & query_gids
+    prod_tc_overlap = prod_gids & tc_gids
+    prod_desc_overlap = prod_gids & desc_gids
+    prod_query_overlap = prod_gids & query_gids
+    all_overlap = tc_gids & desc_gids & query_gids & prod_gids
     print()
     print("  --- GlobalOfferId overlap between files ---")
     print(f"  Item_Description  ∩ TitleAndCategory:               {len(desc_tc_overlap):>10,}  ({len(desc_tc_overlap)/len(desc_gids)*100:.2f}% of Desc, {len(desc_tc_overlap)/len(tc_gids)*100:.2f}% of TC)")
     print(f"  Query_Products    ∩ TitleAndCategory:               {len(query_tc_overlap):>10,}  ({len(query_tc_overlap)/len(query_gids)*100:.2f}% of Query, {len(query_tc_overlap)/len(tc_gids)*100:.2f}% of TC)")
     print(f"  Query_Products    ∩ Item_Description:               {len(query_desc_overlap):>10,}  ({len(query_desc_overlap)/len(query_gids)*100:.2f}% of Query, {len(query_desc_overlap)/len(desc_gids)*100:.2f}% of Desc)")
-    print(f"  All three files   ∩:                                {len(all_overlap):>10,}")
+    if prod_gids:
+        print(f"  ProductsData      ∩ TitleAndCategory:               {len(prod_tc_overlap):>10,}  ({len(prod_tc_overlap)/len(prod_gids)*100:.2f}% of Prod, {len(prod_tc_overlap)/len(tc_gids)*100:.2f}% of TC)")
+        print(f"  ProductsData      ∩ Item_Description:               {len(prod_desc_overlap):>10,}  ({len(prod_desc_overlap)/len(prod_gids)*100:.2f}% of Prod, {len(prod_desc_overlap)/len(desc_gids)*100:.2f}% of Desc)")
+        print(f"  ProductsData      ∩ Query_Products:                 {len(prod_query_overlap):>10,}  ({len(prod_query_overlap)/len(prod_gids)*100:.2f}% of Prod, {len(prod_query_overlap)/len(query_gids)*100:.2f}% of Query)")
+    print(f"  All files         ∩:                                {len(all_overlap):>10,}")
 
     # -------------------------------------------------------------------------
     # Step 3: Identify and remove items with conflicting titles
@@ -277,6 +321,7 @@ def main():
         {gid: d["titles"] for gid, d in tc_data.items()},
         {gid: d["titles"] for gid, d in desc_data.items()},
         {gid: d["titles"] for gid, d in query_data.items()},
+        {gid: d["titles"] for gid, d in prod_data.items()},
     ]
     conflicting_gids = find_conflicting_title_gids(title_sets_list)
     print(f"  GlobalOfferIds with conflicting titles:             {len(conflicting_gids):>10,}")
@@ -307,9 +352,9 @@ def main():
             removed_conflict.add(gid)
             continue
 
-        # Determine the title (from any source)
+        # Determine the title (prefer ProductsData, then other sources)
         title = ""
-        for source in [tc_data, desc_data, query_data]:
+        for source in [prod_data, tc_data, desc_data, query_data]:
             if gid in source and source[gid]["titles"]:
                 title = next(iter(source[gid]["titles"]))
                 break
@@ -323,8 +368,12 @@ def main():
         # Get category
         category = tc_data[gid]["category"] if gid in tc_data else ""
 
-        # Get description
-        description = desc_data[gid]["description"] if gid in desc_data else ""
+        # Get description (prefer ProductsData, fall back to Item_Description)
+        description = ""
+        if gid in prod_data and prod_data[gid]["description"]:
+            description = prod_data[gid]["description"]
+        elif gid in desc_data and desc_data[gid]["description"]:
+            description = desc_data[gid]["description"]
 
         # Get related queries (top N distinct queries by similarity score)
         related_queries_str = ""
@@ -365,6 +414,7 @@ def main():
         ("TitleAndCategory", tc_gids),
         ("Item_Description", desc_gids),
         ("Query_Products", query_gids),
+        ("ProductsData", prod_gids),
     ]
     print()
     print("  --- Per-source breakdown of removed GlobalOfferIds ---")
@@ -407,11 +457,13 @@ def main():
     tc_kept = sum(1 for gid in tc_gids if gid in items)
     desc_kept = sum(1 for gid in desc_gids if gid in items)
     query_kept = sum(1 for gid in query_gids if gid in items)
+    prod_kept = sum(1 for gid in prod_gids if gid in items)
 
     print()
     print(f"  TitleAndCategory:  {len(tc_gids):>10,} total -> {tc_kept:>10,} kept, {len(tc_gids) - tc_kept:>10,} filtered")
     print(f"  Item_Description:  {len(desc_gids):>10,} total -> {desc_kept:>10,} kept, {len(desc_gids) - desc_kept:>10,} filtered")
     print(f"  Query_Products:    {len(query_gids):>10,} total -> {query_kept:>10,} kept, {len(query_gids) - query_kept:>10,} filtered")
+    print(f"  ProductsData:      {len(prod_gids):>10,} total -> {prod_kept:>10,} kept, {len(prod_gids) - prod_kept:>10,} filtered")
 
     # -------------------------------------------------------------------------
     # Step 6: Write output

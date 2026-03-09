@@ -295,14 +295,14 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item.json",
+        default="./raw_data/merged_clean_item_with_attr.json",
         help="Path to item metadata JSON file (e.g., ./raw_data/item.json)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         default="./processed/",
-        help="Directory to save similarity results (e.g., ./processed/sum_data)",
+        help="Directory to save similarity results",
     )
     parser.add_argument(
         "--embedding_model",

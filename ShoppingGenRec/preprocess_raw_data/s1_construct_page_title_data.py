@@ -58,12 +58,18 @@ STOPWORDS = frozenset({
     "this", "that", "these", "those", "not", "no", "so", "if", "then",
     "am", "has", "had", "have", "do", "does", "did", "will", "would",
     "can", "could", "may", "might", "shall", "should",
+    # Domain / website fragments (should not count as content words)
+    "amazon", "com", "co", "jp", "uk", "de", "fr", "ca", "au", "br",
+    "www", "http", "https", "html", "htm", "org", "net",
+    "walmart", "ebay", "etsy", "target", "hsn", "qvc",
 })
 
 # Known domain / store names for suffix stripping (longest first for matching)
 KNOWN_DOMAINS = sorted([
     # Major e-commerce
-    "Amazon.com", "Amazon", "HSN", "QVC.com", "QVC", "Target", "Target.com",
+    "Amazon.com", "Amazon.co.jp", "Amazon.co.uk", "Amazon.de",
+    "Amazon.fr", "Amazon.ca", "Amazon.com.au", "Amazon",
+    "HSN", "QVC.com", "QVC", "Target", "Target.com",
     "Walmart.com", "Walmart", "eBay", "eBay.com", "Etsy", "Etsy.com",
     "Wayfair", "Wayfair.com", "Best Buy", "BestBuy.com",
     "Costco", "Costco.com", "Nordstrom", "Nordstrom.com",
@@ -160,9 +166,10 @@ def strip_domain_affixes(title):
     Returns:
         Cleaned title with domain affixes removed.
     """
-    # Strip leading domain prefix (e.g., "Amazon.com : ...", "Amazon.com | ...")
+    # Strip leading domain prefix (e.g., "Amazon.com : ...", "Amazon.co.jp: ...")
     title = re.sub(
-        r"^(?:Amazon\.com|[A-Za-z0-9]+\.(?:com|org|net|co\.uk))\s*[:|]\s*",
+        r"^(?:Amazon\.(?:com|co\.jp|co\.uk|de|fr|ca|com\.au)"
+        r"|[A-Za-z0-9]+\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br))\s*[:|]\s*",
         "", title, flags=re.IGNORECASE,
     )
 
@@ -185,7 +192,7 @@ def strip_domain_affixes(title):
             new_title = re.sub(
                 r"\s*[|:\-\u2013\u2014]\s*"
                 r"[A-Za-z0-9][A-Za-z0-9\s&'.\u00ae]*"
-                r"\.(?:com|org|net|co\.uk)\s*$",
+                r"\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br)\s*$",
                 "", title, flags=re.IGNORECASE,
             )
             if new_title != title:
@@ -248,20 +255,43 @@ def compute_canonical_key(title):
     return key.strip()
 
 
+# Regex to match CJK Unified Ideographs, Hiragana, Katakana
+_CJK_RANGE = re.compile(
+    r"[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff\u3400-\u4dbf]+"
+)
+
+
 def get_content_words(title):
     """Extract content words (excluding stopwords) from a title.
 
-    Used for computing word-overlap similarity between titles.
+    Handles both ASCII alphanumeric words and CJK characters.
+    For CJK text, extracts character bigrams as pseudo-words to enable
+    meaningful similarity comparison between titles containing
+    Japanese, Chinese, or Korean text.
 
     Args:
         title: Page title string.
 
     Returns:
-        A frozenset of lowercase content words.
+        A frozenset of lowercase content words (and CJK bigrams).
     """
+    # ASCII alphanumeric words
     words = re.findall(r"[a-z0-9]+", title.lower())
-    content = frozenset(w for w in words if w not in STOPWORDS and len(w) > 1)
-    return content
+    content = set(w for w in words if w not in STOPWORDS and len(w) > 1)
+
+    # CJK character bigrams: extract consecutive CJK runs, then split into
+    # overlapping bigrams. E.g., "深蒸し茶" (CJK run "深蒸し茶") -> bigrams
+    # "深蒸", "蒸し", "し茶". This provides meaningful similarity signals
+    # for CJK text that would otherwise be entirely ignored.
+    for match in _CJK_RANGE.finditer(title):
+        cjk_run = match.group()
+        if len(cjk_run) >= 2:
+            for i in range(len(cjk_run) - 1):
+                content.add(cjk_run[i:i+2])
+        elif len(cjk_run) == 1:
+            content.add(cjk_run)
+
+    return frozenset(content)
 
 
 def _normalize_for_non_product_check(title):

@@ -224,10 +224,15 @@ def parse_args():
              "(default: ./raw_data/merged_clean_item.json)",
     )
     parser.add_argument(
-        "--raw_attr_file",
+        "--raw_attr_files",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ProductsData.tsv",
-        help="Path to RawOfferAttributes.tsv "
+        nargs="+",
+        default=[
+            "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ProductsData.tsv",
+            "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/Resource/Joint_OfferAttributes.tsv"
+        ],
+        help="One or more TSV files with item attributes. "
+             "Files are read in order; first occurrence of each GlobalOfferId wins.",
     )
     parser.add_argument(
         "--output_file",
@@ -284,15 +289,25 @@ def main():
     print(f"  PageTitle items:                    {num_ptids:>12,} ({ptid_pct:.1f}%)")
 
     # =========================================================================
-    # Step 3: Load RawOfferAttributes.tsv (only needed GlobalOfferIds)
+    # Step 3: Load attribute TSV files (only needed GlobalOfferIds)
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 3: Loading RawOfferAttributes.tsv")
+    print(f"Step 3: Loading {len(args.raw_attr_files)} attribute TSV file(s)")
     print("=" * 70)
 
-    print(f"  File: {args.raw_attr_file}")
-    gid_to_row = load_raw_attributes(args.raw_attr_file, global_offer_ids)
+    gid_to_row = {}
+    remaining_gids = set(global_offer_ids)
+    for file_idx, tsv_path in enumerate(args.raw_attr_files, 1):
+        if not remaining_gids:
+            print(f"\n  [{file_idx}/{len(args.raw_attr_files)}] All GlobalOfferIds found, skipping remaining files.")
+            break
+        print(f"\n  [{file_idx}/{len(args.raw_attr_files)}] {tsv_path}")
+        print(f"    GlobalOfferIds still needed: {len(remaining_gids):,}")
+        partial = load_raw_attributes(tsv_path, remaining_gids)
+        gid_to_row.update(partial)
+        remaining_gids -= set(partial.keys())
+        print(f"    Matched in this file: {len(partial):,}, total matched so far: {len(gid_to_row):,}")
 
     # =========================================================================
     # Step 4: Join statistics
@@ -384,11 +399,11 @@ def main():
     print(f"  Total entries: {total_items:,}")
 
     # =========================================================================
-    # Step 8: Sample 10 entries
+    # Step 8: Sample 5 entries
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 8: Sample entries (up to 10)")
+    print("Step 8: Sample entries (up to 5)")
     print("=" * 70)
 
     # Show a mix: some GlobalOfferId with attributes, some PageTitle
@@ -410,8 +425,8 @@ def main():
     pt_sample = list(page_title_ids)[:1]
     sample_keys.extend(pt_sample)
 
-    # Trim to 10
-    sample_keys = sample_keys[:10]
+    # Trim to 5
+    sample_keys = sample_keys[:5]
 
     for idx, key in enumerate(sample_keys, 1):
         info = merged_data[key]
