@@ -36,7 +36,11 @@ import json
 import os
 import re
 import sys
+import time
+import hashlib
+import struct
 from collections import Counter, defaultdict
+from multiprocessing import Pool, cpu_count
 
 # Increase CSV field size limit to handle very large fields
 csv.field_size_limit(sys.maxsize)
@@ -339,102 +343,223 @@ class UnionFind:
         return True
 
 
+# =============================================================================
+# MinHash + LSH utilities for fast near-duplicate detection
+# =============================================================================
+
+# Global word-to-hash cache (built once, shared across processes)
+_WORD_HASH_CACHE = {}
+
+def _word_to_hashes(word, num_hashes):
+    """Convert a word to a list of hash values for MinHash.
+
+    Uses MD5-based double hashing: h_k(word) = (h1 + k * h2) mod p
+    This is much faster than computing num_hashes independent hashes.
+    """
+    if word not in _WORD_HASH_CACHE:
+        digest = hashlib.md5(word.encode("utf-8")).digest()
+        h1, h2 = struct.unpack("<QQ", digest)
+        _WORD_HASH_CACHE[word] = (h1, h2)
+    h1, h2 = _WORD_HASH_CACHE[word]
+    return [(h1 + k * h2) % ((1 << 61) - 1) for k in range(num_hashes)]
+
+
+def compute_minhash_signature(word_set, num_hashes=128):
+    """Compute a MinHash signature for a set of words.
+
+    Args:
+        word_set: frozenset of content words.
+        num_hashes: Number of hash functions (signature length).
+
+    Returns:
+        Tuple of num_hashes minimum hash values.
+    """
+    if not word_set:
+        return tuple([float("inf")] * num_hashes)
+
+    sig = [float("inf")] * num_hashes
+    for word in word_set:
+        hashes = _word_to_hashes(word, num_hashes)
+        for k in range(num_hashes):
+            if hashes[k] < sig[k]:
+                sig[k] = hashes[k]
+    return tuple(sig)
+
+
+def _compute_minhash_batch(args):
+    """Worker function for parallel MinHash computation."""
+    indices, word_sets_list, num_hashes = args
+    results = []
+    for i in indices:
+        ws = word_sets_list[i]
+        if len(ws) >= 3:  # min_words
+            sig = compute_minhash_signature(ws, num_hashes)
+        else:
+            sig = None
+        results.append((i, sig))
+    return results
+
+
 def deduplicate_by_word_overlap(titles, word_sets, threshold=0.8, min_words=3,
                                  max_posting_list_size=50000):
-    """Deduplicate titles by word-overlap similarity using Union-Find.
+    """Deduplicate titles by MinHash LSH + exact Jaccard verification.
 
-    Uses an inverted index on content words to efficiently find candidate
-    pairs, then checks Jaccard similarity. Titles with fewer than min_words
-    content words are never merged by word overlap.
+    Uses MinHash signatures with Locality-Sensitive Hashing (LSH) to
+    efficiently find candidate near-duplicate pairs, then verifies with
+    exact Jaccard similarity. Much faster than inverted-index approach
+    for large datasets.
 
-    For Jaccard >= 0.8, the word-count ratio must be <= 1.25, which
-    significantly prunes the search space.
+    The LSH parameters (num_hashes, num_bands) are automatically chosen
+    to target the given threshold.
 
     Args:
         titles: List of normalized title strings.
         word_sets: Parallel list of frozensets of content words.
         threshold: Jaccard similarity threshold for merging (default: 0.8).
         min_words: Minimum content words required for word-overlap comparison.
-        max_posting_list_size: Skip words whose posting list exceeds this size
-            to avoid quadratic blowup on very common words.
+        max_posting_list_size: Unused (kept for API compatibility).
 
     Returns:
         A list of sets, each containing indices of titles in the same group.
     """
+    import math
+
     n = len(titles)
     uf = UnionFind(n)
+    t0 = time.time()
 
-    # Build inverted index: word -> list of title indices
-    word_index = defaultdict(list)
-    for i, ws in enumerate(word_sets):
-        if len(ws) >= min_words:
-            for w in ws:
-                word_index[w].append(i)
+    # ---- Choose LSH parameters ----
+    # For threshold t, with b bands of r rows each:
+    #   P(candidate) ≈ 1 - (1 - t^r)^b
+    # We want high recall at threshold, so pick b,r to make P ≈ 0.95+ at t
+    num_hashes = 128
+    best_b, best_r = 16, 8  # default: 128 = 16 bands * 8 rows
+    # For threshold=0.8: P(0.8) = 1-(1-0.8^8)^16 ≈ 0.9986 (very high recall)
+    # For threshold=0.7: still ok. For threshold=0.9: even better.
+    # Try to find better b,r if threshold is unusual
+    best_prob = 0.0
+    for b in range(2, num_hashes + 1):
+        if num_hashes % b != 0:
+            continue
+        r = num_hashes // b
+        prob_at_t = 1 - (1 - threshold ** r) ** b
+        # Also check false positive rate at t/2
+        prob_at_half = 1 - (1 - (threshold / 2) ** r) ** b
+        score = prob_at_t - 0.5 * prob_at_half  # maximize recall, minimize FP
+        if score > best_prob:
+            best_prob = score
+            best_b, best_r = b, r
 
-    # Remove overly common words to avoid quadratic blowup
-    oversized_words = [
-        w for w, postings in word_index.items()
-        if len(postings) > max_posting_list_size
-    ]
-    for w in oversized_words:
-        del word_index[w]
-    if oversized_words:
-        print(f"    Skipped {len(oversized_words)} overly common words "
-              f"(posting list > {max_posting_list_size:,})")
+    num_bands = best_b
+    rows_per_band = best_r
+    prob_at_t = 1 - (1 - threshold ** rows_per_band) ** num_bands
+    print(f"    LSH parameters: {num_hashes} hashes = {num_bands} bands × "
+          f"{rows_per_band} rows")
+    print(f"    Estimated recall at Jaccard={threshold}: {prob_at_t:.4f}")
 
-    # For Jaccard >= threshold, word count ratio must be <= 1/threshold
+    # ---- Step A: Compute MinHash signatures (parallel) ----
+    print(f"    Computing MinHash signatures for {n:,} titles...")
+    t1 = time.time()
+
+    eligible_count = sum(1 for ws in word_sets if len(ws) >= min_words)
+    print(f"    Eligible titles (>= {min_words} content words): {eligible_count:,}")
+
+    # Use multiprocessing for large datasets
+    num_workers = min(cpu_count(), 8)
+    signatures = [None] * n
+
+    if n > 50000 and num_workers > 1:
+        # Split indices into chunks for parallel processing
+        chunk_size = max(1000, n // (num_workers * 4))
+        chunks = []
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            chunks.append((list(range(start, end)), word_sets, num_hashes))
+
+        print(f"    Using {num_workers} workers, {len(chunks)} chunks...")
+        with Pool(num_workers) as pool:
+            for batch_results in pool.imap_unordered(_compute_minhash_batch, chunks):
+                for i, sig in batch_results:
+                    signatures[i] = sig
+    else:
+        for i in range(n):
+            if len(word_sets[i]) >= min_words:
+                signatures[i] = compute_minhash_signature(word_sets[i], num_hashes)
+
+    t2 = time.time()
+    print(f"    MinHash signatures computed in {t2 - t1:.1f}s")
+
+    # ---- Step B: LSH banding — find candidate pairs ----
+    print(f"    Running LSH banding to find candidate pairs...")
+
+    # Precompute word set sizes
+    ws_sizes = [len(ws) for ws in word_sets]
     max_ratio = 1.0 / threshold  # 1.25 for threshold=0.8
+
+    candidate_pairs = set()
+    for band_idx in range(num_bands):
+        band_start = band_idx * rows_per_band
+        band_end = band_start + rows_per_band
+
+        # Hash each signature's band portion into buckets
+        buckets = defaultdict(list)
+        for i in range(n):
+            sig = signatures[i]
+            if sig is None:
+                continue
+            band_hash = hash(sig[band_start:band_end])
+            buckets[band_hash].append(i)
+
+        # Generate candidate pairs from each bucket
+        for bucket_items in buckets.values():
+            if len(bucket_items) < 2 or len(bucket_items) > 10000:
+                # Skip huge buckets (likely noise)
+                continue
+            for idx_a in range(len(bucket_items)):
+                i = bucket_items[idx_a]
+                n_i = ws_sizes[i]
+                for idx_b in range(idx_a + 1, len(bucket_items)):
+                    j = bucket_items[idx_b]
+                    n_j = ws_sizes[j]
+                    # Quick size ratio filter
+                    if max(n_i, n_j) > max_ratio * min(n_i, n_j):
+                        continue
+                    pair = (min(i, j), max(i, j))
+                    candidate_pairs.add(pair)
+
+    t3 = time.time()
+    print(f"    LSH banding done in {t3 - t2:.1f}s")
+    print(f"    Candidate pairs from LSH: {len(candidate_pairs):,}")
+
+    # ---- Step C: Verify candidates with exact Jaccard ----
+    print(f"    Verifying candidate pairs with exact Jaccard similarity...")
 
     merge_count = 0
     checked_pairs = 0
-
-    for i in range(n):
+    for i, j in candidate_pairs:
         ws_i = word_sets[i]
-        n_i = len(ws_i)
-        if n_i < min_words:
-            continue
+        ws_j = word_sets[j]
 
-        # Collect candidates from inverted index
-        candidate_counts = defaultdict(int)
-        for w in ws_i:
-            if w in word_index:
-                for j in word_index[w]:
-                    if j > i:  # Only check each pair once
-                        candidate_counts[j] += 1
+        checked_pairs += 1
+        intersection = len(ws_i & ws_j)
+        union = len(ws_i) + len(ws_j) - intersection
+        if union > 0 and intersection / union >= threshold:
+            uf.union(i, j)
+            merge_count += 1
 
-        # Check promising candidates
-        for j, shared_count in candidate_counts.items():
-            n_j = len(word_sets[j])
-
-            # Word count ratio check
-            if max(n_i, n_j) > max_ratio * min(n_i, n_j):
-                continue
-
-            # Quick lower-bound: need |A∩B| >= threshold*(|A|+|B|)/(1+threshold)
-            min_intersection = threshold * (n_i + n_j) / (1 + threshold)
-            if shared_count < min_intersection * 0.9:  # Allow some slack
-                continue
-
-            # Compute exact Jaccard similarity
-            checked_pairs += 1
-            sim = jaccard_similarity(ws_i, word_sets[j])
-            if sim >= threshold:
-                uf.union(i, j)
-                merge_count += 1
-
-        # Progress reporting for large datasets
-        if (i + 1) % 100000 == 0:
-            print(f"    Processed {i + 1:,}/{n:,} titles, "
-                  f"merges so far: {merge_count:,}")
+    t4 = time.time()
+    print(f"    Verification done in {t4 - t3:.1f}s")
 
     # Collect groups
     groups = defaultdict(set)
     for i in range(n):
         groups[uf.find(i)].add(i)
 
+    total_time = time.time() - t0
     print(f"    Candidate pairs checked: {checked_pairs:,}")
     print(f"    Word-overlap merges performed: {merge_count:,}")
     print(f"    Groups after word-overlap dedup: {len(groups):,}")
+    print(f"    Total Step 5 time: {total_time:.1f}s")
 
     return list(groups.values())
 
