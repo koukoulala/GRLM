@@ -51,7 +51,7 @@ def load_data(file_path: str) -> List[Dict]:
 def prepare_text_for_embedding(item: Dict) -> str:
     """Prepare text for embedding generation."""
     text_parts = []
-    for field in ["title", "description", "categories", "related_queries"]:
+    for field in ["title", "description", "categories"]:
         val = item.get(field, "")
         if val:
             text_parts.append(f"{field.capitalize()}: {val}")

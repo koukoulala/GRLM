@@ -66,16 +66,6 @@ DEFAULT_GAP_THRESHOLD = 7200  # 2 hours
 # Minimum number of preceding events required to form a valid input sequence.
 MIN_PRECEDING_EVENTS = 2
 
-# Time unit thresholds for human-readable relative time formatting
-_TIME_UNITS = [
-    (365 * 24 * 3600, "year"),
-    (30 * 24 * 3600, "month"),
-    (7 * 24 * 3600, "week"),
-    (24 * 3600, "day"),
-    (3600, "hour"),
-    (60, "minute"),
-]
-
 
 # =============================================================================
 # Utility Functions
@@ -105,32 +95,30 @@ def parse_timestamp(ts_str):
 def format_time_ago(seconds_diff):
     """Format a time difference in seconds into a human-readable string.
 
-    Produces strings like "2 weeks 3 days ago", "5 hours ago",
-    "1 month 2 weeks ago". Uses the two largest applicable units for
-    precision without excessive verbosity.
+    Uses simple units: "X days ago" or "X hours ago" (if < 1 day).
 
     Args:
         seconds_diff: Non-negative float, time difference in seconds.
 
     Returns:
-        Human-readable relative time string (e.g., "3 days 12 hours ago").
+        Human-readable relative time string (e.g., "3 days ago", "5 hours ago").
     """
     if seconds_diff < 60:
         return "just now"
 
-    parts = []
-    remaining = int(seconds_diff)
+    hours = int(seconds_diff // 3600)
+    days = hours // 24
 
-    for unit_seconds, unit_name in _TIME_UNITS:
-        if remaining >= unit_seconds:
-            count = remaining // unit_seconds
-            remaining %= unit_seconds
-            plural = "s" if count > 1 else ""
-            parts.append(f"{count} {unit_name}{plural}")
-            if len(parts) >= 2:
-                break
-
-    return " ".join(parts) + " ago" if parts else "just now"
+    if days >= 1:
+        plural = "s" if days > 1 else ""
+        return f"{days} day{plural} ago"
+    else:
+        if hours < 1:
+            minutes = int(seconds_diff // 60)
+            plural = "s" if minutes > 1 else ""
+            return f"{minutes} minute{plural} ago"
+        plural = "s" if hours > 1 else ""
+        return f"{hours} hour{plural} ago"
 
 
 def classify_action(action):

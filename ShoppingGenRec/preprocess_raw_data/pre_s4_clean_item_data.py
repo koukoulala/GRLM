@@ -16,8 +16,9 @@ Reads:
 Produces:
   1. merged_clean_item.json      - merged file containing cleaned items from
      both item.json and page_title_item.json, all in a unified format with
-     fields: title, description, categories, related_queries.  Page-title
-     entries have empty strings for description, categories, related_queries.
+     fields: title, description, categories, attributes.  Page-title entries
+     have empty strings for description and categories, and an empty dict
+     for attributes.
 
 Pipeline:
   1. Read item_sequential_data.txt and collect all referenced item IDs.
@@ -307,19 +308,20 @@ def main():
     # --- merged_clean_item.json ---
     # Merge cleaned item.json and page_title_item.json into a unified format.
     # All entries use the item.json schema: title, description, categories,
-    # related_queries.  Page-title entries only have title; the rest are "".
-    ITEM_FIELDS = ["title", "description", "categories", "related_queries"]
+    # attributes. Page-title entries only have title; the rest are "" / {}.
+    ITEM_FIELDS = ["title", "description", "categories"]
 
     merged_data = {}
     for gid, info in cleaned_item_data.items():
         merged_data[gid] = {field: info.get(field, "") for field in ITEM_FIELDS}
+        merged_data[gid]["attributes"] = info.get("attributes", {})
 
     for ptid, info in cleaned_pt_data.items():
         merged_data[ptid] = {
             "title": info.get("title", ""),
             "description": "",
             "categories": "",
-            "related_queries": "",
+            "attributes": {},
         }
 
     merged_output_path = os.path.join(args.output_dir, "merged_clean_item.json")

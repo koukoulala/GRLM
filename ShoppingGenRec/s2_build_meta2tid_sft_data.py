@@ -1,7 +1,7 @@
 """Step 3: Build Meta-to-TID SFT Data
 
 Creates SFT training data for teaching the model to generate text IDs (TID)
-from product metadata (title + description + categories + related_queries
+from product metadata (title + description + categories
 + structured attributes -> 7-word summary).
 
 Reads merged_clean_item_with_attr.json (from preprocess s6) via id2meta.json
@@ -43,12 +43,6 @@ def prepare_data(item: dict) -> dict:
     categories = item.get("categories", "")
     if categories:
         info_lines.append(f"Categories: {categories}")
-
-    related_queries = item.get("related_queries", "")
-    if related_queries:
-        if len(related_queries) > 150:
-            related_queries = related_queries[:150] + "..."
-        info_lines.append(f"Related Queries: {related_queries}")
 
     # Append structured attributes (from s6 enrichment)
     attributes = item.get("attributes", {})

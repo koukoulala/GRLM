@@ -1,19 +1,18 @@
 """Step 1: Generate Product Summaries & Build ID-to-Metadata Mapping
 
-Uses vLLM offline inference to generate 7-word summaries for each product,
-leveraging similar items context from step 0.  The model first determines
-whether the input describes a real product or is just a general marketing
-sentence.  Non-product entries receive an empty summary ([]).
+Supports two inference backends:
+1. vLLM offline inference (when --summary_model points to a valid local model)
+2. GitHub Copilot API (when --summary_model is empty or path doesn't exist)
 
-After inference, builds an id2meta.json mapping (previously s2_build_id2meta.py)
-that maps each item ID to its full metadata including summary words.
-
-vLLM handles batching, KV-cache management, and continuous batching
-automatically, achieving 10-30x throughput vs HuggingFace generate().
+Both backends support checkpoint/resume: intermediate results are saved to
+a checkpoint directory so that interrupted runs can continue from where they
+left off. Completed checkpoint files are loaded on startup, and only
+remaining items are processed. After all items are done, results are merged
+and checkpoint files are cleaned up.
 
 Inputs (from s0_init_emb.py):
     - merged_clean_item.json   : unified item metadata (title, description,
-                                 categories, related_queries)
+                                 categories)
     - similarities.json        : top-k similar item IDs per item
 
 Outputs:
@@ -22,13 +21,23 @@ Outputs:
     - statistics.json                 : word frequency & conflict stats
     - failed_items.json               : items that did not produce 7 words
 
-Usage:
-    python s1_init_sum_meta.py \
-        --item_file ./raw_data/merged_clean_item.json \
-        --similarity_file ./processed/similarities.json \
-        --output_dir ./processed/ \
-        --summary_model /path/to/Qwen3-8B \
+Usage (vLLM - local model):
+    python s1_generate_tid.py \\
+        --item_file ./raw_data/merged_clean_item.json \\
+        --similarity_file ./processed/similarities.json \\
+        --output_dir ./processed/ \\
+        --summary_model /path/to/Qwen3-8B \\
         --num_gpus 2
+
+Usage (Copilot API):
+    python s1_generate_tid.py \\
+        --item_file ./raw_data/merged_clean_item.json \\
+        --similarity_file ./processed/similarities.json \\
+        --output_dir ./processed/ \\
+        --summary_model "" \\
+        --token_file ./resources/tokens.txt \\
+        --copilot_model gpt-5.4 \\
+        --copilot_workers 20
 """
 
 import os
@@ -38,14 +47,22 @@ import random
 import argparse
 from collections import Counter
 import time
+import sys
 
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
 from tqdm import tqdm
-import torch
 
 SEED = 42
 random.seed(SEED)
+
+# Add resources directory to path for llm_utils import
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RESOURCES_DIR = os.path.join(SCRIPT_DIR, "resources")
+sys.path.insert(0, RESOURCES_DIR)
+from llm_utils import (load_prompts, run_llm_parallel,
+                      run_llm_parallel_with_checkpoint,
+                      load_checkpoint as _load_checkpoint_raw,
+                      save_checkpoint as _save_checkpoint_raw,
+                      cleanup_checkpoint)
 
 
 # =============================================================================
@@ -74,14 +91,8 @@ def load_similarities(similarity_file):
 # Prompt Construction
 # =============================================================================
 
-def prepare_prompt(item, top_similar_items, all_items_dict):
-    """Prepare prompt including information from the 5 most similar items.
-
-    The prompt asks the model to first determine whether the product information
-    actually describes a concrete product.  If it is a general marketing phrase
-    or non-product text, the model should output an empty list [].
-    """
-    # Build product information block (skip empty fields to avoid blank lines)
+def build_product_info_text(item):
+    """Build product information text block from item metadata."""
     info_lines = []
 
     title = item.get("title", "")
@@ -98,25 +109,14 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
     if categories:
         info_lines.append(f"Categories: {categories}")
 
-    related_queries = item.get("related_queries", "")
-    if related_queries:
-        if len(related_queries) > 150:
-            related_queries = related_queries[:150] + "..."
-        info_lines.append(f"Related Queries: {related_queries}")
-
-    # Append structured attributes (from s6 enrichment)
-    # Only include Brand, Seller, Model, and non-default Gender/AgeGroup.
-    # Exclude Color, Size, Material (too granular; distracts from core product identity).
-    # Exclude Price, Market (not relevant to product summarization).
+    # Append structured attributes
     attributes = item.get("attributes", {})
     brand = attributes.get("Brand", "")
     if isinstance(brand, str):
-        brand = " ".join(brand.split())  # strip + collapse whitespace
+        brand = " ".join(brand.split())
     seller = attributes.get("Seller", "")
     if isinstance(seller, str):
-        seller = " ".join(seller.split())  # strip + collapse whitespace
-    # If brand and seller are the same (case-insensitive), merge into one line
-    # to prevent LLM from outputting duplicate entries
+        seller = " ".join(seller.split())
     if brand and seller and brand.lower() == seller.lower():
         info_lines.append(f"Brand/Seller: {brand}")
     else:
@@ -130,18 +130,18 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
             attr_val = attr_val.strip()
         if attr_val:
             info_lines.append(f"{attr_name}: {attr_val}")
-    # Gender: only if specific (skip "Unisex" — it's the default)
     gender = attributes.get("Gender", "").strip()
     if gender and gender.lower() != "unisex":
         info_lines.append(f"Gender: {gender}")
-    # AgeGroup: only if specific (skip "Adult" — it's the default)
     age_group = attributes.get("AgeGroup", "").strip()
     if age_group and age_group.lower() != "adult":
         info_lines.append(f"AgeGroup: {age_group}")
 
-    product_info_text = "\n".join(info_lines) if info_lines else "(no information)"
+    return "\n".join(info_lines) if info_lines else "(no information)"
 
-    # Prepare similar items information
+
+def build_similar_items_text(top_similar_items, all_items_dict):
+    """Build similar items text block."""
     similar_items_info = []
     for similar_item in top_similar_items:
         similar_item_id = similar_item["item_id"]
@@ -164,63 +164,28 @@ def prepare_prompt(item, top_similar_items, all_items_dict):
                     similar_info += f" Description: {similar_desc}"
             similar_items_info.append(similar_info)
 
-    similar_items_text = "\n".join(similar_items_info) if similar_items_info else "(none)"
+    return "\n".join(similar_items_info) if similar_items_info else "(none)"
 
-    prompt = f"""You are an expert product summarizer. Your task has TWO steps:
 
-STEP 1 - PRODUCT VALIDATION:
-First, carefully analyze the PRODUCT INFORMATION below. Determine whether it describes a REAL, SPECIFIC product (e.g., a physical item, a digital product, a tool, a food item, etc.).
-If the information is just a general marketing slogan, a brand tagline, a vague browsing/search phrase, or does NOT describe a concrete product, output ONLY an empty list: []
+def prepare_prompt(item, top_similar_items, all_items_dict, prompt_template):
+    """Prepare prompt for a single item using the template from prompts.yaml.
 
-STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
-Generate exactly SEVEN words to summarize this product. The 7 words should cover as many of the following aspects as possible, ordered by priority. Not every product has all aspects — include only what is available and informative:
+    Args:
+        item: Item dict with product metadata.
+        top_similar_items: List of similar item dicts.
+        all_items_dict: Dict mapping item_id -> item dict.
+        prompt_template: Prompt template string with {product_info_text}
+                         and {similar_items_text} placeholders.
 
-PRIORITY ORDER
-   1. Main product category or type (e.g., "headphone", "sneaker", "cream")
-   2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "anti-aging")
-   3. Distinctive feature, form factor, or sub-type (e.g., "over-ear", "sphere", "spf-15")
-   4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible", "joss & main") — MUST include if provided
-   5. Seller or retailer (e.g., "amazon", "walmart", "home depot") — MUST include if provided
-   6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional", "cat"); skip generic values like "unisex" or "adult"
-   7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget-friendly")
-
-RULES:
-1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings). Use hyphens to combine closely related concepts into a single word (e.g., "anti-aging", "spf-15", "noise-canceling").
-2. DO NOT SPLIT PROPER NOUNS: Brand names and seller names are each ONE comma-separated entry, even if they contain multiple English words. Keep them intact — do NOT split them across entries.
-   - Brand "Home Depot" → one entry "home depot", NOT two entries "home", "depot"
-   - Brand "Joss & Main" → one entry "joss & main", NOT two entries "joss", "main"
-   - Seller "楽天市場" → one entry "楽天市場"
-3. NO DUPLICATES: Every entry in the output list must be distinct. If brand and seller are the same or very similar (e.g., Brand="Hammitt", Seller="Hammitt"), output it only ONCE and use the freed slot for another informative aspect.
-   - Example: Brand="Hammitt", Seller="Hammitt" → include "hammitt" once, NOT twice.
-4. COVERAGE: MUST cover as many available aspects as possible within 7 words. If brand is present, it MUST appear. If seller is present and different from brand, it MUST appear. If a specific audience (not "unisex" or "adult") is present, it MUST appear. Only omit an aspect if the product genuinely lacks that information.
-5. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
-6. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
-7. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
-8. LANGUAGE: Use the same language as the product information. If the product is in Japanese, Chinese, etc., the output words should also be in that language. Do NOT translate to English.
-
-OUTPUT FORMAT:
-- If NOT a real product: <Output>[]</Output>
-- If a real product: <Output>[word1, word2, word3, word4, word5, word6, word7]</Output>
-- Wrap your final answer in <Output></Output> tags. No text outside these tags except thinking.
-
-PRODUCT INFORMATION:
-{product_info_text}
-
-TOP 5 SIMILAR PRODUCTS (for reference):
-{similar_items_text}
-
-ANALYSIS GUIDANCE:
-1. Validate: is this a real product? If not, output []
-2. Pick category + function + feature (first 3 words)
-3. Add brand (keep intact, no splitting). If brand = seller, include once only
-4. Add seller if different from brand (keep intact, no splitting)
-5. Add audience / style / unique trait to fill remaining slots
-6. Verify: no duplicates, exactly 7 entries, same language as input
-
-Output:
-"""
-
-    return prompt
+    Returns:
+        Formatted prompt string.
+    """
+    product_info_text = build_product_info_text(item)
+    similar_items_text = build_similar_items_text(top_similar_items, all_items_dict)
+    return prompt_template.format(
+        product_info_text=product_info_text,
+        similar_items_text=similar_items_text,
+    )
 
 
 # =============================================================================
@@ -409,24 +374,85 @@ def analyze_statistics(all_items):
 
 
 # =============================================================================
+# vLLM Checkpoint Helpers (stores full result dicts, not just text)
+# =============================================================================
+
+def _load_vllm_checkpoint(checkpoint_dir):
+    """Load vLLM checkpoint results (full item dicts keyed by item id)."""
+    completed = {}
+    if not os.path.exists(checkpoint_dir):
+        return completed
+    for fname in sorted(os.listdir(checkpoint_dir)):
+        if fname.endswith('.jsonl'):
+            fpath = os.path.join(checkpoint_dir, fname)
+            with open(fpath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        result = json.loads(line)
+                        completed[result['id']] = result
+    if completed:
+        print(f"  [CHECKPOINT] Loaded {len(completed)} completed items "
+              f"from {checkpoint_dir}")
+    return completed
+
+
+def _save_vllm_checkpoint(results, checkpoint_dir, chunk_idx):
+    """Save vLLM results (list of full item dicts) to checkpoint."""
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    fpath = os.path.join(checkpoint_dir, f"chunk_{chunk_idx:05d}.jsonl")
+    with open(fpath, 'w', encoding='utf-8') as f:
+        for result in results:
+            f.write(json.dumps(result, ensure_ascii=False) + "\n")
+    print(f"  [CHECKPOINT] Saved chunk {chunk_idx}: {fpath} ({len(results)} items)")
+
+
+# =============================================================================
+# Inference Mode Detection
+# =============================================================================
+
+def should_use_copilot(summary_model):
+    """Determine whether to use Copilot API or vLLM.
+
+    Returns True if summary_model is empty or path doesn't exist.
+    """
+    if not summary_model or not summary_model.strip():
+        print("  [INFO] summary_model is empty, using Copilot API")
+        return True
+    if not os.path.exists(summary_model):
+        print(f"  [INFO] Model path not found: {summary_model}, using Copilot API")
+        return True
+    return False
+
+
+# =============================================================================
 # vLLM Inference
 # =============================================================================
 
-def build_all_prompts(data, similarities_dict, all_items_dict, tokenizer,
-                      enable_thinking=False):
-    """Build formatted prompts for all items using the tokenizer's chat template.
+def build_all_prompts_vllm(data, similarities_dict, all_items_dict, prompt_template,
+                           model_name, enable_thinking=False):
+    """Build formatted prompts for vLLM using tokenizer's chat template.
 
     Args:
-        enable_thinking: Whether to enable thinking/reasoning in the chat template.
+        data: List of item dicts.
+        similarities_dict: Dict of item_id -> similar items list.
+        all_items_dict: Dict of item_id -> item dict.
+        prompt_template: Prompt template string from prompts.yaml.
+        model_name: Path to the model (for tokenizer loading).
+        enable_thinking: Whether to enable thinking/reasoning in template.
 
     Returns:
         List of formatted prompt strings ready for vLLM generate().
     """
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     prompts = []
     for item in tqdm(data, desc="Building prompts"):
         item_id = item["id"]
         top_similar_items = similarities_dict.get(item_id, [])[:5]
-        raw_prompt = prepare_prompt(item, top_similar_items, all_items_dict)
+        raw_prompt = prepare_prompt(item, top_similar_items, all_items_dict,
+                                    prompt_template)
         messages = [{"role": "user", "content": raw_prompt}]
         formatted = tokenizer.apply_chat_template(
             messages,
@@ -446,12 +472,11 @@ def run_vllm_inference(
     max_model_len,
     max_tokens=80,
     chunk_size=100000,
+    data=None,
+    similarities_dict=None,
+    checkpoint_dir=None,
 ):
-    """Run vLLM offline inference on all prompts.
-
-    vLLM internally handles continuous batching, PagedAttention,
-    and scheduling.  We pass prompts in chunks (default 100K) to allow
-    progress tracking.
+    """Run vLLM offline inference on all prompts with checkpoint support.
 
     Args:
         prompts: List of formatted prompt strings.
@@ -461,10 +486,15 @@ def run_vllm_inference(
         max_model_len: Maximum context length for the model.
         max_tokens: Maximum number of output tokens per prompt.
         chunk_size: Number of prompts per generate() call.
+        data: List of item dicts (for checkpoint saving).
+        similarities_dict: Similarities dict (for checkpoint saving).
+        checkpoint_dir: Directory for checkpoint files (optional).
 
     Returns:
         List of generated text strings, aligned with input prompts.
     """
+    from vllm import LLM, SamplingParams
+
     print(f"\nInitializing vLLM engine ...")
     print(f"  Model: {model_name}")
     print(f"  Tensor parallel size: {num_gpus}")
@@ -502,9 +532,30 @@ def run_vllm_inference(
         print(f"  Chunk done in {chunk_elapsed:.1f}s "
               f"({throughput:.1f} items/s)")
 
+        chunk_texts = []
         for output in outputs:
             generated_text = output.outputs[0].text.strip()
-            all_outputs.append(generated_text)
+            chunk_texts.append(generated_text)
+
+        all_outputs.extend(chunk_texts)
+
+        # Save checkpoint after each vLLM chunk
+        if checkpoint_dir and data and similarities_dict:
+            chunk_data = data[start:end]
+            chunk_results = []
+            for item, gen_text in zip(chunk_data, chunk_texts):
+                words = parse_summary_words(gen_text)
+                item_id = item["id"]
+                similar_item_ids = [
+                    sim["item_id"]
+                    for sim in similarities_dict.get(item_id, [])[:5]
+                ]
+                result = item.copy()
+                result["llm_output"] = gen_text
+                result["summary_words"] = words
+                result["similar_item_ids"] = similar_item_ids
+                chunk_results.append(result)
+            _save_vllm_checkpoint(chunk_results, checkpoint_dir, chunk_idx)
 
     return all_outputs
 
@@ -515,13 +566,13 @@ def run_vllm_inference(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate 7-word product summaries using vLLM"
+        description="Generate 7-word product summaries using vLLM or Copilot API"
     )
     parser.add_argument(
         "--item_file",
         type=str,
         default="./raw_data/merged_clean_item_with_attr.json",
-        help="Path to item metadata JSON file (merged_clean_item_with_attr.json from s6)",
+        help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
@@ -532,16 +583,23 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./processed_tid/",
+        default="./processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
         "--summary_model",
         type=str,
-        # default="/data/xiaoyukou/ckpts/Qwen3-8B",
         default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
-        help="Path to summary LLM (must be vLLM-supported, e.g. Qwen3.5-9B)",
+        help="Path to local LLM for vLLM inference. Set to empty string "
+             "or non-existent path to use Copilot API instead.",
     )
+    parser.add_argument(
+        "--prompts_file",
+        type=str,
+        default="./resources/prompts.yaml",
+        help="Path to prompts.yaml file with prompt templates",
+    )
+    # --- vLLM-specific args ---
     parser.add_argument(
         "--num_gpus",
         type=int,
@@ -558,44 +616,70 @@ def parse_args():
         "--max_model_len",
         type=int,
         default=4096,
-        help="Maximum model context length. Our prompts are ~500-800 tokens + "
-             "50 output tokens, so 4096 is sufficient. Lower saves GPU memory "
-             "and increases throughput. (default: 4096)",
+        help="Maximum model context length (default: 4096)",
     )
     parser.add_argument(
         "--chunk_size",
         type=int,
         default=100000,
-        help="Number of prompts per vLLM generate() call for progress "
-             "tracking (default: 100000)",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Debug mode: only process 100 items, print sample prompt "
-             "and first few LLM outputs (default: False)",
-    )
-    parser.add_argument(
-        "--id2meta_file",
-        type=str,
-        default=None,
-        help="Output path for id2meta JSON. If not set, defaults to "
-             "<output_dir>/id2meta.json",
-    )
-    parser.add_argument(
-        "--max_tokens",
-        type=int,
-        default=80,
-        help="Maximum number of output tokens per prompt. Increase when "
-             "using --enable_thinking (e.g., 512-1024). (default: 80)",
+        help="Number of prompts per vLLM generate() call (default: 100000)",
     )
     parser.add_argument(
         "--enable_thinking",
         action="store_true",
         default=False,
-        help="Enable thinking/reasoning mode in chat template "
-             "(default: False)",
+        help="Enable thinking/reasoning mode in chat template",
+    )
+    # --- Copilot API-specific args ---
+    parser.add_argument(
+        "--token_file",
+        type=str,
+        default="./resources/tokens.txt",
+        help="Path to tokens.txt file for Copilot API authentication",
+    )
+    parser.add_argument(
+        "--copilot_model",
+        type=str,
+        default="gpt-5.2",
+        help="Copilot model name (default: gpt-5.2)",
+    )
+    parser.add_argument(
+        "--copilot_workers",
+        type=int,
+        default=20,
+        help="Number of parallel workers for Copilot API calls (default: 20)",
+    )
+    parser.add_argument(
+        "--copilot_chunk_size",
+        type=int,
+        default=10000,
+        help="Number of items per Copilot processing chunk for checkpoint "
+             "saving (default: 10000)",
+    )
+    # --- Common args ---
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=80,
+        help="Maximum number of output tokens per prompt (default: 80)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Debug mode: only process 100 items",
+    )
+    parser.add_argument(
+        "--id2meta_file",
+        type=str,
+        default=None,
+        help="Output path for id2meta JSON (default: <output_dir>/id2meta.json)",
+    )
+    parser.add_argument(
+        "--export_prompts_only",
+        action="store_true",
+        default=False,
+        help="Only export prompts to a TSV file without running inference",
     )
     return parser.parse_args()
 
@@ -606,21 +690,39 @@ def parse_args():
 
 def main():
     args = parse_args()
+    use_copilot = should_use_copilot(args.summary_model)
 
-    available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
-
-    print(f"PyTorch: {torch.__version__}, "
-          f"CUDA: {torch.cuda.is_available()}, "
-          f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
-    print(f"Using {num_gpus} GPU(s) for tensor parallelism")
+    if use_copilot:
+        print("=" * 60)
+        print("Inference mode: GitHub Copilot API")
+        print(f"  Model: {args.copilot_model}")
+        print(f"  Workers: {args.copilot_workers}")
+        print(f"  Token file: {args.token_file}")
+        print("=" * 60)
+    else:
+        import torch
+        available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
+        print("=" * 60)
+        print("Inference mode: vLLM (local model)")
+        print(f"  PyTorch: {torch.__version__}, "
+              f"CUDA: {torch.cuda.is_available()}, "
+              f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        print(f"  Using {num_gpus} GPU(s) for tensor parallelism")
+        print("=" * 60)
 
     debug = args.debug
     if debug:
         print("\n*** DEBUG MODE: processing only 100 items ***\n")
+
+    # ---- Load prompt template from prompts.yaml ----
+    print(f"\nLoading prompt template from: {args.prompts_file}")
+    prompts_config = load_prompts(args.prompts_file)
+    prompt_template = prompts_config['product_summary']['user']
+    print("  Prompt template loaded successfully")
 
     # ---- Load data ----
     print(f"\nLoading data: {args.item_file}")
@@ -640,66 +742,152 @@ def main():
     similarities_dict = load_similarities(args.similarity_file)
     print(f"Loaded similarities for {len(similarities_dict)} items")
 
-    # ---- Build prompts ----
-    print(f"\nBuilding prompts (enable_thinking={args.enable_thinking}) ...")
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.summary_model, trust_remote_code=True
-    )
-    prompts = build_all_prompts(data, similarities_dict, all_items_dict, tokenizer,
-                                enable_thinking=args.enable_thinking)
-    print(f"Built {len(prompts)} prompts")
+    # ---- Export prompts only (if requested) ----
+    if args.export_prompts_only:
+        os.makedirs(args.output_dir, exist_ok=True)
+        prompts_file = os.path.join(args.output_dir, "prompts.tsv")
+        print(f"\nExporting prompts to: {prompts_file}")
+        with open(prompts_file, "w", encoding="utf-8") as f:
+            f.write("item_id\tprompt\n")
+            for item in tqdm(data, desc="Building prompts"):
+                item_id = item["id"]
+                top_similar_items = similarities_dict.get(item_id, [])[:5]
+                raw_prompt = prepare_prompt(
+                    item, top_similar_items, all_items_dict, prompt_template
+                )
+                escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
+                f.write(f"{item_id}\t{escaped_prompt}\n")
+        file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
+        print(f"  Saved {len(data):,} prompts ({file_size_mb:.1f} MB)")
+        print("\nDone! (--export_prompts_only mode, inference skipped)")
+        return
 
-    if debug:
-        print(f"\n{'='*60}")
-        print("[DEBUG] Full sample prompt (first item):")
-        print(prompts[0])
-        print(f"{'='*60}")
-        # Print a few more prompts (truncated) so we can see if similarities work
-        for idx in range(1, min(5, len(prompts))):
-            print(f"\n[DEBUG] Prompt #{idx+1} (item ID: {data[idx]['id']}):")
-            print(prompts[idx])
-            print(f"{'='*60}")
-        print()
+    # ---- Checkpoint setup ----
+    checkpoint_dir = os.path.join(args.output_dir, "_s1_checkpoint")
 
-    # ---- vLLM inference ----
+    # ---- Run inference ----
     start_time = time.time()
-    generated_texts = run_vllm_inference(
-        prompts,
-        model_name=args.summary_model,
-        num_gpus=num_gpus,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_model_len,
-        max_tokens=args.max_tokens,
-        chunk_size=args.chunk_size,
-    )
+
+    if use_copilot:
+        # --- Copilot API path ---
+        # Build (item_id, prompt) inputs for all items
+        print("\nBuilding prompts for Copilot API ...")
+        copilot_inputs = []
+        for item in tqdm(data, desc="Building prompts"):
+            item_id = item["id"]
+            top_similar_items = similarities_dict.get(item_id, [])[:5]
+            raw_prompt = prepare_prompt(
+                item, top_similar_items, all_items_dict, prompt_template
+            )
+            copilot_inputs.append((item_id, raw_prompt))
+
+        # Use shared run_llm_parallel_with_checkpoint
+        copilot_results = run_llm_parallel_with_checkpoint(
+            inputs=copilot_inputs,
+            token_file=args.token_file,
+            checkpoint_dir=checkpoint_dir,
+            num_workers=args.copilot_workers,
+            model=args.copilot_model,
+            temperature=0,
+            max_tokens=args.max_tokens,
+            chunk_size=args.copilot_chunk_size,
+        )
+
+        # Convert (item_id, llm_output) results to full result dicts
+        copilot_map = {item_id: gen_text for item_id, gen_text in copilot_results}
+        all_results = []
+        for item in data:
+            item_id = item["id"]
+            gen_text = copilot_map.get(item_id, "")
+            words = parse_summary_words(gen_text)
+            similar_item_ids = [
+                sim["item_id"]
+                for sim in similarities_dict.get(item_id, [])[:5]
+            ]
+            result = item.copy()
+            result["llm_output"] = gen_text
+            result["summary_words"] = words
+            result["similar_item_ids"] = similar_item_ids
+            all_results.append(result)
+    else:
+        # --- vLLM path (with checkpoint/resume) ---
+        # Load checkpoint to skip already-processed items
+        completed = _load_vllm_checkpoint(checkpoint_dir)
+        remaining_data = [item for item in data if item["id"] not in completed]
+
+        if not remaining_data:
+            print(f"  All {len(data)} items already completed from checkpoint")
+            all_results = [completed[item["id"]] for item in data]
+        else:
+            if completed:
+                print(f"  Items to process: {len(remaining_data)} "
+                      f"(skipped {len(completed)} from checkpoint)")
+
+            # Build prompts for remaining items
+            print(f"\nBuilding prompts (enable_thinking={args.enable_thinking}) ...")
+            prompts = build_all_prompts_vllm(
+                remaining_data, similarities_dict, all_items_dict,
+                prompt_template, args.summary_model, args.enable_thinking
+            )
+            print(f"Built {len(prompts)} prompts")
+
+            if debug:
+                print(f"\n{'='*60}")
+                print("[DEBUG] Full sample prompt (first item):")
+                print(prompts[0])
+                print(f"{'='*60}")
+                for idx in range(1, min(5, len(prompts))):
+                    print(f"\n[DEBUG] Prompt #{idx+1} "
+                          f"(item ID: {remaining_data[idx]['id']}):")
+                    print(prompts[idx])
+                    print(f"{'='*60}")
+                print()
+
+            # Run vLLM inference with checkpoint saving
+            generated_texts = run_vllm_inference(
+                prompts,
+                model_name=args.summary_model,
+                num_gpus=num_gpus,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                max_model_len=args.max_model_len,
+                max_tokens=args.max_tokens,
+                chunk_size=args.chunk_size,
+                data=remaining_data,
+                similarities_dict=similarities_dict,
+                checkpoint_dir=checkpoint_dir,
+            )
+
+            # Parse results for remaining items
+            print("\nParsing LLM outputs ...")
+            for item, gen_text in zip(remaining_data, generated_texts):
+                words = parse_summary_words(gen_text)
+                item_id = item["id"]
+                similar_item_ids = [
+                    sim["item_id"]
+                    for sim in similarities_dict.get(item_id, [])[:5]
+                ]
+                result = item.copy()
+                result["llm_output"] = gen_text
+                result["summary_words"] = words
+                result["similar_item_ids"] = similar_item_ids
+                completed[item_id] = result
+
+            # Merge: build all_results in original data order
+            all_results = [completed[item["id"]] for item in data]
+
     inference_time = time.time() - start_time
-    print(f"\nTotal vLLM inference time: {inference_time:.1f}s "
+    print(f"\nTotal inference time: {inference_time:.1f}s "
           f"({len(data) / inference_time:.1f} items/s)")
 
-    # ---- Parse results ----
-    print("\nParsing LLM outputs ...")
-    all_results = []
-    for item, gen_text in zip(data, generated_texts):
-        words = parse_summary_words(gen_text)
-        item_id = item["id"]
-        similar_item_ids = [
-            sim["item_id"] for sim in similarities_dict.get(item_id, [])[:5]
-        ]
-        result = item.copy()
-        result["llm_output"] = gen_text
-        result["summary_words"] = words
-        result["similar_item_ids"] = similar_item_ids
-        all_results.append(result)
-
-    # Print first few debug examples
+    # Print first few examples
     num_debug_show = 10 if debug else 3
     print(f"\n{'='*60}")
     print(f"First {num_debug_show} LLM outputs:")
     for idx, res in enumerate(all_results[:num_debug_show]):
         print(f"\n  [{idx+1}] ID={res['id']}")
         print(f"      Title: {res.get('title', 'N/A')[:120]}")
-        print(f"      LLM raw output: {res['llm_output']}")
-        print(f"      Parsed words:   {res['summary_words']}")
+        print(f"      LLM raw output: {res.get('llm_output', 'N/A')[:200]}")
+        print(f"      Parsed words:   {res.get('summary_words', [])}")
     print(f"\n{'='*60}")
 
     # ---- Save results ----
@@ -742,7 +930,7 @@ def main():
     print(f"Failed/non-product items saved to: {failed_file} "
           f"({len(all_problematic)} items)")
 
-    # ---- Build id2meta mapping (previously s2_build_id2meta.py) ----
+    # ---- Build id2meta mapping ----
     print("\nBuilding id2meta mapping ...")
     id2meta = {}
     skipped_count = 0
@@ -766,6 +954,9 @@ def main():
     print(f"id2meta saved to: {id2meta_file}")
     print(f"  Mapped items: {len(id2meta):,} "
           f"(skipped {skipped_count:,} without valid 7-word summary)")
+
+    # ---- Clean up checkpoint ----
+    cleanup_checkpoint(checkpoint_dir)
 
     # ---- Final summary ----
     print(f"\nCompleted! Total: {len(all_results)}, "

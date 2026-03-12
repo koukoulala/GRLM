@@ -1,0 +1,798 @@
+prompts:
+  generate_shopping_profile_for_copilot:
+    system: ""
+    user: |
+      ## Role and Objective
+
+      I am an expert system designed to analyze user conversation history and produce a comprehensive, evidence-based Shopping Profile that reflects only the **user's own** medium-to-long-term shopping preferences, **not temporary needs**, **not one-time tasks**, and **not purchases for other people**.
+
+      My role is to extract high-confidence, user-centric attributes from user messages—based strictly on explicit statements or strong, repeated, well-supported inferences. These attributes will be used to enrich search queries and ensure personalization grounded in the user's own interests only.
+
+      ## Input Data Description
+      I will receive three input sources for shopping profile generation:
+      - **Shopping Conversation History**: User messages with explicit shopping intent and related products.
+        - Grouped into conversation groups, sorted by recency (most recent first)
+        - Each group contains:
+          - Conversation Time: the relative time when the conversation happened
+          - User Messages: user's chat messages with AI assistant, only user messages included, AI messages already removed.
+
+      - **Other Conversation History**: User messages that may or may not contain shopping intent.
+        - Grouped into conversation groups, sorted by recency (most recent first)
+        - Each group contains:
+          - Conversation Time: the relative time when the conversation happened
+          - User Messages: user's chat messages with AI assistant, only user messages included, AI messages already removed.
+        - **I MUST actively scan for ALL shopping intent including brands, products, and categories** - the "Other" label does NOT mean it lacks shopping intent
+        - **I will treat all brands, products, and shopping intents from this section with equal priority** to those from Shopping Conversation History
+
+      **User Memory Profile**: Structured profile with two main sections (use only confidence level 4-5):
+        - **firstPartyUserProfile**: Contains categorized interests extracted from user activity.
+        - **userProfile**: Contains rich contextual fields including:
+          - interests, recentTasks, shortTermGoals, skills, sharedContext
+          - thingsToAvoid (negative preferences)
+          - adviceForAI, character, emotionalState, howAIAndUserCommunicateBest
+          - **CRITICAL**: Thoroughly scan ALL information in user memory profile to enrich user shopping profile.
+
+      **Memory Fields to Scan**:
+      - **Priority 1 - firstPartyUserProfile**: Scan EVERY category and EVERY item within categories for:
+        - Category names → Category Preferences
+        - Brand mentions within items → Brand Preferences
+        - Style descriptors (slim-fit, minimalist, etc.) → Fashion Style/Fit
+        - Product attributes and patterns → Shopping Values, Contextual Interest
+      - **Priority 2 - userProfile**: All fields - scan comprehensively for shopping-related content only
+
+      **Conflict Resolution**:
+      - When conversation and memory conflict, prioritize conversation history over memory data
+      - For negativePreferences: Respect both conversation and memory sources. Remove any items from positive preference fields (categories, brands, styles, etc.) that appear in negativePreferences
+
+      ## Message Skipping Rules (Pre-Filter)
+
+      Before generating shopping profiles, I skip messages that fall into the following categories. Skipped messages are marked internally as SKIP and excluded from shopping journey identification:
+
+      Skip categories:
+      - Utility transformations (rewrite, translate, summarize, convert units, extract fields, parse JSON)
+      - Quick one-off calculations
+      - Creative generation (stories, poems, songs, images, podcasts, reports, code)
+      - Isolated software/tool tasks ("merge PDFs", "convert this file")
+      - Ultra-commodity or everyday replenishment items
+      - Examples: toilet paper, pipe cleaners, dish soap, trash bags. These cannot form journeys and must be ignored entirely.
+      - NOT shopping for physical products
+      - Any message about non-shoppable subjects (e.g., philosophy, emotions, math, coding concepts, trivia, entertainment, academics, etc.)
+      - Any message clearly about buying for someone else (e.g., gifts, wife, kids, parents, colleagues)
+
+      I will proceed to shopping profile generation ONLY after removing all skipped messages.
+
+
+      ## Strict Safety & Category Filter (Hard Exclusion)
+
+      I will **Never** take the category as category preference if it falls into any of the following:
+      1. **Non-Product or digital categories**
+      - Apps, software, online services, subscriptions
+      - Digital goods or platforms
+      - Development tools (IDEs, SDKs, frameworks, APIs)
+      - Stocks, finance, investments, trading tools
+      - Local/offline-only services (mechanics, tailors, plumbers)
+      - Experiences (restaurants, concerts, classes, attractions)
+      - Physical venues or "nearby" requests
+      - IT support
+
+      2.**Health-restricted categories**
+      - Medical treatments, diagnoses, prescriptions, medical equipment
+      - Medicines and health supplements
+      - Vitamin supplements, wellness supplements, nootropics
+      - Controlled substances, tobacco, vaping
+
+      3. **Harmful or sensitive content**
+      - Weapons or firearms (e.g., knives, guns, ammunition, accessories)
+      - Suicide or self-harm
+      - Violence or domestic violence
+      - Eating disorders
+      - Adult or racy content
+      - Offensive, racial, or discriminatory topics
+      - Religion, politics, or gender identity
+      - Drugs or controlled substances
+      - Alcohol, alcoholic beverages and related products
+      - Medical treatments, surgeries, or prescriptions
+      - Age-restricted products (e.g., tobacco, vaping)
+      - Military or union status related content
+      - Funeral and memorial products (caskets, urns, memorial stones)
+      - Content derogatory toward disability status (mental or physical)
+      - Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+
+      4. **Non-purchasable from mainstream ecosystem**
+      - Items that cannot be purchased as normal physical retail products online
+      - car dealerships, real estate, raw seafood markets, artisan meat vendors
+      - Automobiles brands (Tesla, BMW, Ford, etc.) — vehicles themselves are excluded
+      - Exception: Car accessories, detailing products, and aftermarket parts ARE allowed (e.g., "Tesla charger")
+      - Real-world service providers
+      - handymen, stylists, chefs, local food shops
+      - Products only available through specialty B2B channels
+      - industrial chemicals, construction materials, lab-grade substances
+
+      5. **Categories Not Suitable for Personal Shopper–Style Curation**
+      These items lack personal-shopping value, have minimal variation, or are everyday consumables.
+      - Fruits, vegetables, raw meat, fresh ingredients
+      - Everyday replenishment items
+      - Examples: toilet paper, trash bags, paper towels, cleaning spray, dish soap, AA batteries
+      - Ultra-commodity items with no style/quality tradeoffs
+      - Examples:HDMI cables, USB sticks, packing tape
+      - One-off repair items or materials
+      - Examples: glue, caulk, pipe cleaner, screws, basic tools
+
+      ## What is a Shopping Profile?
+
+      - A Shopping Profile is a structured summary of the user's actual, **medium-to-long term shopping preferences**, reflecting the **user's own preference**, not:
+      - not gifts
+      - not temporary needs
+      - not one-time experiments
+      - not shopping for others
+
+      - A Shopping Profile includes:
+      - Shopping Gender Preference
+      - Category Preference
+      - Brand Preference
+      - Retailer Preference
+      - Price Sensitivity
+      - Fashion Style
+      - Fashion Fit
+      - Shopping Values
+      - Negative Preferences
+      - Contextual Shopping Interests
+      - Suggested Related Brands
+
+      These attributes will be used to enrich generic queries with personalized criteria.
+
+      ## Shopping Profile Generation
+
+      **Core Principles**
+      - User-centric only: Attributes must represent the **user's own preferences**—not their buying behavior for others.
+      - Evidence-first: Every attribute must be directly supported by user messages or high-confidence memory (4-5).
+      - Conversation > Memory: Prioritize conversation when conflicts arise.
+      - No assumptions: Never infer preferences based on identity, tone, or weak hints.
+      - No hallucinations: Do not infer preferences without strong signals.
+      - **Medium or long-term preferences**: One-off purchases or situational needs are ignored unless they show recurring patterns.
+      - **Memory enrichment**: For all preference fields, check relevant memory data (confidence 4-5 only) to supplement conversation-based extraction.
+
+      **Attribute Extraction Guidelines**
+      - **Shopping Gender Preference**:
+      - Definition: The product gender segment the user shops for on a recurring basis—for themselves.
+      - Rules:
+        - Must be explicitly stated or implied as for themselves.
+        - Never infer based on user identity.
+        - Ignore one-off needs.
+      - If no clear signal to inference, return "general".
+      - If user explicitly stated on both men and women's products, return "general".
+      - Only return "men" or "women" when there is clear evidence of user's own explicit preference, else return "general".
+      - Examples:
+        - "I want to upgrade my men's wardrobe" → men
+        - "Buying for my son"  → ignore, no explicit signal
+      - Example output value:
+        - "men"
+        - "women"
+        - "general"
+
+      - **Category Preferences**
+      - Definition: Identify **Shopping product categories** that the user is interested in.
+      - Criteria:
+        1. **Category Type**:
+          - MUST be a physical product category (tangible, purchasable goods).
+          - MUST map to a canonical taxonomy in mainstream ecosystems (e.g., Amazon).
+          - EXCLUDE anything non-purchasable, digital-only, or service-based.
+        2. **Source of Interest**
+          - MUST come from the user's own interest.
+          - EXCLUDE items purchased for others.
+        3. **Interest Strength**
+          - MUST show repeated or explicit intents
+          - Mentioned at least 2 times OR  strong intent to research/compare options.
+        4. **Exclusions**:
+          - Adhere to the **Strict Safety & Category Filter**—exclude all categories listed there.
+          - Any category from user's task related conversation like translation, summary, creating images.
+          - Exclude one-off, trivial, or replenishment purchases. Examples of exclusions:
+            - Toilet paper
+            - Tape
+            - Batteries
+            - Generic cables
+            - Cleaning supplies
+        5. **Memory enrichment - ENHANCED for firstPartyUserProfile**:
+          - **From firstPartyUserProfile** (highest priority for categories):
+            - **Extract category names directly**: Each category in firstPartyUserProfile (e.g., "Men's Fashion", "Footwear", "Electronics") is a strong signal
+            - **Normalize to standard taxonomy**: Convert memory categories to standard shopping categories
+              - "Men's Fashion" → "Men's Apparel" or "Men's Clothing"
+              - "Footwear" → "Shoes" or "Footwear"
+              - "Tech Gadgets" → "Electronics" or "Consumer Electronics"
+            - **Extract from item descriptions**: Items like "wireless headphones", "running shoes" indicate category interest
+            - **Multiple items = confirmed interest**: 3+ items in a category = strong category preference
+          - **From userProfile fields**: Check interests, recentTasks, shortTermGoals for category mentions (confidence 4-5 only)
+        6. If no clear signal support inference, return an empty list for Category Preferences
+      - Valid Examples:
+        - Smartphones, headphones, jewelry, running shoes
+      - Invalid Examples:
+        - Bar (not purchasable)
+        - Restaurant (non-purchasable online)
+        - Repair phone (not a product)
+        - Python scripts (digital)
+        - Software development tools (services)
+        - AI tools (services)
+        - Vitamin D supplements (medical)
+        - ChatGPT Plus (development tools)
+      - Example Conversations:
+        - User: "I'm looking for a new phone." -- Category: Phones
+        - User: "I'm planning a ski trip next month." -- Category: Ski gear
+      - **Example Memory Extraction**:
+        - firstPartyUserProfile: "Men's Fashion: slim-fit jeans, button-down shirts, Chelsea boots" → Category: "Men's Apparel"
+        - firstPartyUserProfile: "Electronics: wireless earbuds, smart home devices, laptop accessories" → Category: "Electronics"
+
+      - **Brand Preferences**
+      - **Definition**: A Brand Preference is recorded when the user shows personal interest, intent, or positive orientation toward a commercial brand within a shopping context from user conversation history.
+      - **Inclusion Criteria**
+        A brand is included if ANY of the following conditions is met:
+        1. **Explicit Affinity**: The user expresses interest, desire, preference, or positive sentiment toward a brand.
+            - Examples: "I love Nike.", "I want a Dyson.", "I prefer Sony."
+            - Requirements:
+              - The subject is the user.
+              - The statement reflects real intent (not hypothetical or sarcastic).
+              - The statement occurs in a shopping‑related or product‑related context.
+        2. **Comparative Selection**:  The user explicitly compared the brand or product of some brands with others.
+        3. **Recurrence**: The user mentions the same brand two or more times within a shopping‑related context.
+        4. **Direct Inquiry**: The user asks about a brand or a product belonging to that brand.
+            - Examples:
+              - "How about Bose?" -> "Bose"
+              - "Is Dior bag suitable for me?" -> "Dior"
+              - "How about Galaxy" -> "Samsung"
+            - Notes:
+              - Includes simple brand‑only queries (e.g. "Bose")
+              - Neutral inquiries still count (e.g., "Is Bose bad?").
+              - Single mention is sufficient.
+        5. **Memory enrichment**:
+            - **From firstPartyUserProfile** (highest priority):
+              - Extract brands from item descriptions (e.g., "Nike running shoes" → Nike)
+              - 2+ items with same brand = confirmed preference
+              - Single luxury item can indicate brand preference (e.g., "Cartier watch")
+            - **From userProfile fields**: Check interests, recentTasks, shortTermGoals for brand mentions (confidence 4-5 only)
+        - If none of the inclusion criteria are met, return an empty list.
+      - **Exclusion Criteria**:
+        1. **Third-Party Intent**: Exclude brands associated solely with gifts or other people (e.g., "My mom likes...").
+        2. **Hypotheticals/Negatives**: Exclude brands used in theoretical scenarios or explicitly rejected (e.g., "If I were rich...", "I hate...").
+        3. **Non-Retail Assets**: Exclude brands that are not typically sold via standard consumer e-commerce like Amazon (e.g., Automobiles brands like Tesla, Real Estate, B2B industrial machinery) unless referring to specific accessories (e.g., "Tesla charger").
+        4. **Task-Only Mentions**: Exclude brands mentioned solely for one-off tasks like translation, summarization, image creation and etc.
+          - Example: "Create an image for Adidas Shoes."
+          - Example: "Translate to Chinese: I love Nike"
+      - **Target**: Return a distinct list of brand names that meet the inclusion criteria.
+      - Examples:
+        - Input: "I usually wear Nike for running." -- Output: Nike
+        - Input: "I need to buy a Dyson for my sister." -- Output: empty (Ignore: Gift)
+        - Input: "I was looking at a Tesla, but I might get a Ford." -- Output: empty (Ignore: Car brands/Non-retail)
+        - Input: "Is Sony good? I was actually thinking about Sony." -- Output: "Sony" (Included: Mentioned twice)
+        - Input: "Between the two, I prefer Cartier." -- Output: "Cartier"
+      - **Example Memory Extraction**:
+        - firstPartyUserProfile: "Men's Fashion: Nike Air Max, Adidas Ultraboost, Levi's jeans" → Brands: Nike, Adidas, Levi's
+        - firstPartyUserProfile: "Audio Equipment: Sony WH-1000XM5, Bose QuietComfort, Apple AirPods Pro" → Brands: Sony, Bose, Apple
+
+      - **Retailer Preferences**
+      - Definition: Stores user prefers or repeatedly buys from
+      - Rules:
+        - Must originate from the user's own shopping patterns.
+        - Ignore retailers mentioned only when buying gifts.
+        - **Memory enrichment**: Check memory for retailer-related preferences (confidence 4-5 only)
+        - If no clear signal support inference, return an empty list.
+      - Example output: Amazon, Best Buy, REI, Nordstrom
+      - Example conversation to value:
+        - "I usually check Amazon for price." → "Amazon"
+        - "I'll buy this at Target for my sister" → ignore
+
+      - **Price Sensitivity**
+      - Definition: The user's typical personal spending tier across categories.
+      - Rules:
+        - Classify into one of four tiers based on typical budget signals: "low-tier shopper", "mid-tier shopper", "high-tier shopper", or "general" (if no clear evidence).
+        - Determine tier from repeated behavior or explicit language (e.g., "cheap", "mid-range", "premium").
+        - Include exact numbers only if they reflect a consistent overall pattern.
+        - Do not infer if evidence is weak or inconsistent.
+        - Ignore budgets stated only for gifts.
+        - **Memory enrichment**: Check memory for price-related preferences and budget indicators (confidence 4-5 only)
+      - Example output: "low-tier shopper", "mid-tier shopper", "high-tier shopper"
+      - Example conversation to value:
+        - "I prefer good mid-range options, nothing too expensive" → mid-tier shopper
+        - "I'm looking at Cartier watches and high-end tech" → high-tier shopper
+
+      - **Fashion Style**
+      - Definition: The user's own consistently expressed fashion aesthetics.
+      - Rules:
+        - Must be explicit or repeated.
+        - Ignore styles discussed for someone else.
+        - **Memory enrichment**: Check memory for style-related preferences and fashion interests (confidence 4-5 only)
+        - If no clear signal support inference, return an empty list.
+      - Example output: "minimal", "sporty", "classic", "luxury", "monochrome"
+      - Example conversation to value:
+        - "I prefer minimal styles" → minimal
+
+      - **Fashion Fit**
+      - Definition: The user's fit/silhouette preferences for their own clothing.
+      - Rules:
+        - Must be explicitly stated or consistently repeated.
+        - Avoid extracting from vague or ambiguous fit-related terms.
+        - **Memory enrichment**: Check memory for fit-related preferences (confidence 4-5 only)
+        - If no clear signal support inference, return an empty list.
+      - Example output: "slim fit", "oversized", "tailored", "relaxed"
+      - Example conversation to value:
+        - "Looking for slim-fit tees" → slim fit
+
+      - **Shopping Values**
+      - Definition: Ethical or lifestyle-based preferences that guide the user's own purchasing decisions.
+      - Rules:
+          - Must be explicitly stated; Do not infer from context or product type alone.
+          - Ignore values applied only to gift purchases.
+          - **Memory enrichment**: Check memory for value-related preferences and ethical shopping interests (confidence 4-5 only)
+          - If no clear signal support inference, return an empty list.
+      - Example output: "eco-friendly", "organic", "cruelty-free", "sustainable"
+      - Example conversation to value:
+        - "Looking for eco-friendly products" → eco-friendly
+        - "I only buy cruelty-free skincare" → cruelty-free
+      - **Negative Preferences**
+      - Definition: Things the user explicitly wants to avoid in shopping (categories, brands, styles, materials, features)
+      - Rules:
+        - **Extract from conversation**: Look for explicit statements of dislikes, avoidances, or negative preferences in shopping context
+        - **Extract from memory**: Check memory for "thingsToAvoid" or "negativePreferences" fields (confidence 4-5 only)
+        - Must be explicitly stated as dislikes, avoidances, or negative preferences (for user's own shopping, not for others)
+        - From memory: Extract the core avoidance content, omitting confidence ratings and explanatory context
+        - If no clear signal support inference, return an empty list.
+      - Example output: "leather accessories", "Chelsea boots for styled outfits", "synthetic materials"
+      - Example conversation to value:
+        - "I hate leather accessories" → "leather accessories"
+        - From memory: "Chelsea boots for styled outfits — user is sensitive to their fit..." → "Chelsea boots for styled outfits"
+
+      - **Contextual Shopping Interests**
+      - Definition: Shopping-related tasks, interests, and goals from memory that present shopping recommendation opportunities
+      - Rules:
+        - **Extract from memory**: Check memory for shopping-related interests, behaviors, goals, current projects, or contextual information (confidence 4-5 only)
+        - Include ONLY: shopping behaviors, decision-making patterns, purchase priorities, active shopping projects, product research activities
+        - **Exclude**: Non-shopping content (life events without shopping connection, hobbies, work, general lifestyle)
+        - **Format with source prefix**: Prefix each item with its source field from memory
+          - Use: "interest:", "recentTasks:", "shortTermGoals:", "sharedContext:"
+        - Must be directly relevant to shopping recommendations
+        - If no clear signal support inference, return an empty list.
+      - Example output:
+        - "interest: hands-on comparison shopping for appliances and furniture, prioritizing reliability and value"
+        - "shortTermGoals: curating treat rotation for young cats"
+        - "recentTasks: compared Bosch and Miele dishwashers, chose Bosch 800 Series"
+
+      - **Suggested Related Brands**
+      - Definition: Suggest direct competitors to brands the user prefers.
+      - Rules:
+        1. Only suggest based on brands in **Brand Preferences** (not disliked brands).
+        2. Suggested brands must match both with the brand preference:
+            - Same category (e.g., Luxury Jewelry, Athletic Wear, Skincare)
+            - Same tier (e.g., Luxury-to-Luxury, Mass Market-to-Mass Market)
+        3. Only suggest if highly confident—otherwise return empty list.
+        4. No guessing or inventing brands.
+      - Output: Unique list of suggested brands (or empty list if no confident matches).
+      - Examples:
+        - If user has brandPreference on Cartier, suggest related brand: Tiffany & Co.
+        - If user has brandPreference on Sony, suggest related brand: Bose.
+
+
+      ## Output Format
+
+      I will return a JSON object with following format:
+      {
+      "userShoppingProfile": {
+        "shoppingGenderPreference": "string",
+        "categoryPreferences": ["string"],
+        "brandPreferences": ["string"],
+        "retailerPreferences": ["string"],
+        "priceSensitivity": "string",
+        "fashionStyle": ["string"],
+        "fashionFit":["string"],
+        "shoppingValues": ["string"],
+        "negativePreferences": ["string"],
+        "contextualShoppingInterests": ["string"],
+        "suggestedRelatedBrands": ["string"]
+      }
+      }
+
+      - No explanation outside the JSON.
+      - No additional markdown.
+
+      ## Final Check
+      Before finalizing, I verify:
+      - All attributes strictly reflect the user's own medium–long-term preferences.
+      - No attribute originates from gifts or purchases for others.
+      - No attribute is derived from one-time or short-lived shopping needs.
+      - Everything is backed by explicit evidence from user messages or high-confidence memory (4-5).
+      - All attributes correspond to online-shoppable product categories.
+      - Negative preferences are extracted from conversation or memory (confidence 4-5).
+      - Contextual shopping interests have proper source prefixes and are shopping-related only.
+      - Items in negativePreferences are filtered out from all positive preference fields.
+
+
+      ## Inputs
+
+      Now I will analyze the conversation history and memory profile to generate a shopping profile based on the criteria above.
+
+      # Context and Inputs
+      Here are the actual inputs with real data I should use to generate shopping profile:
+      - {Shopping Conversation History}: 
+      - {Other Conversation History}: 
+      - {User Memory}: 
+
+      Output:
+
+  generate_shopping_profile_from_events:
+    system: ""
+    user: |
+      ## Role and Objective
+
+      I am an expert system designed to analyze a user's shopping event history and produce a comprehensive, evidence-based Shopping Profile that reflects only the **user's own** medium-to-long-term shopping preferences, **not temporary needs**, **not one-time tasks**, and **not purchases for other people**.
+
+      My role is to extract high-confidence, user-centric attributes from user shopping events — based strictly on repeated patterns, strong behavioral signals, and well-supported inferences. These attributes will be used to enrich search queries and ensure personalization grounded in the user's own interests only.
+
+      ## Input Data Description
+
+      I will receive one input source for shopping profile generation:
+
+      - **User Shopping Events**: A chronological log of the user's shopping-related activities on an e-commerce platform.
+        - Each event has the format: `time_ago | action_type | product_description`
+        - **time_ago**: Relative time when the event happened (e.g., "1 days ago", "28 days ago")
+        - **action_type**: One of:
+          - **Browsed**: User viewed a product page
+          - **Searched**: User searched for a query term
+          - **Clicked**: User clicked on a product listing
+        - **product_description**: The product title, search query, or page description
+        - Events are sorted by recency (most recent first)
+        - Multiple events may belong to the same product or category, indicating stronger interest
+
+      ## Event Analysis Rules
+
+      **Signal Strength Hierarchy** (strongest to weakest):
+      1. **Clicked** — strongest signal: user actively engaged with the product
+      2. **Browsed** — medium signal: user viewed product details
+      3. **Searched** — directional signal: user expressed intent for a category/product
+
+      **Pattern Detection**:
+      - **Repeated browsing/clicking** of similar product categories = strong category preference
+      - **Multiple searches** for similar terms = active shopping intent
+      - **Brand recurrence** across events = brand preference
+      - **Single isolated event** = weak signal, do NOT use alone unless it's a Click on a high-intent product
+      - **Recent events** (within 7 days) carry more weight than older events (28+ days)
+
+      **Event Pre-Filter** (skip these events):
+      - Events for clearly non-product pages (e.g., restaurant pages, service pages, political content)
+      - Events that are clearly for gifts or other people (e.g., "Gift for Mom", "Kids Birthday Party Supplies")
+      - Ultra-commodity items that cannot form meaningful preferences (e.g., toilet paper, trash bags, batteries)
+      - Events related to non-shoppable content
+
+      ## Strict Safety & Category Filter (Hard Exclusion)
+
+      I will **Never** take the category as category preference if it falls into any of the following:
+      1. **Non-Product or digital categories**
+      - Apps, software, online services, subscriptions
+      - Digital goods or platforms
+      - Development tools (IDEs, SDKs, frameworks, APIs)
+      - Stocks, finance, investments, trading tools
+      - Local/offline-only services (mechanics, tailors, plumbers)
+      - Experiences (restaurants, concerts, classes, attractions)
+      - Physical venues or "nearby" requests
+      - IT support
+
+      2. **Health-restricted categories**
+      - Medical treatments, diagnoses, prescriptions, medical equipment
+      - Medicines and health supplements
+      - Vitamin supplements, wellness supplements, nootropics
+      - Controlled substances, tobacco, vaping
+
+      3. **Harmful or sensitive content**
+      - Weapons or firearms (e.g., knives, guns, ammunition, accessories)
+      - Suicide or self-harm, violence or domestic violence
+      - Eating disorders, adult or racy content
+      - Offensive, racial, or discriminatory topics
+      - Religion, politics, or gender identity
+      - Drugs or controlled substances
+      - Alcohol, alcoholic beverages and related products
+      - Medical treatments, surgeries, or prescriptions
+      - Age-restricted products (e.g., tobacco, vaping)
+      - Military or union status related content
+      - Funeral and memorial products (caskets, urns, memorial stones)
+      - Content derogatory toward disability status (mental or physical)
+      - Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+
+      4. **Non-purchasable from mainstream ecosystem**
+      - Items that cannot be purchased as normal physical retail products online
+      - Car dealerships, real estate, raw seafood markets
+      - Automobiles brands (Tesla, BMW, Ford, etc.) — vehicles themselves excluded
+      - Exception: Car accessories, detailing products ARE allowed
+      - Real-world service providers, B2B-only channels
+
+      5. **Categories Not Suitable for Personal Shopper–Style Curation**
+        These items lack personal-shopping value, have minimal variation, or are everyday consumables.
+        - Fruits, vegetables, raw meat, fresh ingredients
+        - Everyday replenishment items
+          - Examples: toilet paper, trash bags, paper towels, cleaning spray, dish soap, AA batteries
+        - Ultra-commodity items with no style/quality tradeoffs
+          - Examples:HDMI cables, USB sticks, packing tape
+        - One-off repair items or materials
+          - Examples: glue, caulk, pipe cleaner, screws, basic tools
+
+      ## What is a Shopping Profile?
+
+      A Shopping Profile is a structured summary of the user's actual, **medium-to-long term shopping preferences**, inferred from their browsing, search, and click behavior. It reflects the **user's own preferences**, not:
+      - not gifts or purchases for others
+      - not temporary needs
+      - not one-time experiments
+
+      A Shopping Profile includes:
+      - Shopping Gender Preference
+      - Category Preferences
+      - Brand Preferences
+      - Retailer Preferences
+      - Price Sensitivity
+      - Fashion Style
+      - Fashion Fit
+      - Shopping Values
+      - Negative Preferences
+      - Contextual Shopping Interests
+      - Suggested Related Brands
+
+      ## Shopping Profile Generation
+
+      **Core Principles**
+      - Evidence-first: Every attribute must be directly supported by observable event patterns.
+      - No assumptions: Never infer preferences based on a single isolated event.
+      - No hallucinations: Do not infer preferences without strong, repeated signals.
+      - **Medium or long-term preferences**: One-off browsing sessions are ignored unless they show recurring patterns across multiple days.
+      - **Behavioral inference**: Unlike conversation-based profiles, event-based profiles rely on behavioral patterns (what the user browses, searches, clicks) rather than explicit statements. Require stronger evidence (2+ events in same category/brand).
+
+      **Attribute Extraction Guidelines**
+
+      - **Shopping Gender Preference**:
+        - Infer from product titles: look for gender-specific terms ("Men's", "Women's")
+        - If majority of events are gender-specific products → use that gender
+        - If mixed or unclear → return "general"
+        - Only return "men" or "women" when there is clear evidence of user's own explicit preference, else return "general".
+        - Examples:
+          - Multiple "Men's T-Shirt", "Men's Jeans" events → "men"
+          - Search "Buying for my son"  → ignore, no explicit signal
+        - Example output value:
+          - "men"
+          - "women"
+          - "general"
+
+      - **Category Preferences**:
+        - Definition: Identify **Shopping product categories** that the user is interested in.
+        - Criteria:
+          1. **Category Type**:
+            - MUST be a physical product category (tangible, purchasable goods).
+            - MUST map to a canonical taxonomy in mainstream ecosystems (e.g., Amazon).
+            - EXCLUDE anything non-purchasable, digital-only, or service-based.
+          2. **Source of Interest**
+            - MUST come from the user's own interest.
+            - EXCLUDE items purchased for others.
+          3. **Interest Strength**
+            - MUST show repeated or explicit intents
+            - Mentioned at least 2 times OR  strong intent to research/compare options.
+          4. **Exclusions**:
+            - Adhere to the **Strict Safety & Category Filter**—exclude all categories listed there.
+            - Any category from user's task related conversation like translation, summary, creating images.
+            - Exclude one-off, trivial, or replenishment purchases. Examples of exclusions:
+              - Toilet paper
+              - Tape
+              - Batteries
+              - Generic cables
+              - Cleaning supplies
+          6. If no clear signal support inference, return an empty list for Category Preferences
+        - Valid Examples:
+          - Smartphones, headphones, jewelry, running shoes
+        - Invalid Examples:
+          - Bar (not purchasable)
+          - Restaurant (non-purchasable online)
+          - Repair phone (not a product)
+          - Python scripts (digital)
+          - Software development tools (services)
+          - AI tools (services)
+          - Vitamin D supplements (medical)
+          - ChatGPT Plus (development tools)
+        - Examples:
+          - Searched: "a new phone." -- Category: Phones
+          - Browsed "Sony WH-1000XM5 Headphones" + Searched "noise canceling headphones" → Category: "Headphones"
+        
+      - **Brand Preferences**:
+        - Extract brand names from product titles in Browsed/Clicked/Searched events
+        - A brand must appear in 2+ events OR be Clicked (strong signal)
+        - **Exclusion Criteria**:
+          1. **Third-Party Intent**: Exclude brands associated solely with gifts or other people (e.g., "My mom likes...").
+          2. **Hypotheticals/Negatives**: Exclude brands used in theoretical scenarios or explicitly rejected (e.g., "If I were rich...", "I hate...").
+          3. **Non-Retail Assets**: Exclude brands that are not typically sold via standard consumer e-commerce like Amazon (e.g., Automobiles brands like Tesla, Real Estate, B2B industrial machinery) unless referring to specific accessories (e.g., "Tesla charger").
+          4. **Task-Only Mentions**: Exclude brands mentioned solely for one-off tasks like translation, summarization, image creation and etc.
+            - Example: searched "Create an image for Adidas Shoes."
+            - Example: searched "Translate to Chinese: I love Nike"
+        - **Target**: Return a distinct list of brand names that meet the inclusion criteria.
+        - Example: Browsed "Nike Air Max" + Browsed "Nike Running Shoes" → "Nike"
+
+      - **Retailer Preferences**:
+        - Definition: Stores user prefers or repeatedly buys from
+        - Rules:
+          - Must originate from the user's own shopping patterns.
+          - Ignore retailers mentioned only when buying gifts.
+          - If no clear signal support inference, return an empty list.
+        - Example output: Amazon, Best Buy, REI, Nordstrom
+        - Example conversation to value:
+          - Often browse Amazon for price. → "Amazon"
+          - Searched "buy xx at Target for my sister" → ignore
+
+      - **Price Sensitivity**:
+        - Definition: The user's typical personal spending tier across categories.
+        - Rules:
+          - Classify into one of four tiers based on typical budget signals: "low-tier shopper", "mid-tier shopper", "high-tier shopper", or "general" (if no clear evidence).
+          - Determine tier from repeated behavior or explicit language (e.g., "cheap", "mid-range", "premium").
+          - Require consistent pattern across multiple events.
+          - Do not infer if evidence is weak or inconsistent.
+          - Ignore budgets stated only for gifts.
+          - If mixed or unclear → return "general"
+        - Example output: "low-tier shopper", "mid-tier shopper", "high-tier shopper"
+        - Infer from product types and brands:
+          - Luxury brands (Cartier, Gucci, etc.) → "high-tier shopper"
+          - Mid-range brands (Nike, Samsung, etc.) → "mid-tier shopper"
+          - Budget/discount products → "low-tier shopper"
+        
+      - **Fashion Style**
+        - Definition: The user's own consistently expressed fashion aesthetics.
+        - Rules:
+          - Must be explicit or repeated.
+          - Ignore styles discussed for someone else.
+          - If no clear signal support inference, return an empty list.
+        - Example output: "minimal", "sporty", "classic", "luxury", "monochrome"
+        - Example: Often search " minimal styles" → minimal
+
+      - **Fashion Fit**
+        - Definition: The user's fit/silhouette preferences for their own clothing.
+        - Rules:
+          - Must be explicitly stated or consistently repeated.
+          - Avoid extracting from vague or ambiguous fit-related terms.
+          - If no clear signal support inference, return an empty list.
+        - Example output: "slim fit", "oversized", "tailored", "relaxed"
+        - Example: "Looking for slim-fit tees" → slim fit
+
+      - **Shopping Values**:
+        - Definition: Ethical or lifestyle-based preferences that guide the user's own purchasing decisions.
+        - Rules:
+          - Must be explicitly stated; Do not infer from context or product type alone.
+          - Ignore values applied only to gift purchases.
+          - If no clear signal support inference, return an empty list.
+        - Example output: "eco-friendly", "organic", "cruelty-free", "sustainable"
+        - Examples:
+          - Browsed "eco-friendly products" → eco-friendly
+          - Clicked "cruelty-free skincare" → cruelty-free
+
+      - **Negative Preferences**:
+        - Definition: Things the user explicitly wants to avoid in shopping (categories, brands, styles, materials, features)
+        - Cannot be reliably inferred from browsing events alone
+        - Must be explicitly stated as dislikes, avoidances, or negative preferences (for user's own shopping, not for others)
+          - If no clear signal support inference, return an empty list.
+        - Example output: "leather accessories", "Chelsea boots for styled outfits", "synthetic materials"
+        - Examples:
+          - Searched "I hate leather accessories" → "leather accessories"
+          
+      - **Contextual Shopping Interests**:
+        - Definition: Shopping-related tasks, interests, and goals from memory that present shopping recommendation opportunities
+        - Rules:
+          - Include ONLY: shopping behaviors, decision-making patterns, purchase priorities, active shopping projects, product research activities
+          - **Exclude**: Non-shopping content (life events without shopping connection, hobbies, work, general lifestyle)
+          - **Format with source prefix**: Prefix each item with its source field from memory
+            - Use: "interest:", "recentTasks:", "shortTermGoals:", "sharedContext:"
+          - Must be directly relevant to shopping recommendations
+          - If no clear signal support inference, return an empty list.
+        - Example output:
+          - "interest: comparison shopping for appliances and furniture, prioritizing reliability and value"
+          - "shortTermGoals: curating treat rotation for young cats"
+          - "recentTasks: compared Bosch and Miele dishwashers, chose Bosch 800 Series"
+
+      - **Suggested Related Brands**:
+        - Definition: Suggest direct competitors to brands the user prefers.
+        - Rules:
+          1. Only suggest based on brands in **Brand Preferences** (not disliked brands).
+          2. Suggested brands must match both with the brand preference:
+              - Same category (e.g., Luxury Jewelry, Athletic Wear, Skincare)
+              - Same tier (e.g., Luxury-to-Luxury, Mass Market-to-Mass Market)
+          3. Only suggest if highly confident—otherwise return empty list.
+          4. No guessing or inventing brands.
+        - Output: Unique list of suggested brands (or empty list if no confident matches).
+        - Examples:
+          - If user has brandPreference on Cartier, suggest related brand: Tiffany & Co.
+          - If user has brandPreference on Sony, suggest related brand: Bose.
+
+
+      ## Output Format
+
+      I will return a JSON object with following format:
+      {{
+      "userShoppingProfile": {{
+        "shoppingGenderPreference": "string",
+        "categoryPreferences": ["string"],
+        "brandPreferences": ["string"],
+        "retailerPreferences": ["string"],
+        "priceSensitivity": "string",
+        "fashionStyle": ["string"],
+        "fashionFit":["string"],
+        "shoppingValues": ["string"],
+        "negativePreferences": ["string"],
+        "contextualShoppingInterests": ["string"],
+        "suggestedRelatedBrands": ["string"]
+       }}
+      }}
+
+      - No explanation outside the JSON.
+      - No additional markdown.
+
+      ## Final Check
+      Before finalizing, I verify:
+      - All attributes strictly reflect the user's own medium–long-term preferences.
+      - No attribute originates from gifts or purchases for others.
+      - No attribute is derived from one-time or short-lived shopping needs.
+      - Everything is backed by explicit evidence from user events.
+      - All attributes correspond to online-shoppable product categories.
+      - Negative preferences are extracted from conversation or memory (confidence 4-5).
+      - Contextual shopping interests have proper source prefixes and are shopping-related only.
+      - Items in negativePreferences are filtered out from all positive preference fields.
+
+      ## Input
+
+      Now I will analyze the user's shopping event history below to generate a shopping profile based on the criteria above.
+
+      # Context and Inputs
+      Here are the actual events with real data I should use to generate shopping profile:
+      {user_events}
+
+      Output:
+
+  product_summary:
+    system: ""
+    user: |
+      You are an expert product summarizer. Your task has TWO steps:
+
+      STEP 1 - PRODUCT VALIDATION:
+      First, carefully analyze the PRODUCT INFORMATION below. Determine whether it describes a REAL, SPECIFIC product (e.g., a physical item, a digital product, a tool, a food item, etc.).
+      If the information is just a general marketing slogan, a brand tagline, a vague browsing/search phrase, or does NOT describe a concrete product, output ONLY an empty list: []
+
+      STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
+      Generate exactly SEVEN words to summarize this product. The 7 words should cover as many of the following aspects as possible, ordered by priority. Not every product has all aspects — include only what is available and informative:
+
+      PRIORITY ORDER
+         1. Main product category or type (e.g., "headphone", "sneaker", "cream")
+         2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "anti-aging")
+         3. Distinctive feature, form factor, or sub-type (e.g., "over-ear", "sphere", "spf-15")
+         4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible", "joss & main") — MUST include if provided
+         5. Seller or retailer (e.g., "amazon", "walmart", "home depot") — MUST include if provided
+         6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional", "cat"); skip generic values like "unisex" or "adult"
+         7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget-friendly")
+
+      RULES:
+      1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings). Use hyphens to combine closely related concepts into a single word (e.g., "anti-aging", "spf-15", "noise-canceling").
+      2. DO NOT SPLIT PROPER NOUNS: Brand names and seller names are each ONE comma-separated entry, even if they contain multiple English words. Keep them intact — do NOT split them across entries.
+         - Brand "Home Depot" → one entry "home depot", NOT two entries "home", "depot"
+         - Brand "Joss & Main" → one entry "joss & main", NOT two entries "joss", "main"
+         - Seller "楽天市場" → one entry "楽天市場"
+      3. NO DUPLICATES: Every entry in the output list must be distinct. If brand and seller are the same or very similar (e.g., Brand="Hammitt", Seller="Hammitt"), output it only ONCE and use the freed slot for another informative aspect.
+         - Example: Brand="Hammitt", Seller="Hammitt" → include "hammitt" once, NOT twice.
+      4. COVERAGE: MUST cover as many available aspects as possible within 7 words. If brand is present, it MUST appear. If seller is present and different from brand, it MUST appear. If a specific audience (not "unisex" or "adult") is present, it MUST appear. Only omit an aspect if the product genuinely lacks that information.
+      5. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
+      6. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
+      7. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
+      8. LANGUAGE: Use the same language as the product information. If the product is in Japanese, Chinese, etc., the output words should also be in that language. Do NOT translate to English.
+
+      OUTPUT FORMAT:
+      - If NOT a real product: <Output>[]</Output>
+      - If a real product: <Output>[word1, word2, word3, word4, word5, word6, word7]</Output>
+      - Wrap your final answer in <Output></Output> tags. No text outside these tags except thinking.
+
+      PRODUCT INFORMATION:
+      {product_info_text}
+
+      TOP 5 SIMILAR PRODUCTS (for reference):
+      {similar_items_text}
+
+      ANALYSIS GUIDANCE:
+      1. Validate: is this a real product? If not, output []
+      2. Pick category + function + feature (first 3 words)
+      3. Add brand (keep intact, no splitting). If brand = seller, include once only
+      4. Add seller if different from brand (keep intact, no splitting)
+      5. Add audience / style / unique trait to fill remaining slots
+      6. Verify: no duplicates, exactly 7 entries, same language as input
+
+      Output:
