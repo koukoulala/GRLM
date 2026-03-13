@@ -124,7 +124,7 @@ def build_product_info_text(item):
             info_lines.append(f"Brand: {brand}")
         if seller:
             info_lines.append(f"Seller: {seller}")
-    for attr_name in ["Gender", "Color", "Size"]:
+    for attr_name in ["Color", "Size"]:
         attr_val = attributes.get(attr_name, "")
         if isinstance(attr_val, str):
             attr_val = attr_val.strip()
@@ -235,11 +235,11 @@ def parse_summary_words(content: str) -> list:
         inner_content = re.sub(r"[，、]", ",", inner_content)
         if "," in inner_content:
             words = [
-                word.strip().lower().strip("\"'[]") for word in inner_content.split(",")
+                word.strip().strip("\"'[]") for word in inner_content.split(",")
             ]
         else:
             words = [
-                word.strip().lower().strip("\"'[]") for word in inner_content.split()
+                word.strip().strip("\"'[]") for word in inner_content.split()
             ]
     else:
         # Fallback: try line-by-line
@@ -253,22 +253,22 @@ def parse_summary_words(content: str) -> list:
                 inner = re.sub(r"[，、]", ",", inner)
                 if "," in inner:
                     words = [
-                        word.strip().lower().strip("\"'") for word in inner.split(",")
+                        word.strip().strip("\"'") for word in inner.split(",")
                     ]
                 else:
                     words = [
-                        word.strip().lower().strip("\"'") for word in inner.split()
+                        word.strip().strip("\"'") for word in inner.split()
                     ]
                 break
         if not words:
             content = re.sub(r"[，、]", ",", content)
             if "," in content:
                 words = [
-                    word.strip().lower().strip("\"'[]") for word in content.split(",")
+                    word.strip().strip("\"'[]") for word in content.split(",")
                 ]
             else:
                 words = [
-                    word.strip().lower().strip("\"'[]") for word in content.split()
+                    word.strip().strip("\"'[]") for word in content.split()
                 ]
 
     words = [w for w in words if w]
@@ -571,7 +571,7 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item_with_attr.json",
+        default="./raw_data/merged_clean_item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
@@ -589,7 +589,8 @@ def parse_args():
     parser.add_argument(
         "--summary_model",
         type=str,
-        default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
+        default="",
+        #default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
         help="Path to local LLM for vLLM inference. Set to empty string "
              "or non-existent path to use Copilot API instead.",
     )
@@ -598,6 +599,12 @@ def parse_args():
         type=str,
         default="./resources/prompts.yaml",
         help="Path to prompts.yaml file with prompt templates",
+    )
+    parser.add_argument(
+        "--prompt_template_name",
+        type=str,
+        default="term_generation",
+        help="Name of the prompt template to use from prompts.yaml (default: term_generation)",
     )
     # --- vLLM-specific args ---
     parser.add_argument(
@@ -646,28 +653,34 @@ def parse_args():
     parser.add_argument(
         "--copilot_workers",
         type=int,
-        default=20,
-        help="Number of parallel workers for Copilot API calls (default: 20)",
+        default=40,
+        help="Number of parallel workers for Copilot API calls",
     )
     parser.add_argument(
         "--copilot_chunk_size",
         type=int,
         default=10000,
         help="Number of items per Copilot processing chunk for checkpoint "
-             "saving (default: 10000)",
+             "saving",
     )
     # --- Common args ---
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=80,
-        help="Maximum number of output tokens per prompt (default: 80)",
+        default=100,
+        help="Maximum number of output tokens per prompt",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
         default=False,
-        help="Debug mode: only process 100 items",
+        help="Debug mode: only process a subset of items",
+    )
+    parser.add_argument(
+        "--debug_sample_size",
+        type=int,
+        default=100,
+        help="Number of items to sample in debug mode (default: 100)",
     )
     parser.add_argument(
         "--id2meta_file",
@@ -680,6 +693,19 @@ def parse_args():
         action="store_true",
         default=False,
         help="Only export prompts to a TSV file without running inference",
+    )
+    parser.add_argument(
+        "--global_offer_only",
+        action="store_true",
+        default=False,
+        help="Only process GlobalOfferID items (IDs not starting with 'P')",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Resume from previous run: load existing output files, only "
+             "process items not yet completed, then merge and overwrite",
     )
     return parser.parse_args()
 
@@ -721,8 +747,8 @@ def main():
     # ---- Load prompt template from prompts.yaml ----
     print(f"\nLoading prompt template from: {args.prompts_file}")
     prompts_config = load_prompts(args.prompts_file)
-    prompt_template = prompts_config['product_summary']['user']
-    print("  Prompt template loaded successfully")
+    prompt_template = prompts_config[args.prompt_template_name]['user']
+    print(f"  Prompt template '{args.prompt_template_name}' loaded successfully")
 
     # ---- Load data ----
     print(f"\nLoading data: {args.item_file}")
@@ -732,8 +758,13 @@ def main():
     # Build full items dict BEFORE trimming, so similarity lookups work
     all_items_dict = {item["id"]: item for item in full_data}
 
+    # Filter to GlobalOfferID items only (IDs not starting with 'P')
+    if args.global_offer_only:
+        full_data = [item for item in full_data if not item["id"].startswith("P")]
+        print(f"Filtered to GlobalOfferID items: {len(full_data)} items")
+
     if debug:
-        data = random.sample(full_data, min(100, len(full_data)))
+        data = random.sample(full_data, min(args.debug_sample_size, len(full_data)))
         print(f"DEBUG: randomly sampled {len(data)} items for processing")
     else:
         data = full_data
@@ -765,10 +796,61 @@ def main():
     # ---- Checkpoint setup ----
     checkpoint_dir = os.path.join(args.output_dir, "_s1_checkpoint")
 
+    # ---- Resume: load previous results if available ----
+    previous_results = {}  # item_id -> result dict
+    if args.resume:
+        prev_file = os.path.join(args.output_dir, "summaries_with_similarity.jsonl")
+        if os.path.exists(prev_file):
+            print(f"\n[RESUME] Loading previous results from: {prev_file}")
+            with open(prev_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        result = json.loads(line)
+                        previous_results[result["id"]] = result
+            # Only keep results that are in the current data set
+            current_ids = {item["id"] for item in data}
+            prev_total = len(previous_results)
+            previous_results = {
+                k: v for k, v in previous_results.items() if k in current_ids
+            }
+            prev_kept = len(previous_results)
+            prev_discarded = prev_total - prev_kept
+
+            # Filter data to only items not yet processed
+            remaining_data_for_run = [
+                item for item in data if item["id"] not in previous_results
+            ]
+
+            print(f"  Previous results loaded:    {prev_total:>10,}")
+            print(f"  Kept (in current input):    {prev_kept:>10,}")
+            print(f"  Discarded (not in input):   {prev_discarded:>10,}")
+            print(f"  Total items in current run: {len(data):>10,}")
+            print(f"  Already completed:          {prev_kept:>10,}")
+            print(f"  Remaining to process:       {len(remaining_data_for_run):>10,}")
+
+            if not remaining_data_for_run:
+                print(f"\n[RESUME] All {len(data)} items already completed!")
+                all_results = [previous_results[item["id"]] for item in data]
+                inference_time = 0.001  # avoid division by zero
+                # Skip inference, jump to output
+                _skip_inference = True
+            else:
+                data = remaining_data_for_run
+                _skip_inference = False
+        else:
+            print(f"\n[RESUME] No previous output found at {prev_file}, "
+                  f"running from scratch")
+            _skip_inference = False
+    else:
+        _skip_inference = False
+
     # ---- Run inference ----
     start_time = time.time()
 
-    if use_copilot:
+    if _skip_inference:
+        pass  # all_results already set above
+    elif use_copilot:
         # --- Copilot API path ---
         # Build (item_id, prompt) inputs for all items
         print("\nBuilding prompts for Copilot API ...")
@@ -875,9 +957,26 @@ def main():
             # Merge: build all_results in original data order
             all_results = [completed[item["id"]] for item in data]
 
-    inference_time = time.time() - start_time
-    print(f"\nTotal inference time: {inference_time:.1f}s "
-          f"({len(data) / inference_time:.1f} items/s)")
+    if not _skip_inference:
+        inference_time = time.time() - start_time
+        print(f"\nInference time: {inference_time:.1f}s "
+              f"({len(data) / inference_time:.1f} items/s)")
+
+        # Merge with previous results if resuming
+        if args.resume and previous_results:
+            print(f"\n[RESUME] Merging {len(previous_results):,} previous + "
+                  f"{len(all_results):,} new results")
+            merged = dict(previous_results)  # start with previous
+            for result in all_results:
+                merged[result["id"]] = result  # new results overwrite
+            # Rebuild all_results from full_data order (pre-filter data)
+            # We need to use the original full data order
+            original_data = full_data
+            all_results = [
+                merged[item["id"]] for item in original_data
+                if item["id"] in merged
+            ]
+            print(f"  Merged total: {len(all_results):,} items")
 
     # Print first few examples
     num_debug_show = 10 if debug else 3
@@ -940,10 +1039,6 @@ def main():
         if len(non_empty_words) != 7:
             skipped_count += 1
             continue
-        # Normalize multi-word summaries (join with hyphen)
-        item["summary_words"] = [
-            "-".join(word.split()) for word in words
-        ]
         item_id = item.get("id")
         if item_id:
             id2meta[item_id] = item
@@ -955,6 +1050,14 @@ def main():
     print(f"  Mapped items: {len(id2meta):,} "
           f"(skipped {skipped_count:,} without valid 7-word summary)")
 
+    # ---- Build id2words mapping (one JSON per line) ----
+    id2words_file = os.path.join(args.output_dir, "id2words.tsv")
+    with open(id2words_file, "w", encoding="utf-8") as f:
+        for item_id, meta in id2meta.items():
+            f.write(json.dumps({item_id: meta["summary_words"]},
+                               ensure_ascii=False) + "\n")
+    print(f"id2words saved to: {id2words_file} ({len(id2meta):,} items)")
+
     # ---- Clean up checkpoint ----
     cleanup_checkpoint(checkpoint_dir)
 
@@ -963,7 +1066,8 @@ def main():
           f"Products: {stats['valid_product_count']}, "
           f"Non-products: {stats['non_product_count']}, "
           f"Failed: {stats['failed_count']}")
-    print(f"Throughput: {len(data) / inference_time:.1f} items/s")
+    if inference_time > 0.01:
+        print(f"Throughput: {len(data) / inference_time:.1f} items/s")
 
 
 if __name__ == "__main__":

@@ -379,7 +379,7 @@ def create_instruction():
     return (
         "Given the user's search queries, browsing history, and click history, "
         "predict the next product the user will interact with. Output strictly in the format: "
-        "Item text ID: [word1, word2, word3, word4, word5, word6, word7].\n"
+        "Item text ID: [s1, s2, s3, s4, s5, s6, s7].\n"
     )
 
 
@@ -660,8 +660,8 @@ def parse_args():
     parser.add_argument(
         "--max_events",
         type=int,
-        default=20,
-        help="Maximum number of events per input sequence (default: 20)",
+        default=30,
+        help="Maximum number of events per input sequence",
     )
     parser.add_argument(
         "--gap_threshold",

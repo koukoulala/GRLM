@@ -46,7 +46,20 @@ def prepare_data(item: dict) -> dict:
 
     # Append structured attributes (from s6 enrichment)
     attributes = item.get("attributes", {})
-    for attr_name in ["Brand", "Seller", "Gender", "Color", "Size"]:
+    brand = attributes.get("Brand", "")
+    if isinstance(brand, str):
+        brand = " ".join(brand.split())
+    seller = attributes.get("Seller", "")
+    if isinstance(seller, str):
+        seller = " ".join(seller.split())
+    if brand and seller and brand.lower() == seller.lower():
+        info_lines.append(f"Brand/Seller: {brand}")
+    else:
+        if brand:
+            info_lines.append(f"Brand: {brand}")
+        if seller:
+            info_lines.append(f"Seller: {seller}")
+    for attr_name in ["Color", "Size"]:
         attr_val = attributes.get(attr_name, "")
         if isinstance(attr_val, str):
             attr_val = attr_val.strip()
@@ -63,10 +76,11 @@ def prepare_data(item: dict) -> dict:
 
     return {
         "instruction": (
-            "Summarize the product into a text ID of exactly 7 distinct, base-form words (nouns/adjectives). "
-            "Order by importance (Category, Key Function, Distinctive Feature, Brand, Seller, Audience, Style/Occasion) "
-            "to highlight its uniqueness and cover as many aspects as available. "
-            "Output strictly in the format: Item text ID: [word1, word2, word3, word4, word5, word6, word7]."
+            "Summarize the product into a text ID of exactly 7 distinct slots. "
+            "Each slot is one base-form word; use a multi-word phrase only for "
+            "brand/seller names or fixed proper nouns. "
+            "Priority: category, function, feature, attribute, brand, seller, audience/style. "
+            "Output strictly in the format: Item text ID: [s1, s2, s3, s4, s5, s6, s7]."
         ),
         "input": input_str,
         "output": "Item text ID: [" + ", ".join(item.get("summary_words", [])) + "]",

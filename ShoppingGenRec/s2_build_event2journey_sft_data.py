@@ -51,10 +51,10 @@ import numpy as np
 # =============================================================================
 
 # Maximum number of user events to include in the input prompt.
-DEFAULT_MAX_EVENTS = 20
+DEFAULT_MAX_EVENTS = 50
 
 # Maximum number of product TIDs to include per journey in the output.
-DEFAULT_MAX_PRODUCTS = 6
+DEFAULT_MAX_PRODUCTS = 10
 
 
 # =============================================================================
@@ -91,12 +91,12 @@ def resolve_journey_tids(journey, id2meta, max_products):
     """Resolve a journey's product_ids to text IDs.
 
     Args:
-        journey: Dict with keys title, query, product_ids.
+        journey: Dict with keys title, reason, product_ids.
         id2meta: Item ID to metadata mapping.
         max_products: Maximum number of products to include.
 
     Returns:
-        Dict with title, query, product_tids (list of 7-word lists),
+        Dict with title, reason, product_tids (list of 7-word lists),
         or None if no products could be resolved.
     """
     product_tids = []
@@ -112,7 +112,7 @@ def resolve_journey_tids(journey, id2meta, max_products):
 
     return {
         "title": journey.get("title", ""),
-        "query": journey.get("query", ""),
+        "reason": journey.get("reason", ""),
         "product_tids": product_tids,
     }
 
@@ -121,10 +121,10 @@ def build_output_json(resolved_journeys):
     """Build the structured JSON output string for SFT training.
 
     Output format:
-    {"ContinuedJourneys":[{"Title":"...","Query":"...","ProductTIDs":[["a","b",...],...]},...]}"
+    {"ContinuedJourneys":[{"Title":"...","Reason":"...","ProductTIDs":[["a","b",...],...]},...]}"
 
     Args:
-        resolved_journeys: List of dicts with title, query, product_tids.
+        resolved_journeys: List of dicts with title, reason, product_tids.
 
     Returns:
         JSON string.
@@ -133,7 +133,7 @@ def build_output_json(resolved_journeys):
     for j in resolved_journeys:
         continued.append({
             "Title": j["title"],
-            "Query": j["query"],
+            "Reason": j["reason"],
             "ProductTIDs": j["product_tids"],
         })
     return json.dumps({"ContinuedJourneys": continued}, ensure_ascii=False)
@@ -151,16 +151,15 @@ def create_instruction(num_journeys):
     return (
         f"Based on the user's shopping event history, predict {num_journeys} shopping "
         "journey(s) the user is likely to pursue. Each journey includes a "
-        "title, a search query, and recommended products as text IDs (7 words each). "
-        'Output JSON: {"ContinuedJourneys":[{"Title":"...","Query":"...",'
-        '"ProductTIDs":[["w1","w2","w3","w4","w5","w6","w7"],...]},...]}.'
+        "title, a reason, and recommended products as text IDs (7 slots each). "
+        '{"ContinuedJourneys":[{"Title":"...","Reason":"...",'
+        '"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]},...]}.'
     )
 
 
 def create_sft_sample(
     uuid,
     user_events,
-    system_time,
     resolved_journeys,
     max_events,
 ):
@@ -169,7 +168,6 @@ def create_sft_sample(
     Args:
         uuid: User identifier string.
         user_events: List of event strings.
-        system_time: Date string (e.g., "9/21/2025").
         resolved_journeys: List of resolved journey dicts.
         max_events: Maximum events to include.
 
@@ -178,11 +176,8 @@ def create_sft_sample(
     """
     instruction = create_instruction(len(resolved_journeys))
 
-    # Build input: system time + numbered event list
+    # Build input: numbered event list
     input_lines = []
-    if system_time:
-        input_lines.append(f"Current time: {system_time}")
-        input_lines.append("")
 
     # Truncate to most recent events
     events = user_events[-max_events:] if len(user_events) > max_events else user_events
@@ -248,7 +243,6 @@ def create_journey_prediction_sft_data(
         shopping_journey_data.items(), desc="Building journey prediction SFT data"
     ):
         user_events = entry.get("user_shopping_events", [])
-        system_time = entry.get("system_time", "")
         journeys = entry.get("journeys", [])
 
         # Validate
@@ -275,7 +269,6 @@ def create_journey_prediction_sft_data(
         sample = create_sft_sample(
             uuid=uuid,
             user_events=user_events,
-            system_time=system_time,
             resolved_journeys=resolved_journeys,
             max_events=max_events,
         )
@@ -364,9 +357,9 @@ def parse_args():
     parser.add_argument(
         "--shopping_journey_file",
         type=str,
-        default="./raw_data/shopping_journey.json",
-        help="Path to shopping_journey.json from s3_construct_shopping_journey "
-             "(default: ./raw_data/shopping_journey.json)",
+        default="./raw_data/shopping_journeys.json",
+        help="Path to shopping_journeys.json from pre_s3_construct_shopping_journey "
+             "(default: ./raw_data/shopping_journeys.json)",
     )
     parser.add_argument(
         "--id2meta_file",
@@ -482,7 +475,7 @@ def main():
             out_obj = json.loads(sample["output"])
             for ji, j in enumerate(out_obj["ContinuedJourneys"][:2]):
                 print(f"  Journey {ji+1}: {j['Title']}")
-                print(f"    Query: {j['Query']}")
+                print(f"    Reason: {j['Reason']}")
                 print(f"    Products: {len(j['ProductTIDs'])} TIDs")
                 if j["ProductTIDs"]:
                     print(f"      [0]: {j['ProductTIDs'][0]}")

@@ -1,33 +1,30 @@
 """
-Construct shopping journey data from raw model prediction outputs.
+Construct shopping journey data from journey prediction TSV and item metadata.
 
 Reads:
-  1. Shopping journey prediction TSV file (columns: source, uuid, messages,
-     metadata). The "messages" column contains a JSON array of chat messages
-     (system / user / assistant). User messages embed <USER-EVENTS> and
-     <SYSTEM-TIME> blocks; assistant messages embed <OUTPUT> blocks with
-     ContinuedJourneys JSON.
-  2. Query products TSV file (columns: query_id, SID, GlobalOfferId, Title,
-     SimilarityScore). Used to map ProductSIDs to GlobalOfferIds.
+  1. Shopping journey TSV file with columns:
+     UserId, ReadableUserEvents, UserHistory, ShoppingJourney,
+     JourneyWithProducts, OUTPUT, FinalJourney
+  2. Item metadata JSON (from s0_init_emb.py), keyed by GlobalOfferId.
+     Used to validate that product OfferIds in journeys actually exist.
 
 Produces:
-  shopping_journey.json - keyed by uuid, each entry containing:
+  shopping_journeys.json - keyed by UserId, each entry containing:
     - user_shopping_events: list of event strings
         (format: "time_ago | action | description")
-    - system_time: date string (e.g., "9/21/2025")
     - journeys: list of journey dicts, each with:
         - title: journey title string
-        - query: shopping query string
-        - product_ids: list of GlobalOfferId strings
+        - reason: journey reason string
+        - product_ids: list of GlobalOfferId strings (validated)
 
 Pipeline:
-  1. Read query products TSV and build SID -> GlobalOfferId mapping
-  2. Read shopping journey prediction TSV
-  3. Parse messages JSON: extract USER-EVENTS, SYSTEM-TIME, and OUTPUT
-  4. Map ProductSIDs (e.g., <|sid_begin|><a_811><b_1134><c_153><|sid_end|>)
-     to GlobalOfferIds using query products data
-  5. Deduplicate by uuid (keep first occurrence, report duplicates)
-  6. Compute statistics and write output
+  1. Load item metadata JSON to build valid OfferId set
+  2. Read journey prediction TSV
+  3. Parse ReadableUserEvents (replace #N# with newlines, split events)
+  4. Parse FinalJourney JSON: extract ContinuedJourneys with OfferIds
+  5. Validate OfferIds against item metadata
+  6. Deduplicate by UserId (keep first occurrence)
+  7. Compute statistics and write output
 """
 
 import argparse
@@ -47,22 +44,12 @@ csv.field_size_limit(sys.maxsize)
 # =============================================================================
 
 def read_tsv(filepath, expected_columns=None):
-    """Read a TSV file and return rows as list of dicts.
-
-    Args:
-        filepath: Path to the TSV file.
-        expected_columns: Optional list of column names to use instead of
-            the file header.
-
-    Returns:
-        A list of dicts, one per row.
-    """
+    """Read a TSV file and return rows as list of dicts."""
     rows = []
     with open(filepath, "r", encoding="utf-8") as f:
         reader = csv.reader(f, delimiter="\t")
         if expected_columns:
-            # Skip the header row if present
-            next(reader, None)
+            next(reader, None)  # skip header
             columns = expected_columns
         else:
             header = next(reader, None)
@@ -74,92 +61,38 @@ def read_tsv(filepath, expected_columns=None):
             if len(row) < len(columns):
                 row.extend([""] * (len(columns) - len(row)))
             elif len(row) > len(columns):
-                row = row[: len(columns)]
+                row = row[:len(columns)]
             rows.append(dict(zip(columns, row)))
 
     return rows
 
 
-def build_sid_to_gid_mapping(query_product_rows):
-    """Build a mapping from SID to GlobalOfferId.
-
-    Args:
-        query_product_rows: List of dicts from query products TSV, each
-            containing "SID" and "GlobalOfferId" keys.
-
-    Returns:
-        Tuple of (mapping dict, number of SID conflicts).
-    """
-    mapping = {}
-    conflicts = 0
-    for row in query_product_rows:
-        sid = row.get("SID", "").strip()
-        gid = row.get("GlobalOfferId", "").strip()
-        if sid and gid:
-            if sid in mapping and mapping[sid] != gid:
-                conflicts += 1
-            mapping[sid] = gid
-    return mapping, conflicts
-
-
-def extract_sids(product_sids_list):
-    """Extract SID strings from a list of ProductSID entries.
-
-    Each entry has format: <|sid_begin|><a_X><b_Y><c_Z><|sid_end|>
-    Extracts the inner SID part: <a_X><b_Y><c_Z>
-
-    Args:
-        product_sids_list: List of ProductSID strings.
-
-    Returns:
-        List of extracted SID strings.
-    """
-    sids = []
-    for sid_str in product_sids_list:
-        match = re.search(r"<\|sid_begin\|>(.*?)<\|sid_end\|>", sid_str)
-        if match:
-            sids.append(match.group(1).strip())
-    return sids
-
-
 def _normalize_event_key(event):
-    """Normalize an event string for deduplication.
-
-    Lowercases, strips non-alphanumeric characters (keeping spaces and pipes),
-    and collapses whitespace.
-
-    Args:
-        event: Event description string.
-
-    Returns:
-        Normalized key string for dedup comparison.
-    """
+    """Normalize an event string for deduplication."""
     key = event.lower()
     key = re.sub(r"[^a-z0-9\s|]", " ", key)
     key = re.sub(r"\s+", " ", key)
     return key.strip()
 
 
-def parse_user_events(events_text, reverse_order=False):
-    """Parse USER-EVENTS text block into a list of event strings.
+def parse_readable_user_events(events_text):
+    """Parse ReadableUserEvents text into a list of event strings.
 
-    Strips leading event numbers (e.g., "1 | ") from each event line.
-    Deduplicates events after normalization (lowercase + strip symbols),
-    preserving original text and first-occurrence order.
-
-    Input format:  "1 | 1 week ago | Searched | shoes\\n2 | 3 days ago | ..."
-    Output format: ["1 week ago | Searched | shoes", "3 days ago | ..."]
+    The events are separated by #N# in the raw text. Each event has
+    format: "N | time_ago | action | description"
+    We strip the leading event number.
 
     Args:
-        events_text: Raw text between <USER-EVENTS> and </USER-EVENTS>.
-        reverse_order: If True, reverse the event order (e.g., to put
-            oldest first). Default is False (keep original order).
+        events_text: Raw ReadableUserEvents string with #N# separators.
 
     Returns:
         Tuple of (deduplicated event list, total raw events before dedup).
     """
-    # Normalize: literal backslash-n to actual newline
-    text = events_text.replace("\\n", "\n")
+    if not events_text or not events_text.strip():
+        return [], 0
+
+    # Replace #N# with newlines
+    text = events_text.replace("#N#", "\n")
     lines = text.strip().split("\n")
 
     raw_events = []
@@ -167,17 +100,14 @@ def parse_user_events(events_text, reverse_order=False):
         line = line.strip()
         if not line:
             continue
-        # Only accept lines matching the numbered event format:
-        # "1 | time_ago | action | description"
-        # Lines not starting with a number+pipe (e.g., instruction text,
-        # stray tags) are silently discarded.
+        # Strip leading event number: "1 | time_ago | action | desc"
         match = re.match(r"^\d+\s*\|\s*(.*)", line)
         if match:
             event = match.group(1).strip()
             if event:
                 raw_events.append(event)
 
-    # Deduplicate while preserving order and original text
+    # Deduplicate while preserving order
     seen_keys = set()
     deduped = []
     for event in raw_events:
@@ -186,111 +116,84 @@ def parse_user_events(events_text, reverse_order=False):
             seen_keys.add(key)
             deduped.append(event)
 
-    # Optionally reverse to chronological order (oldest first, newest last)
-    if reverse_order:
-        deduped.reverse()
-
     return deduped, len(raw_events)
 
 
-def parse_messages(messages_str, reverse_events=False):
-    """Parse the messages JSON and extract structured data.
-
-    Extracts:
-      - User shopping events from <USER-EVENTS> block
-      - System time from <SYSTEM-TIME> block
-      - Journey data from <OUTPUT> block in assistant response
+def parse_final_journey(journey_text, valid_offer_ids):
+    """Parse FinalJourney JSON and extract journeys with validated OfferIds.
 
     Args:
-        messages_str: JSON string containing the messages array.
-        reverse_events: If True, reverse the event order.
+        journey_text: Raw FinalJourney JSON string containing
+            ContinuedJourneys array.
+        valid_offer_ids: Set of valid GlobalOfferIds from item metadata.
 
     Returns:
-        Tuple of (user_events, raw_event_count, system_time, journeys_raw):
-          - user_events: list of event strings (deduplicated)
-          - raw_event_count: int, number of events before dedup
-          - system_time: date string
-          - journeys_raw: list of raw journey dicts (with Title, Query,
-            ProductSIDs keys)
-        Returns (None, None, None, None) if parsing fails entirely.
+        Tuple of (journeys_list, stats_dict, missing_ids_set):
+          - journeys_list: list of journey dicts with title, reason,
+            product_ids
+          - stats_dict: dict with counts of found/missing OfferIds
+          - missing_ids_set: set of OfferIds not found in item metadata
     """
-    try:
-        messages = json.loads(messages_str)
-    except (json.JSONDecodeError, TypeError):
-        return None, None, None, None
+    stats = {
+        "total_offer_ids": 0,
+        "found_offer_ids": 0,
+        "missing_offer_ids": 0,
+        "total_journeys": 0,
+        "kept_journeys": 0,
+        "empty_product_journeys": 0,
+    }
+    missing_ids = set()
 
-    # Collect text by role
-    user_text = ""
-    assistant_text = ""
+    if not journey_text or not journey_text.strip():
+        return [], stats, missing_ids
 
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", [])
-        # Content can be a list of {type, text} objects or a plain string
-        if isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text = item.get("text", "")
-                    if role == "user":
-                        user_text += text
-                    elif role == "assistant":
-                        assistant_text += text
-        elif isinstance(content, str):
-            if role == "user":
-                user_text += content
-            elif role == "assistant":
-                assistant_text += content
+    # Try parsing the JSON
+    data = None
+    for attempt_text in [journey_text, journey_text.replace('\\"', '"')]:
+        try:
+            data = json.loads(attempt_text)
+            break
+        except (json.JSONDecodeError, TypeError):
+            continue
 
-    # --- Extract USER-EVENTS ---
-    # The user text contains multiple bare <USER-EVENTS> mentions in the
-    # instruction portion (e.g., "based on given <USER-EVENTS>",
-    # "event in <USER-EVENTS>."), but only ONE closing </USER-EVENTS> tag
-    # wrapping the real event data.
-    # Use rfind to locate the LAST <USER-EVENTS> opening tag, then find
-    # the </USER-EVENTS> closing tag after it. This is more robust than
-    # regex-based approaches which can mis-anchor on earlier occurrences.
-    user_events = []
-    raw_event_count = 0
-    _OPEN_TAG = "<USER-EVENTS>"
-    _CLOSE_TAG = "</USER-EVENTS>"
-    last_open = user_text.rfind(_OPEN_TAG)
-    if last_open != -1:
-        close_pos = user_text.find(_CLOSE_TAG, last_open)
-        if close_pos != -1:
-            events_block = user_text[
-                last_open + len(_OPEN_TAG):close_pos
-            ].strip()
-            user_events, raw_event_count = parse_user_events(
-                events_block, reverse_order=reverse_events,
-            )
+    if data is None:
+        return [], stats, missing_ids
 
-    # --- Extract SYSTEM-TIME ---
-    # Format: <SYSTEM-TIME>\nCurrent system time (UTC): 9/21/2025\n</SYSTEM-TIME>
-    system_time = ""
-    time_match = re.search(
-        r"<SYSTEM-TIME>\s*.*?:\s*([\d/]+)\s*</SYSTEM-TIME>",
-        user_text, re.DOTALL,
-    )
-    if time_match:
-        system_time = time_match.group(1).strip()
+    continued_journeys = data.get("ContinuedJourneys", [])
+    journeys = []
 
-    # --- Extract OUTPUT -> ContinuedJourneys ---
-    journeys_raw = []
-    output_match = re.search(
-        r"<OUTPUT>\s*(.*?)\s*</OUTPUT>", assistant_text, re.DOTALL,
-    )
-    if output_match:
-        output_str = output_match.group(1).strip()
-        # Try parsing as JSON; fall back to fixing common escaping issues
-        for attempt in [output_str, output_str.replace('\\"', '"')]:
-            try:
-                data = json.loads(attempt)
-                journeys_raw = data.get("ContinuedJourneys", [])
-                break
-            except (json.JSONDecodeError, AttributeError):
+    for j_raw in continued_journeys:
+        title = j_raw.get("Title", "").strip()
+        reason = j_raw.get("Reason", "").strip()
+        products = j_raw.get("Products", [])
+
+        stats["total_journeys"] += 1
+
+        product_ids = []
+        for product in products:
+            offer_id = str(product.get("OfferId", "")).strip()
+            if not offer_id:
                 continue
+            stats["total_offer_ids"] += 1
+            if offer_id in valid_offer_ids:
+                product_ids.append(offer_id)
+                stats["found_offer_ids"] += 1
+            else:
+                stats["missing_offer_ids"] += 1
+                missing_ids.add(offer_id)
 
-    return user_events, raw_event_count, system_time, journeys_raw
+        if not product_ids:
+            stats["empty_product_journeys"] += 1
+            continue
+
+        journeys.append({
+            "title": title,
+            "reason": reason,
+            "product_ids": product_ids,
+        })
+        stats["kept_journeys"] += 1
+
+    return journeys, stats, missing_ids
 
 
 # =============================================================================
@@ -299,37 +202,28 @@ def parse_messages(messages_str, reverse_events=False):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Construct shopping journey data from raw model "
-                    "prediction outputs"
+        description="Construct shopping journey data from journey prediction "
+                    "TSV and item metadata"
     )
     parser.add_argument(
-        "--journey_prediction_file",
+        "--journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/ShoppingJourney/train_shopping_journey_prediction_SID_output_simplified.tsv",
-        help="Path to the shopping journey prediction TSV file "
-             "(columns: source, uuid, messages, metadata)",
+                "Data/0128_0301/ShoppingJourney_Input_10K_Output_withProducts"
+                "_Ranker_cleaned.tsv",
+        help="Path to the shopping journey TSV file",
     )
     parser.add_argument(
-        "--query_products_file",
+        "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/ShoppingJourney_Query_Products_Resolved.tsv",
-        help="Path to the query products TSV file "
-             "(columns: query_id, SID, GlobalOfferId, Title, SimilarityScore)",
+        default="./raw_data/item.json",
+        help="Path to item metadata JSON file (from pre_s0_combine_item_data.py)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         default="./raw_data",
         help="Path to the output directory (default: ./raw_data)",
-    )
-    parser.add_argument(
-        "--reverse_events",
-        action="store_true",
-        default=False,
-        help="Reverse user event order (e.g., oldest first). "
-             "Default is False (keep original order from the source data).",
     )
     return parser.parse_args()
 
@@ -342,171 +236,122 @@ def main():
     args = parse_args()
 
     # =========================================================================
-    # Step 1: Read query products TSV and build SID -> GlobalOfferId mapping
+    # Step 1: Load item metadata to build valid OfferId set
     # =========================================================================
     print("=" * 70)
-    print("Step 1: Building SID -> GlobalOfferId mapping")
+    print("Step 1: Loading item metadata")
     print("=" * 70)
 
-    query_columns = [
-        "query_id", "SID", "GlobalOfferId", "Title", "SimilarityScore",
+    with open(args.item_file, "r", encoding="utf-8") as f:
+        item_data = json.load(f)
+    valid_offer_ids = set(item_data.keys())
+    print(f"  Loaded {len(valid_offer_ids):,} items from: {args.item_file}")
+
+    # Free memory - we only need the keys
+    del item_data
+
+    # =========================================================================
+    # Step 2: Read journey prediction TSV
+    # =========================================================================
+    print()
+    print("=" * 70)
+    print("Step 2: Reading journey prediction file")
+    print("=" * 70)
+
+    tsv_columns = [
+        "UserId", "ReadableUserEvents", "UserHistory",
+        "ShoppingJourney", "JourneyWithProducts", "OUTPUT", "FinalJourney",
     ]
-    query_rows = read_tsv(
-        args.query_products_file, expected_columns=query_columns,
-    )
-
-    sid_to_gid, sid_conflicts = build_sid_to_gid_mapping(query_rows)
-
-    print(f"  Rows in query products file: {len(query_rows):>12,}")
-    print(f"  Distinct SIDs mapped: {len(sid_to_gid):>12,}")
-    print(f"  SID -> GID conflicts: {sid_conflicts:>12,}")
-
-    # Show sample SID -> GID mappings
-    if sid_to_gid:
-        sample_items = list(sid_to_gid.items())[:3]
-        print(f"\n  Sample SID -> GlobalOfferId mappings:")
-        for sid, gid in sample_items:
-            print(f"    {sid} -> {gid}")
+    rows = read_tsv(args.journey_file, expected_columns=tsv_columns)
+    print(f"  Total rows: {len(rows):,}")
 
     # =========================================================================
-    # Step 2: Read shopping journey prediction TSV
+    # Step 3: Parse and construct journey data
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 2: Reading shopping journey prediction file")
+    print("Step 3: Parsing rows and constructing journeys")
     print("=" * 70)
 
-    prediction_columns = ["source", "uuid", "messages", "metadata"]
-    prediction_rows = read_tsv(
-        args.journey_prediction_file, expected_columns=prediction_columns,
-    )
-    print(f"  Total rows: {len(prediction_rows):>12,}")
-
-    # Source distribution
-    source_counts = defaultdict(int)
-    for row in prediction_rows:
-        source_counts[row.get("source", "").strip()] += 1
-    if source_counts:
-        print(f"\n  Source distribution:")
-        for src, cnt in sorted(source_counts.items(), key=lambda x: -x[1]):
-            print(f"    {src:50s} {cnt:>10,}")
-
-    # =========================================================================
-    # Step 3: Parse messages and extract journey data
-    # =========================================================================
-    print()
-    print("=" * 70)
-    print("Step 3: Parsing messages and extracting journey data")
-    print("=" * 70)
-
-    results = {}  # uuid -> {user_shopping_events, system_time, journeys}
-    duplicate_uuids = 0
-    parse_failures = 0
-    no_uuid = 0
+    results = {}
+    duplicate_users = 0
+    no_userid = 0
     no_events = 0
-    no_system_time = 0
-    no_journeys = 0
+    no_final_journey = 0
+    parse_failures = 0
+    filtered_no_events = 0
+    filtered_no_journeys = 0
 
-    # Event dedup statistics
+    # Event statistics
     total_raw_events = 0
     total_deduped_events = 0
 
-    # SID mapping statistics
-    total_journeys = 0
-    total_journeys_kept = 0
-    total_sids_found = 0
-    total_sids_mapped = 0
-    total_sids_unmapped = 0
-    unmapped_sid_set = set()
-    empty_product_ids_journeys = 0
+    # OfferId statistics
+    agg_total_offer_ids = 0
+    agg_found_offer_ids = 0
+    agg_missing_offer_ids = 0
+    agg_total_journeys = 0
+    agg_kept_journeys = 0
+    agg_empty_product_journeys = 0
+    missing_offer_id_set = set()
 
-    for row in prediction_rows:
-        uuid = row.get("uuid", "").strip()
-        if not uuid:
-            no_uuid += 1
+    for row in rows:
+        user_id = row.get("UserId", "").strip()
+        if not user_id:
+            no_userid += 1
             continue
 
-        # Handle duplicate uuids: keep the first occurrence
-        if uuid in results:
-            duplicate_uuids += 1
+        if user_id in results:
+            duplicate_users += 1
             continue
 
-        messages_str = row.get("messages", "").strip()
-        if not messages_str:
-            parse_failures += 1
-            continue
-
-        user_events, raw_event_count, system_time, journeys_raw = (
-            parse_messages(messages_str, reverse_events=args.reverse_events)
-        )
-
-        if user_events is None:
-            parse_failures += 1
-            continue
-
-        # Track event dedup statistics
+        # --- Parse ReadableUserEvents ---
+        events_text = row.get("ReadableUserEvents", "").strip()
+        user_events, raw_event_count = parse_readable_user_events(events_text)
         total_raw_events += raw_event_count
         total_deduped_events += len(user_events)
 
         if not user_events:
             no_events += 1
-        if not system_time:
-            no_system_time += 1
-        if not journeys_raw:
-            no_journeys += 1
 
-        # Process journeys: map ProductSIDs to GlobalOfferIds
-        journeys = []
-        for j_raw in journeys_raw:
-            title = j_raw.get("Title", "").strip()
-            query = j_raw.get("Query", "").strip()
-            product_sids_raw = j_raw.get("ProductSIDs", [])
-
-            # Extract SIDs from <|sid_begin|>...<|sid_end|> format
-            sids = extract_sids(product_sids_raw)
-            total_sids_found += len(sids)
-
-            # Map each SID to its GlobalOfferId
-            product_ids = []
-            for sid in sids:
-                if sid in sid_to_gid:
-                    product_ids.append(sid_to_gid[sid])
-                    total_sids_mapped += 1
-                else:
-                    total_sids_unmapped += 1
-                    unmapped_sid_set.add(sid)
-
-            total_journeys += 1
-
-            # Skip journeys with no mapped products
-            if not product_ids:
-                empty_product_ids_journeys += 1
-                continue
-
-            journeys.append({
-                "title": title,
-                "query": query,
-                "product_ids": product_ids,
-            })
-            total_journeys_kept += 1
-
-        # Only store entries that have at least one journey with products
-        if not journeys:
+        # --- Parse FinalJourney ---
+        journey_text = row.get("FinalJourney", "").strip()
+        if not journey_text:
+            no_final_journey += 1
             continue
 
-        results[uuid] = {
+        journeys, stats, missing_ids = parse_final_journey(
+            journey_text, valid_offer_ids
+        )
+
+        agg_total_offer_ids += stats["total_offer_ids"]
+        agg_found_offer_ids += stats["found_offer_ids"]
+        agg_missing_offer_ids += stats["missing_offer_ids"]
+        agg_total_journeys += stats["total_journeys"]
+        agg_kept_journeys += stats["kept_journeys"]
+        agg_empty_product_journeys += stats["empty_product_journeys"]
+        missing_offer_id_set.update(missing_ids)
+
+        # Filter: must have both non-empty events AND at least one journey
+        if not user_events:
+            filtered_no_events += 1
+            continue
+        if not journeys:
+            filtered_no_journeys += 1
+            continue
+
+        results[user_id] = {
             "user_shopping_events": user_events,
-            "system_time": system_time,
             "journeys": journeys,
         }
 
     print(f"  Successfully parsed entries: {len(results):>12,}")
-    print(f"  Rows with empty uuid: {no_uuid:>12,}")
-    print(f"  Duplicate uuids (skipped): {duplicate_uuids:>12,}")
-    print(f"  Parse failures (bad JSON): {parse_failures:>12,}")
-    print(f"  Entries without user events: {no_events:>12,}")
-    print(f"  Entries without system time: {no_system_time:>12,}")
-    print(f"  Entries without journeys: {no_journeys:>12,}")
+    print(f"  Rows with empty UserId: {no_userid:>12,}")
+    print(f"  Duplicate UserIds (skipped): {duplicate_users:>12,}")
+    print(f"  Entries without events (raw): {no_events:>12,}")
+    print(f"  Entries without FinalJourney: {no_final_journey:>12,}")
+    print(f"  Filtered out (no events): {filtered_no_events:>12,}")
+    print(f"  Filtered out (no valid journeys): {filtered_no_journeys:>12,}")
 
     print(f"\n  --- Event Dedup ---")
     print(f"  Total raw events (before dedup): {total_raw_events:>12,}")
@@ -514,20 +359,24 @@ def main():
     print(f"  Duplicate events removed: "
           f"{total_raw_events - total_deduped_events:>12,}")
 
-    print(f"\n  --- SID Mapping ---")
-    print(f"  Total journeys extracted: {total_journeys:>12,}")
-    print(f"  Journeys with empty product_ids: {empty_product_ids_journeys:>12,}")
-    print(f"  Journeys kept (with products): {total_journeys_kept:>12,}")
-    print(f"  Total ProductSIDs found: {total_sids_found:>12,}")
-    print(f"  SIDs mapped to GlobalOfferId: {total_sids_mapped:>12,}")
-    print(f"  SIDs unmapped: {total_sids_unmapped:>12,}")
-    print(f"  Distinct unmapped SIDs: {len(unmapped_sid_set):>12,}")
+    print(f"\n  --- OfferId Validation ---")
+    print(f"  Total OfferIds in journeys: {agg_total_offer_ids:>12,}")
+    print(f"  OfferIds found in item.json: {agg_found_offer_ids:>12,} "
+          f"({agg_found_offer_ids / max(agg_total_offer_ids, 1) * 100:.2f}%)")
+    print(f"  OfferIds NOT found: {agg_missing_offer_ids:>12,} "
+          f"({agg_missing_offer_ids / max(agg_total_offer_ids, 1) * 100:.2f}%)")
+    print(f"  Distinct missing OfferIds: {len(missing_offer_id_set):>12,}")
 
-    if unmapped_sid_set:
-        sample = sorted(unmapped_sid_set)[:5]
-        print(f"\n  Sample unmapped SIDs:")
-        for sid in sample:
-            print(f"    -> {sid}")
+    if missing_offer_id_set:
+        sample = sorted(missing_offer_id_set)[:5]
+        print(f"\n  Sample missing OfferIds:")
+        for oid in sample:
+            print(f"    -> {oid}")
+
+    print(f"\n  --- Journey Mapping ---")
+    print(f"  Total journeys extracted: {agg_total_journeys:>12,}")
+    print(f"  Journeys with empty product_ids: {agg_empty_product_journeys:>12,}")
+    print(f"  Journeys kept (with products): {agg_kept_journeys:>12,}")
 
     # =========================================================================
     # Step 4: Statistics
@@ -540,11 +389,52 @@ def main():
     entries_with_journeys = sum(
         1 for v in results.values() if v["journeys"]
     )
+    entries_without_journeys = len(results) - entries_with_journeys
 
     print(f"  Total entries: {len(results):>12,}")
     print(f"  Entries with >= 1 journey: {entries_with_journeys:>12,}")
-    print(f"  Entries without journeys: "
-          f"{len(results) - entries_with_journeys:>12,}")
+    print(f"  Entries without journeys: {entries_without_journeys:>12,}")
+
+    # Event count distribution
+    event_counts = [
+        len(v["user_shopping_events"]) for v in results.values()
+    ]
+    if event_counts:
+        ec_sorted = sorted(event_counts)
+
+        def percentile(arr, p):
+            idx = int(len(arr) * p)
+            return arr[min(idx, len(arr) - 1)]
+
+        print(f"\n  User events per entry:")
+        print(f"    Min:  {min(event_counts):>6}")
+        print(f"    P25:  {percentile(ec_sorted, 0.25):>6}")
+        print(f"    P50:  {percentile(ec_sorted, 0.5):>6}")
+        print(f"    P75:  {percentile(ec_sorted, 0.75):>6}")
+        print(f"    P90:  {percentile(ec_sorted, 0.9):>6}")
+        print(f"    Max:  {max(event_counts):>6}")
+        print(f"    Avg:  {sum(event_counts) / len(event_counts):>6.1f}")
+
+        # Event count histogram
+        ec_dist = defaultdict(int)
+        for c in event_counts:
+            if c == 0:
+                bucket = "0"
+            elif c <= 5:
+                bucket = "1-5"
+            elif c <= 10:
+                bucket = "6-10"
+            elif c <= 20:
+                bucket = "11-20"
+            elif c <= 50:
+                bucket = "21-50"
+            else:
+                bucket = "51+"
+            ec_dist[bucket] += 1
+        print(f"\n  Event count distribution:")
+        for bucket in ["0", "1-5", "6-10", "11-20", "21-50", "51+"]:
+            if bucket in ec_dist:
+                print(f"    {bucket:>8s} events: {ec_dist[bucket]:>10,} entries")
 
     # Journey count distribution
     journey_counts = [len(v["journeys"]) for v in results.values()]
@@ -557,18 +447,6 @@ def main():
             label = f"{cnt} journey(s)" if cnt != 1 else f"{cnt} journey"
             print(f"    {label:20s} {jc_dist[cnt]:>10,} entries")
 
-    # User events per entry
-    event_counts = [
-        len(v["user_shopping_events"]) for v in results.values()
-    ]
-    if event_counts:
-        ec_sorted = sorted(event_counts)
-        print(f"\n  User events per entry:")
-        print(f"    Min:  {min(event_counts):>6}")
-        print(f"    P50:  {ec_sorted[len(ec_sorted) // 2]:>6}")
-        print(f"    Max:  {max(event_counts):>6}")
-        print(f"    Avg:  {sum(event_counts) / len(event_counts):>6.1f}")
-
     # Products per journey
     product_counts = [
         len(j["product_ids"])
@@ -577,11 +455,6 @@ def main():
     ]
     if product_counts:
         pc_sorted = sorted(product_counts)
-
-        def percentile(arr, p):
-            idx = int(len(arr) * p)
-            return arr[min(idx, len(arr) - 1)]
-
         print(f"\n  Products per journey:")
         print(f"    Min:  {min(product_counts):>6}")
         print(f"    P50:  {percentile(pc_sorted, 0.5):>6}")
@@ -589,23 +462,25 @@ def main():
         print(f"    Max:  {max(product_counts):>6}")
         print(f"    Avg:  {sum(product_counts) / len(product_counts):>6.1f}")
 
-    # Show a few sample entries
+    # Show sample entries
     sample_entries = list(results.items())[:2]
     if sample_entries:
         print(f"\n  Sample entries:")
-        for uuid, data in sample_entries:
+        for user_id, data in sample_entries:
             n_events = len(data["user_shopping_events"])
             n_journeys = len(data["journeys"])
-            print(f"    uuid: {uuid}")
-            print(f"      system_time: {data['system_time']}")
+            print(f"    UserId: {user_id}")
             print(f"      user_shopping_events: {n_events} events")
             if data["user_shopping_events"]:
-                print(f"        [0]: {data['user_shopping_events'][0][:80]}")
+                print(f"        [0]: {data['user_shopping_events'][0][:100]}")
+                if n_events > 1:
+                    print(f"        [1]: {data['user_shopping_events'][1][:100]}")
             print(f"      journeys: {n_journeys}")
             for ji, j in enumerate(data["journeys"][:2]):
-                print(f"        [{ji}]: title={j['title'][:50]}, "
-                      f"query={j['query'][:40]}, "
-                      f"products={len(j['product_ids'])}")
+                print(f"        [{ji}]: title={j['title'][:60]}")
+                print(f"              reason={j['reason'][:60]}")
+                print(f"              products={len(j['product_ids'])} "
+                      f"ids={j['product_ids'][:3]}")
             print()
 
     # =========================================================================
@@ -625,7 +500,7 @@ def main():
     print(f"  Output written to: {output_path}")
     print(f"  File size: {file_size_mb:.2f} MB")
     print(f"  Total entries: {len(results):,}")
-    print(f"  Total journeys (with products): {total_journeys_kept:,}")
+    print(f"  Total journeys (with products): {agg_kept_journeys:,}")
 
     # =========================================================================
     # Summary
@@ -636,19 +511,18 @@ def main():
     print("=" * 70)
 
     print(f"  Input:")
-    print(f"    Prediction rows:                  {len(prediction_rows):>12,}")
-    print(f"    Query product rows:               {len(query_rows):>12,}")
+    print(f"    Journey TSV rows:                 {len(rows):>12,}")
+    print(f"    Items in item.json:               {len(valid_offer_ids):>12,}")
     print(f"  Processing:")
-    print(f"    Rows with empty uuid:             {no_uuid:>12,}")
-    print(f"    Duplicate uuids (skipped):        {duplicate_uuids:>12,}")
-    print(f"    Parse failures:                   {parse_failures:>12,}")
-    print(f"    SIDs mapped successfully:         {total_sids_mapped:>12,}")
-    print(f"    SIDs unmapped:                    {total_sids_unmapped:>12,}")
+    print(f"    Duplicate UserIds (skipped):       {duplicate_users:>12,}")
+    print(f"    OfferIds found in item.json:       {agg_found_offer_ids:>12,} "
+          f"({agg_found_offer_ids / max(agg_total_offer_ids, 1) * 100:.1f}%)")
+    print(f"    OfferIds NOT found:                {agg_missing_offer_ids:>12,} "
+          f"({agg_missing_offer_ids / max(agg_total_offer_ids, 1) * 100:.1f}%)")
     print(f"  Output:")
     print(f"    Entries:                          {len(results):>12,}")
-    print(f"    Journeys (total extracted):       {total_journeys:>12,}")
-    print(f"    Journeys (kept with products):    {total_journeys_kept:>12,}")
     print(f"    Entries with journeys:            {entries_with_journeys:>12,}")
+    print(f"    Journeys (kept with products):    {agg_kept_journeys:>12,}")
     print()
     print("Done!")
 

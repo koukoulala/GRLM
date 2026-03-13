@@ -197,6 +197,7 @@ def compute_similarities_faiss(
     faiss_gpu_id: int = 0,
     nlist: int = 4096,
     nprobe: int = 128,
+    num_threads: int = 0,
 ) -> Dict:
     """Compute top-k cosine similarities using FAISS ANN.
 
@@ -219,12 +220,30 @@ def compute_similarities_faiss(
         faiss_gpu_id: Which GPU to use for FAISS search (ignored if GPU unavailable).
         nlist: Number of IVF clusters (higher = faster but less accurate).
         nprobe: Number of clusters to search (higher = more accurate but slower).
+        num_threads: Number of CPU threads for FAISS OpenMP parallelism.
+            0 means use all available cores. Only effective on CPU.
     """
     n, dim = embeddings.shape
 
+    # Set CPU thread parallelism (helps both CPU-only and GPU pre/post-processing)
+    if num_threads > 0:
+        faiss.omp_set_num_threads(num_threads)
+        print(f"  FAISS OpenMP threads set to {num_threads}")
+    else:
+        # Use all available cores
+        import os as _os
+        cpu_count = _os.cpu_count() or 1
+        faiss.omp_set_num_threads(cpu_count)
+        print(f"  FAISS OpenMP threads set to {cpu_count} (all cores)")
+
     # Check if FAISS GPU is available
     use_gpu = hasattr(faiss, "StandardGpuResources")
-    mode_str = "FAISS GPU" if use_gpu else "FAISS CPU"
+    num_faiss_gpus = faiss.get_num_gpus() if use_gpu else 0
+    if num_faiss_gpus > 0:
+        mode_str = f"FAISS GPU (x{num_faiss_gpus})"
+    else:
+        mode_str = "FAISS CPU"
+        use_gpu = False
     print(f"Computing Top-{k} similarities for {n} items using {mode_str} ...")
     print(f"  Index: IVFFlat, nlist={nlist}, nprobe={nprobe}, dim={dim}")
     start_time = time.time()
@@ -242,8 +261,12 @@ def compute_similarities_faiss(
 
     # Move index to GPU if available
     if use_gpu:
-        gpu_res = faiss.StandardGpuResources()
-        index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, index)
+        if num_faiss_gpus > 1:
+            print(f"  Using all {num_faiss_gpus} GPUs for FAISS search")
+            index = faiss.index_cpu_to_all_gpus(index)
+        else:
+            gpu_res = faiss.StandardGpuResources()
+            index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, index)
 
     print(f"  Training index on {n} vectors ...")
     index.train(embeddings)
@@ -295,8 +318,8 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item_with_attr.json",
-        help="Path to item metadata JSON file (e.g., ./raw_data/item.json)",
+        default="./raw_data/merged_clean_item.json",
+        help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
@@ -324,7 +347,7 @@ def parse_args():
     parser.add_argument(
         "--max_length",
         type=int,
-        default=512,
+        default=1024,
         help="Maximum token length for tokenizer truncation",
     )
     parser.add_argument(
@@ -338,6 +361,12 @@ def parse_args():
         type=int,
         default=128,
         help="Number of clusters to probe during FAISS search (higher=more accurate)",
+    )
+    parser.add_argument(
+        "--faiss_threads",
+        type=int,
+        default=60,
+        help="Number of CPU threads for FAISS (0=all cores, default: 0)",
     )
     return parser.parse_args()
 
@@ -394,6 +423,7 @@ def main():
         faiss_gpu_id=0,
         nlist=args.faiss_nlist,
         nprobe=args.faiss_nprobe,
+        num_threads=args.faiss_threads,
     )
 
     output_file = os.path.join(args.output_dir, "similarities.json")

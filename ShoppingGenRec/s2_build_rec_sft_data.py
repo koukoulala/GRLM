@@ -213,7 +213,7 @@ def _create_instruction_sample(
     instruction = (
         "Given the user's product interaction sequence, predict the next products "
         "in the sequence. Each product is represented by a text ID of exactly 7 "
-        "characteristic words.\n"
+        "slots: Item text ID: [s1, s2, s3, s4, s5, s6, s7] \n"
     )
 
     # Input: first num_input_items items
@@ -310,7 +310,7 @@ def parse_args():
     parser.add_argument(
         "--multi_input_prob",
         type=float,
-        default=0.0,
+        default=0.5,
         help="Probability of using multiple items as input (0=disabled, 0~1). "
         "When triggered and train items > 5, randomly picks a split point in "
         "the first half of training items to use as input.",
