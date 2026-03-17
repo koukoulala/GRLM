@@ -159,28 +159,38 @@ def classify_action(action):
     return None
 
 
-def get_item_description(item_id, id2meta, page_title_items=None):
+def get_item_description(item_id, id2meta, page_title_items=None, item_data=None):
     """Get a human-readable description for an item ID.
 
-    For GlobalOfferIds, looks up the title from id2meta.
-    For PageTitle indices (P-prefixed), looks up from page_title_items
-    or returns the index itself.
+    Lookup priority:
+      1. id2meta (items with valid TIDs)
+      2. item_data (full item metadata, broader coverage)
+      3. page_title_items (for P-prefixed PageTitle indices)
+      4. Raw item_id as fallback
 
     Args:
         item_id: Item identifier string (GlobalOfferId or "P123").
         id2meta: Dict mapping item IDs to metadata.
         page_title_items: Optional dict mapping P-prefixed indices to
             page title data.
+        item_data: Optional dict of all items (broader than id2meta).
 
     Returns:
         Description string (product title or page title or the raw ID).
     """
+    if item_id in id2meta:
+        title = id2meta[item_id].get("title", "")
+        if title:
+            return title
+    if item_data and item_id in item_data:
+        title = item_data[item_id].get("title", "")
+        if title:
+            return title
     if item_id.startswith("P") and page_title_items:
         pt_data = page_title_items.get(item_id, {})
         title = pt_data.get("title", "")
-        return title if title else item_id
-    elif item_id in id2meta:
-        return id2meta[item_id].get("title", item_id)
+        if title:
+            return title
     return item_id
 
 
@@ -308,6 +318,7 @@ def build_event_sequence(
     target_timestamp,
     id2meta,
     page_title_items=None,
+    item_data=None,
     max_events=20,
 ):
     """Build a formatted event sequence from preceding actions.
@@ -348,7 +359,7 @@ def build_event_sequence(
 
         # Build human-readable description
         if event_type in ("Clicked", "Browsed"):
-            desc = get_item_description(raw_desc, id2meta, page_title_items)
+            desc = get_item_description(raw_desc, id2meta, page_title_items, item_data)
         else:
             # Searched: use the query text directly
             desc = raw_desc
@@ -448,11 +459,12 @@ def create_sft_sample(
 # Main Pipeline
 # =============================================================================
 
-def create_journey_sft_data(
+def create_event2product_sft_data(
     full_sequential_data,
     id2meta,
     output_dir,
     page_title_items=None,
+    item_data=None,
     max_events=20,
     gap_threshold=DEFAULT_GAP_THRESHOLD,
 ):
@@ -479,7 +491,7 @@ def create_journey_sft_data(
     type_dist = defaultdict(int)
 
     for user_id, actions in tqdm(
-        full_sequential_data.items(), desc="Building journey SFT data"
+        full_sequential_data.items(), desc="Building event2product SFT data"
     ):
         if not actions:
             skip_reasons["empty_actions"] += 1
@@ -534,6 +546,7 @@ def create_journey_sft_data(
             target_ts,
             id2meta,
             page_title_items=page_title_items,
+            item_data=item_data,
             max_events=max_events,
         )
 
@@ -627,7 +640,7 @@ def save_sft_data(sft_data, output_file):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build journey-to-product SFT data from user event sequences"
+        description="Build event-to-product SFT data from user event sequences"
     )
     parser.add_argument(
         "--full_sequential_file",
@@ -651,16 +664,23 @@ def parse_args():
              "(default: ./raw_data/page_title_item.json)",
     )
     parser.add_argument(
+        "--item_file",
+        type=str,
+        default="./raw_data/merged_clean_item.json",
+        help="Path to full item metadata JSON for description fallback "
+             "(default: ./raw_data/merged_clean_item.json)",
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="./sft_data",
-        help="Output directory. SFT data saved to <output_dir>/journey_sft.json "
+        help="Output directory. SFT data saved to <output_dir>/event2product_sft.json "
              "(default: ./sft_data)",
     )
     parser.add_argument(
         "--max_events",
         type=int,
-        default=30,
+        default=50,
         help="Maximum number of events per input sequence",
     )
     parser.add_argument(
@@ -711,24 +731,35 @@ def main():
         print(f"  Page title items file not found: {args.page_title_items_file}")
         print(f"    (PageTitle descriptions will use raw index IDs)")
 
+    # Load full item data for description fallback
+    item_data = None
+    if os.path.exists(args.item_file):
+        print(f"  Loading item data (fallback): {args.item_file}")
+        with open(args.item_file, "r", encoding="utf-8") as f:
+            item_data = json.load(f)
+        print(f"    Items: {len(item_data):,}")
+    else:
+        print(f"  Item data file not found: {args.item_file}")
+
     # =========================================================================
     # Step 2: Build SFT data
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 2: Building journey SFT data")
+    print("Step 2: Building event2product SFT data")
     print(f"  gap_threshold = {args.gap_threshold:.0f}s "
           f"({args.gap_threshold / 3600:.1f}h)")
     print(f"  max_events = {args.max_events}")
     print("=" * 70)
 
-    output_file = os.path.join(args.output_dir, "journey_sft.json")
+    output_file = os.path.join(args.output_dir, "event2product_sft.json")
 
-    sft_data = create_journey_sft_data(
+    sft_data = create_event2product_sft_data(
         full_sequential_data,
         id2meta,
         args.output_dir,
         page_title_items=page_title_items,
+        item_data=item_data,
         max_events=args.max_events,
         gap_threshold=args.gap_threshold,
     )

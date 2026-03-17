@@ -41,6 +41,7 @@ import hashlib
 import struct
 from collections import Counter, defaultdict
 from multiprocessing import Pool, cpu_count
+from tqdm import tqdm
 
 # Increase CSV field size limit to handle very large fields
 csv.field_size_limit(sys.maxsize)
@@ -151,6 +152,40 @@ def read_tsv(filepath, expected_columns=None):
     return rows
 
 
+# Pre-compiled regex patterns for strip_domain_affixes
+_RE_DOMAIN_PREFIX = re.compile(
+    r"^(?:Amazon\.(?:com|co\.jp|co\.uk|de|fr|ca|com\.au)"
+    r"|[A-Za-z0-9]+\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br))\s*[:|]\s*",
+    flags=re.IGNORECASE,
+)
+
+_RE_DOMAIN_SUFFIXES = []
+for _domain in KNOWN_DOMAINS:
+    _escaped = re.escape(_domain)
+    _RE_DOMAIN_SUFFIXES.append(
+        re.compile(rf"\s*[|:\-\u2013\u2014]\s*{_escaped}\s*$", flags=re.IGNORECASE)
+    )
+
+_RE_GENERIC_SUFFIX = re.compile(
+    r"\s*[|:\-\u2013\u2014]\s*"
+    r"[A-Za-z0-9][A-Za-z0-9\s&'.\u00ae]*"
+    r"\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br)\s*$",
+    flags=re.IGNORECASE,
+)
+
+# Pre-compiled regex patterns for normalize_whitespace
+_RE_WS_COLLAPSE = re.compile(r"\s+")
+_RE_WS_BEFORE_PUNCT = re.compile(r"\s+([,;:.!?\)\]])")
+_RE_WS_AFTER_OPEN = re.compile(r"([\(\[])\s+")
+_RE_WS_DASH = re.compile(r"(\w)\s+\-\s+(\w)")
+_RE_WS_DECIMAL = re.compile(r"(\d)\s*\.\s*(\d)")
+_RE_WS_SLASH = re.compile(r"(\w)\s*/\s*(\w)")
+
+# Pre-compiled regex for compute_canonical_key
+_RE_CANON_NONALNUM = re.compile(r"[^a-z0-9\s]")
+_RE_CANON_SPACES = re.compile(r"\s+")
+
+
 def strip_domain_affixes(title):
     """Strip known domain prefixes and suffixes from a page title.
 
@@ -167,21 +202,15 @@ def strip_domain_affixes(title):
         Cleaned title with domain affixes removed.
     """
     # Strip leading domain prefix (e.g., "Amazon.com : ...", "Amazon.co.jp: ...")
-    title = re.sub(
-        r"^(?:Amazon\.(?:com|co\.jp|co\.uk|de|fr|ca|com\.au)"
-        r"|[A-Za-z0-9]+\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br))\s*[:|]\s*",
-        "", title, flags=re.IGNORECASE,
-    )
+    title = _RE_DOMAIN_PREFIX.sub("", title)
 
     # Strip trailing domain/store suffixes iteratively (handles nested suffixes)
     for _ in range(3):
         changed = False
 
         # Try known domain names first (longest match first)
-        for domain in KNOWN_DOMAINS:
-            escaped = re.escape(domain)
-            pattern = rf"\s*[|:\-\u2013\u2014]\s*{escaped}\s*$"
-            new_title = re.sub(pattern, "", title, flags=re.IGNORECASE)
+        for pat in _RE_DOMAIN_SUFFIXES:
+            new_title = pat.sub("", title)
             if new_title != title:
                 title = new_title
                 changed = True
@@ -189,12 +218,7 @@ def strip_domain_affixes(title):
 
         if not changed:
             # Generic pattern: trailing " | <word(s).com>" or similar
-            new_title = re.sub(
-                r"\s*[|:\-\u2013\u2014]\s*"
-                r"[A-Za-z0-9][A-Za-z0-9\s&'.\u00ae]*"
-                r"\.(?:com|org|net|co\.uk|co\.jp|co\.kr|com\.au|com\.br)\s*$",
-                "", title, flags=re.IGNORECASE,
-            )
+            new_title = _RE_GENERIC_SUFFIX.sub("", title)
             if new_title != title:
                 title = new_title
                 changed = True
@@ -222,17 +246,17 @@ def normalize_whitespace(title):
         Whitespace-normalized title.
     """
     # Collapse all whitespace to single space
-    title = re.sub(r"\s+", " ", title)
+    title = _RE_WS_COLLAPSE.sub(" ", title)
     # Remove space before punctuation: , ; : . ! ? ) ]
-    title = re.sub(r"\s+([,;:.!?\)\]])", r"\1", title)
+    title = _RE_WS_BEFORE_PUNCT.sub(r"\1", title)
     # Remove space after opening brackets: ( [
-    title = re.sub(r"([\(\[])\s+", r"\1", title)
+    title = _RE_WS_AFTER_OPEN.sub(r"\1", title)
     # Normalize isolated dashes: "word - word" -> "word-word" (compound words)
-    title = re.sub(r"(\w)\s+\-\s+(\w)", r"\1-\2", title)
+    title = _RE_WS_DASH.sub(r"\1-\2", title)
     # Normalize isolated slashes: "8 . 5" -> "8.5" (decimal numbers)
-    title = re.sub(r"(\d)\s*\.\s*(\d)", r"\1.\2", title)
+    title = _RE_WS_DECIMAL.sub(r"\1.\2", title)
     # Normalize "word / word" -> "word/word" for size/option patterns
-    title = re.sub(r"(\w)\s*/\s*(\w)", r"\1/\2", title)
+    title = _RE_WS_SLASH.sub(r"\1/\2", title)
     return title.strip()
 
 
@@ -250,8 +274,8 @@ def compute_canonical_key(title):
         Canonical key string.
     """
     key = title.lower()
-    key = re.sub(r"[^a-z0-9\s]", " ", key)
-    key = re.sub(r"\s+", " ", key)
+    key = _RE_CANON_NONALNUM.sub(" ", key)
+    key = _RE_CANON_SPACES.sub(" ", key)
     return key.strip()
 
 
@@ -495,7 +519,7 @@ def deduplicate_by_word_overlap(titles, word_sets, threshold=0.8, min_words=3,
     print(f"    Eligible titles (>= {min_words} content words): {eligible_count:,}")
 
     # Use multiprocessing for large datasets
-    num_workers = min(cpu_count(), 8)
+    num_workers = min(cpu_count(), 50)
     signatures = [None] * n
 
     if n > 50000 and num_workers > 1:
@@ -594,6 +618,20 @@ def deduplicate_by_word_overlap(titles, word_sets, threshold=0.8, min_words=3,
     return list(groups.values())
 
 
+def _normalize_title_batch(titles_batch):
+    """Worker function: normalize a batch of titles in a subprocess.
+
+    Returns list of (original, normalized, canonical_key) tuples.
+    """
+    results = []
+    for orig in titles_batch:
+        after_domain = strip_domain_affixes(orig)
+        normalized = normalize_whitespace(after_domain)
+        key = compute_canonical_key(normalized)
+        results.append((orig, normalized, key))
+    return results
+
+
 # =============================================================================
 # Argument Parsing
 # =============================================================================
@@ -606,7 +644,7 @@ def parse_args():
         "--sequence_data_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/0128_0301/SequenceData_Plat_Sampled_100000_User.tsv",
+                "Data/0128_0301/SequenceData_Plat_Sampled_500000_User.tsv",
         help="Path to the SequenceData_Plat TSV file "
     )
     parser.add_argument(
@@ -618,8 +656,8 @@ def parse_args():
     parser.add_argument(
         "--similarity_threshold",
         type=float,
-        default=0.8,
-        help="Jaccard similarity threshold for near-duplicate merging (default: 0.8)",
+        default=0.75,
+        help="Jaccard similarity threshold for near-duplicate merging",
     )
     parser.add_argument(
         "--min_title_chars",
@@ -682,22 +720,39 @@ def main():
     domain_stripped_count = 0
     ws_modified_count = 0
 
-    for orig in all_page_titles:
-        # Step 2a: Strip domain prefixes/suffixes
-        after_domain = strip_domain_affixes(orig)
-        if after_domain != orig:
-            domain_stripped_count += 1
+    # Parallelize normalization for large datasets
+    titles_list = list(all_page_titles)
+    num_workers = min(cpu_count(), 50)
+    chunk_size = max(5000, len(titles_list) // (num_workers * 4))
 
-        # Step 2b: Normalize whitespace / punctuation spacing
-        normalized = normalize_whitespace(after_domain)
-        if normalized != after_domain:
-            ws_modified_count += 1
-
-        original_to_normalized[orig] = normalized
-
-        # Step 2c: Canonical key for grouping
-        key = compute_canonical_key(normalized)
-        canonical_groups[key].add(orig)
+    if len(titles_list) > 100000 and num_workers > 1:
+        print(f"  Using {num_workers} workers, chunk_size={chunk_size:,}...")
+        batches = [
+            titles_list[i:i + chunk_size]
+            for i in range(0, len(titles_list), chunk_size)
+        ]
+        with Pool(num_workers) as pool:
+            for batch_results in tqdm(
+                pool.imap_unordered(_normalize_title_batch, batches),
+                total=len(batches), desc="  Normalizing",
+            ):
+                for orig, normalized, key in batch_results:
+                    if normalized != orig:
+                        # Count domain stripping (approximation: any change counts)
+                        domain_stripped_count += 1
+                    original_to_normalized[orig] = normalized
+                    canonical_groups[key].add(orig)
+    else:
+        for orig in tqdm(titles_list, desc="  Normalizing"):
+            after_domain = strip_domain_affixes(orig)
+            if after_domain != orig:
+                domain_stripped_count += 1
+            normalized = normalize_whitespace(after_domain)
+            if normalized != after_domain:
+                ws_modified_count += 1
+            original_to_normalized[orig] = normalized
+            key = compute_canonical_key(normalized)
+            canonical_groups[key].add(orig)
 
     total_modified = sum(
         1 for o in all_page_titles if original_to_normalized[o] != o
@@ -824,6 +879,95 @@ def main():
             print(f"\n  Sample removed ({reason}):")
             for s in samples:
                 print(f"    -> {s}")
+
+    # =========================================================================
+    # Step 4.5: Prefix-based deduplication (same-product SKU variants)
+    # =========================================================================
+    print()
+    print("=" * 70)
+    print("Step 4.5: Prefix-based deduplication (SKU variants)")
+    print("=" * 70)
+
+    # Group titles by their canonical key prefix (first N chars).
+    # Within each prefix group, merge titles with Jaccard >= threshold.
+    # This catches "Product Name - Color A" vs "Product Name - Color B"
+    # which MinHash may miss because they differ in multiple attribute words.
+    PREFIX_LEN = 40
+    prefix_groups = defaultdict(list)  # prefix -> list of indices into filtered_keys
+    for i, key in enumerate(filtered_keys):
+        title = group_representatives[key]
+        canon = compute_canonical_key(title)
+        prefix = canon[:PREFIX_LEN] if len(canon) >= PREFIX_LEN else canon
+        prefix_groups[prefix].append(i)
+
+    # Only process groups with 2+ members
+    multi_prefix_groups = {
+        p: idxs for p, idxs in prefix_groups.items() if len(idxs) >= 2
+    }
+    print(f"  Prefix length: {PREFIX_LEN} chars")
+    print(f"  Total prefix groups: {len(prefix_groups):>12,}")
+    print(f"  Groups with 2+ members: {len(multi_prefix_groups):>12,}")
+
+    # Within each prefix group, compute Jaccard and merge
+    prefix_uf = UnionFind(len(filtered_keys))
+    prefix_merge_count = 0
+    prefix_pairs_checked = 0
+
+    for prefix, idxs in multi_prefix_groups.items():
+        # Compute word sets for this group
+        group_word_sets = []
+        for i in idxs:
+            title = group_representatives[filtered_keys[i]]
+            group_word_sets.append(get_content_words(title))
+
+        # Pairwise Jaccard within the group (small groups, so O(n^2) is fine)
+        for a in range(len(idxs)):
+            for b in range(a + 1, len(idxs)):
+                ws_a = group_word_sets[a]
+                ws_b = group_word_sets[b]
+                if len(ws_a) < 3 or len(ws_b) < 3:
+                    continue
+                prefix_pairs_checked += 1
+                sim = jaccard_similarity(ws_a, ws_b)
+                if sim >= args.similarity_threshold:
+                    prefix_uf.union(idxs[a], idxs[b])
+                    prefix_merge_count += 1
+
+    # Rebuild filtered_keys by merging prefix groups
+    if prefix_merge_count > 0:
+        prefix_merged_groups = defaultdict(set)
+        for i in range(len(filtered_keys)):
+            prefix_merged_groups[prefix_uf.find(i)].add(i)
+
+        new_filtered_keys = []
+        for root, members in prefix_merged_groups.items():
+            if len(members) == 1:
+                idx = next(iter(members))
+                new_filtered_keys.append(filtered_keys[idx])
+            else:
+                # Pick the key with most originals, then longest title
+                best_idx = max(
+                    members,
+                    key=lambda i: (
+                        len(group_originals[filtered_keys[i]]),
+                        len(group_representatives[filtered_keys[i]]),
+                    ),
+                )
+                best_key = filtered_keys[best_idx]
+                # Merge all originals from other keys into the best key
+                for idx in members:
+                    if idx != best_idx:
+                        other_key = filtered_keys[idx]
+                        group_originals[best_key].update(
+                            group_originals[other_key]
+                        )
+                new_filtered_keys.append(best_key)
+
+        filtered_keys = new_filtered_keys
+
+    print(f"  Pairs checked: {prefix_pairs_checked:>12,}")
+    print(f"  Prefix merges: {prefix_merge_count:>12,}")
+    print(f"  Keys after prefix dedup: {len(filtered_keys):>12,}")
 
     # =========================================================================
     # Step 5: Word-overlap deduplication

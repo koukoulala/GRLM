@@ -359,14 +359,20 @@ def parse_args():
     parser.add_argument(
         "--faiss_nprobe",
         type=int,
-        default=128,
+        default=64,
         help="Number of clusters to probe during FAISS search (higher=more accurate)",
     )
     parser.add_argument(
         "--faiss_threads",
         type=int,
-        default=60,
+        default=0,
         help="Number of CPU threads for FAISS (0=all cores, default: 0)",
+    )
+    parser.add_argument(
+        "--resume_from_dir",
+        type=str,
+        default="./raw_data",
+        help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()
 
@@ -392,30 +398,119 @@ def main():
         print("Error: No data loaded!")
         return
 
-    # Create temp dir for inter-process data transfer
-    tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
-    item_ids, embeddings = generate_embeddings_multi_gpu(
-        data,
-        args.embedding_model,
-        num_gpus=num_gpus,
-        batch_size=args.batch_size,
-        max_length=args.max_length,
-        tmp_dir=tmp_dir,
-    )
-
-    print(f"Embeddings shape: {embeddings.shape}, dtype: {embeddings.dtype}")
-
-    # Save embeddings as .npy for efficient storage (P2)
     os.makedirs(args.output_dir, exist_ok=True)
     emb_file = os.path.join(args.output_dir, "embeddings.npy")
     ids_file = os.path.join(args.output_dir, "item_ids.json")
+    output_file = os.path.join(args.output_dir, "similarities.json")
+
+    current_ids = [item["id"] for item in data]
+    current_id_set = set(current_ids)
+
+    # =========================================================================
+    # Stage 1: Embedding generation (with resume support)
+    # =========================================================================
+    resume_dir = args.resume_from_dir.strip() if args.resume_from_dir else ""
+    resume_emb_file = os.path.join(resume_dir, "embeddings.npy") if resume_dir else ""
+    resume_ids_file = os.path.join(resume_dir, "item_ids.json") if resume_dir else ""
+
+    if resume_dir and os.path.exists(resume_emb_file) and os.path.exists(resume_ids_file):
+        print(f"\n[RESUME] Loading existing embeddings from: {resume_dir}")
+        prev_embeddings = np.load(resume_emb_file)
+        with open(resume_ids_file, "r", encoding="utf-8") as f:
+            prev_ids = json.load(f)
+        print(f"  Previous embeddings: {len(prev_ids):,} items, "
+              f"shape={prev_embeddings.shape}")
+
+        # Build mapping: prev_id -> index in prev_embeddings
+        prev_id_set = set(prev_ids)
+        prev_id_to_idx = {pid: i for i, pid in enumerate(prev_ids)}
+
+        # Find new items that need embedding
+        new_items = [item for item in data if item["id"] not in prev_id_set]
+        # Find items to keep from previous (still in current data)
+        kept_prev_ids = [pid for pid in prev_ids if pid in current_id_set]
+        removed_count = len(prev_ids) - len(kept_prev_ids)
+
+        print(f"  Items in current input:   {len(data):>10,}")
+        print(f"  Already have embeddings:  {len(kept_prev_ids):>10,}")
+        print(f"  Removed (not in input):   {removed_count:>10,}")
+        print(f"  New items to process:     {len(new_items):>10,}")
+
+        if new_items:
+            # Generate embeddings only for new items
+            print(f"\n  Generating embeddings for {len(new_items):,} new items...")
+            tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
+            new_item_ids, new_embeddings = generate_embeddings_multi_gpu(
+                new_items,
+                args.embedding_model,
+                num_gpus=num_gpus,
+                batch_size=args.batch_size,
+                max_length=args.max_length,
+                tmp_dir=tmp_dir,
+            )
+            print(f"  New embeddings shape: {new_embeddings.shape}")
+
+            # Merge: build arrays in current data order
+            new_id_to_idx = {nid: i for i, nid in enumerate(new_item_ids)}
+            dim = prev_embeddings.shape[1]
+            merged_embeddings = np.zeros(
+                (len(data), dim), dtype=np.float32
+            )
+            merged_ids = []
+            for i, item in enumerate(data):
+                item_id = item["id"]
+                merged_ids.append(item_id)
+                if item_id in prev_id_to_idx:
+                    merged_embeddings[i] = prev_embeddings[
+                        prev_id_to_idx[item_id]
+                    ]
+                elif item_id in new_id_to_idx:
+                    merged_embeddings[i] = new_embeddings[
+                        new_id_to_idx[item_id]
+                    ]
+
+            item_ids = merged_ids
+            embeddings = merged_embeddings
+        else:
+            # All items already have embeddings, just reorder to match
+            # current data order
+            print(f"  All items already have embeddings, reordering...")
+            dim = prev_embeddings.shape[1]
+            embeddings = np.zeros((len(data), dim), dtype=np.float32)
+            item_ids = []
+            for i, item in enumerate(data):
+                item_id = item["id"]
+                item_ids.append(item_id)
+                if item_id in prev_id_to_idx:
+                    embeddings[i] = prev_embeddings[
+                        prev_id_to_idx[item_id]
+                    ]
+    else:
+        # Full run: generate all embeddings
+        tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
+        item_ids, embeddings = generate_embeddings_multi_gpu(
+            data,
+            args.embedding_model,
+            num_gpus=num_gpus,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            tmp_dir=tmp_dir,
+        )
+
+    print(f"Embeddings shape: {embeddings.shape}, dtype: {embeddings.dtype}")
+
+    # Save embeddings
     np.save(emb_file, embeddings)
     with open(ids_file, "w", encoding="utf-8") as f:
         json.dump(item_ids, f, ensure_ascii=False)
     print(f"Saved embeddings to: {emb_file} ({embeddings.nbytes / 1e9:.2f} GB)")
     print(f"Saved item IDs to: {ids_file}")
 
-    # FAISS ANN similarity search with GPU (P0)
+    # =========================================================================
+    # Stage 2: FAISS similarity search
+    # =========================================================================
+    # Always recompute similarities (even on resume) because the item set
+    # may have changed. Similarity is fast relative to embedding generation.
     similarity_results = compute_similarities_faiss(
         embeddings,
         item_ids,
@@ -426,12 +521,12 @@ def main():
         num_threads=args.faiss_threads,
     )
 
-    output_file = os.path.join(args.output_dir, "similarities.json")
     print(f"Saving similarity results to: {output_file}")
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(similarity_results, f, ensure_ascii=False, indent=2)
 
     # Clean up temp dir
+    tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
     if os.path.isdir(tmp_dir):
         os.rmdir(tmp_dir)
 

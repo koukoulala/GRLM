@@ -209,8 +209,7 @@ def parse_args():
         "--journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/0128_0301/ShoppingJourney_Input_10K_Output_withProducts"
-                "_Ranker_cleaned.tsv",
+                "Data/0128_0301/ShoppingJourney_Input_500K_His50_Final_Training_clean.tsv",
         help="Path to the shopping journey TSV file",
     )
     parser.add_argument(
@@ -260,7 +259,7 @@ def main():
 
     tsv_columns = [
         "UserId", "ReadableUserEvents", "UserHistory",
-        "ShoppingJourney", "JourneyWithProducts", "OUTPUT", "FinalJourney",
+        "JourneyWithProducts", "FinalJourney"
     ]
     rows = read_tsv(args.journey_file, expected_columns=tsv_columns)
     print(f"  Total rows: {len(rows):,}")
@@ -280,7 +279,7 @@ def main():
     no_final_journey = 0
     parse_failures = 0
     filtered_no_events = 0
-    filtered_no_journeys = 0
+    entries_with_empty_journeys = 0
 
     # Event statistics
     total_raw_events = 0
@@ -332,13 +331,13 @@ def main():
         agg_empty_product_journeys += stats["empty_product_journeys"]
         missing_offer_id_set.update(missing_ids)
 
-        # Filter: must have both non-empty events AND at least one journey
+        # Filter: must have non-empty events
         if not user_events:
             filtered_no_events += 1
             continue
+
         if not journeys:
-            filtered_no_journeys += 1
-            continue
+            entries_with_empty_journeys += 1
 
         results[user_id] = {
             "user_shopping_events": user_events,
@@ -351,7 +350,7 @@ def main():
     print(f"  Entries without events (raw): {no_events:>12,}")
     print(f"  Entries without FinalJourney: {no_final_journey:>12,}")
     print(f"  Filtered out (no events): {filtered_no_events:>12,}")
-    print(f"  Filtered out (no valid journeys): {filtered_no_journeys:>12,}")
+    print(f"  Entries with empty journeys:      {entries_with_empty_journeys:>12,}")
 
     print(f"\n  --- Event Dedup ---")
     print(f"  Total raw events (before dedup): {total_raw_events:>12,}")

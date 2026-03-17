@@ -57,7 +57,14 @@ def create_sft_data(
     """
     sft_data = []
     skipped_users = 0
-    skip_reasons = {"id_not_found": 0, "empty_summary": 0, "too_short": 0}
+    skip_reasons = {
+        "id_not_found": 0, "empty_summary": 0, "too_short": 0,
+        "too_many_skipped": 0,
+    }
+    # Per-type skip counters
+    skipped_p_items = 0        # P-prefixed items skipped
+    skipped_gid_items = 0      # GlobalOfferId items skipped
+    per_user_skip_counts = []   # (skipped, total) per user for stats
     total_sequences = 0
     item_id2tid = {}
     seq_len_list = []  # track sequence lengths for statistics
@@ -75,46 +82,65 @@ def create_sft_data(
         item_ids = elements[1:]
         item_ids = item_ids[-max_seq_len:]  # Truncate to last N items
 
-        # Validate all items in sequence
+        # Validate items in sequence — skip items without valid TID
         all_summary_words = []
         item_id_list = []
         meta_msg_list = []
-        valid_sequence = True
+        user_skipped = 0
 
         for item_id in item_ids:
             if item_id not in parent_asin2meta:
-                valid_sequence = False
                 skip_reasons["id_not_found"] += 1
-                break
+                user_skipped += 1
+                if item_id.startswith("P"):
+                    skipped_p_items += 1
+                else:
+                    skipped_gid_items += 1
+                continue
             meta = parent_asin2meta[item_id]
             summary_words = meta.get("summary_words", [])
             if "" in summary_words:
-                valid_sequence = False
                 skip_reasons["empty_summary"] += 1
-                break
+                user_skipped += 1
+                if item_id.startswith("P"):
+                    skipped_p_items += 1
+                else:
+                    skipped_gid_items += 1
+                continue
             valid_words = [
                 word.replace("[", "").replace("]", "")
                 for word in summary_words
                 if word and word.strip()
             ]
             if len(valid_words) < 7:
-                valid_sequence = False
                 skip_reasons["empty_summary"] += 1
-                break
+                user_skipped += 1
+                if item_id.startswith("P"):
+                    skipped_p_items += 1
+                else:
+                    skipped_gid_items += 1
+                continue
             all_summary_words.extend(valid_words[:7])
             item_id_list.append(item_id)
             meta_msg_list.append(meta)
             item_id2tid[item_id] = valid_words[:7]
 
-        # Need at least 3 items (train items + valid + test)
-        if not valid_sequence or len(item_id_list) < min_items:
-            if valid_sequence and len(item_id_list) < min_items:
-                skip_reasons["too_short"] += 1
+        per_user_skip_counts.append((user_skipped, len(item_ids)))
+
+        # Skip user if more than half of items were skipped
+        if len(item_ids) > 0 and user_skipped > len(item_ids) / 2:
+            skip_reasons["too_many_skipped"] += 1
             skipped_users += 1
             continue
 
-        # Need at least 21 summary words (3 items * 7 words)
-        if len(all_summary_words) < 21:
+        # Need at least 4 items (1 input + 1 output + valid + test)
+        if len(item_id_list) < max(min_items, 4):
+            skip_reasons["too_short"] += 1
+            skipped_users += 1
+            continue
+
+        # Need at least 28 summary words (4 items * 7 words)
+        if len(all_summary_words) < 28:
             skipped_users += 1
             skip_reasons["too_short"] += 1
             continue
@@ -163,11 +189,26 @@ def create_sft_data(
 
     print(f"\nData statistics:")
     print(f"  Total users:          {len(user_interactions):>10,}")
-    print(f"  Skipped:              {skipped_users:>10,}")
+    print(f"  Skipped users:        {skipped_users:>10,}")
+    print(f"    - Too short seq:    {skip_reasons['too_short']:>10,}")
+    print(f"    - Too many skipped: {skip_reasons['too_many_skipped']:>10,}")
+    print(f"  Generated samples:    {total_sequences:>10,}")
+    print(f"\n  Skipped items (total):")
     print(f"    - ID not found:     {skip_reasons['id_not_found']:>10,}")
     print(f"    - Empty/bad summary:{skip_reasons['empty_summary']:>10,}")
-    print(f"    - Too short seq:    {skip_reasons['too_short']:>10,}")
-    print(f"  Generated samples:    {total_sequences:>10,}")
+    print(f"    - P-prefixed:       {skipped_p_items:>10,}")
+    print(f"    - GlobalOfferId:    {skipped_gid_items:>10,}")
+
+    if per_user_skip_counts:
+        import numpy as np
+        skip_arr = np.array([s for s, t in per_user_skip_counts])
+        total_arr = np.array([t for s, t in per_user_skip_counts])
+        skip_ratio = skip_arr / np.maximum(total_arr, 1)
+        print(f"\n  Per-user skipped items:")
+        print(f"    Mean skipped:   {skip_arr.mean():.2f}")
+        print(f"    Median skipped: {np.median(skip_arr):.1f}")
+        print(f"    Mean skip ratio:{skip_ratio.mean():.2%}")
+        print(f"    Users with 0 skipped: {np.sum(skip_arr == 0):,}")
 
     if seq_len_list:
         import numpy as np
@@ -305,7 +346,7 @@ def parse_args():
         "--max_seq_len",
         type=int,
         default=20,
-        help="Max items per user sequence (default: 20)",
+        help="Max items per user sequence",
     )
     parser.add_argument(
         "--multi_input_prob",

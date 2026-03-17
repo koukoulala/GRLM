@@ -158,7 +158,7 @@ def create_instruction(num_journeys):
 
 
 def create_sft_sample(
-    uuid,
+    user_id,
     user_events,
     resolved_journeys,
     max_events,
@@ -166,7 +166,7 @@ def create_sft_sample(
     """Create a single SFT training sample.
 
     Args:
-        uuid: User identifier string.
+        user_id: User identifier string.
         user_events: List of event strings.
         resolved_journeys: List of resolved journey dicts.
         max_events: Maximum events to include.
@@ -179,8 +179,8 @@ def create_sft_sample(
     # Build input: numbered event list
     input_lines = []
 
-    # Truncate to most recent events
-    events = user_events[-max_events:] if len(user_events) > max_events else user_events
+    # Truncate to most recent events (events are ordered newest-first)
+    events = user_events[:max_events]
 
     input_lines.append("User Event History:")
     for idx, event in enumerate(events, 1):
@@ -199,7 +199,7 @@ def create_sft_sample(
         "input": input_text,
         "output": output_text,
         "metadata": {
-            "uuid": uuid,
+            "user_id": user_id,
             "num_events": len(events),
             "num_journeys": len(resolved_journeys),
             "num_products_per_journey": [
@@ -213,16 +213,16 @@ def create_sft_sample(
 # Main Pipeline
 # =============================================================================
 
-def create_journey_prediction_sft_data(
+def create_event2journey_sft_data(
     shopping_journey_data,
     id2meta,
     max_events=DEFAULT_MAX_EVENTS,
     max_products=DEFAULT_MAX_PRODUCTS,
 ):
-    """Create SFT data from shopping journey predictions.
+    """Create SFT data from event-to-journey predictions.
 
     Args:
-        shopping_journey_data: Dict of uuid -> journey entry.
+        shopping_journey_data: Dict of user_id -> journey entry.
         id2meta: Item ID to metadata mapping.
         max_events: Maximum events per input sequence.
         max_products: Maximum products per journey.
@@ -239,8 +239,8 @@ def create_journey_prediction_sft_data(
     journey_counts = []
     product_counts = []
 
-    for uuid, entry in tqdm(
-        shopping_journey_data.items(), desc="Building journey prediction SFT data"
+    for user_id, entry in tqdm(
+        shopping_journey_data.items(), desc="Building event2journey SFT data"
     ):
         user_events = entry.get("user_shopping_events", [])
         journeys = entry.get("journeys", [])
@@ -250,24 +250,20 @@ def create_journey_prediction_sft_data(
             skip_reasons["no_user_events"] += 1
             continue
 
-        if not journeys:
-            skip_reasons["no_journeys"] += 1
-            continue
-
-        # Resolve all journeys' product IDs to TIDs
+        # Resolve journeys' product IDs to TIDs (may be empty)
         resolved_journeys = []
         for journey in journeys:
             resolved = resolve_journey_tids(journey, id2meta, max_products)
             if resolved is not None:
                 resolved_journeys.append(resolved)
 
-        if not resolved_journeys:
-            skip_reasons["no_resolvable_products"] += 1
-            continue
+        is_empty_journey = (len(resolved_journeys) == 0)
+        if is_empty_journey:
+            skip_reasons["empty_journeys"] += 1
 
         # Create the SFT sample
         sample = create_sft_sample(
-            uuid=uuid,
+            user_id=user_id,
             user_events=user_events,
             resolved_journeys=resolved_journeys,
             max_events=max_events,
@@ -430,12 +426,12 @@ def main():
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 2: Building journey prediction SFT data")
+    print("Step 2: Building event2journey SFT data")
     print(f"  max_events = {args.max_events}")
     print(f"  max_products_per_journey = {args.max_products_per_journey}")
     print("=" * 70)
 
-    sft_data = create_journey_prediction_sft_data(
+    sft_data = create_event2journey_sft_data(
         shopping_data,
         id2meta,
         max_events=args.max_events,
@@ -450,7 +446,7 @@ def main():
     print("Step 3: Saving output")
     print("=" * 70)
 
-    output_file = os.path.join(args.output_dir, "journey_prediction_sft.json")
+    output_file = os.path.join(args.output_dir, "event2journey_sft.json")
     save_sft_data(sft_data, output_file)
 
     # =========================================================================
