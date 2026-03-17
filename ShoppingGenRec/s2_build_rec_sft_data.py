@@ -42,6 +42,7 @@ def create_sft_data(
     max_seq_len: int = 20,
     min_items: int = 3,
     multi_input_prob: float = 0.0,
+    short_seq_sample_prob: float = 1.0,
 ):
     """Create SFT training data from user interaction sequences.
 
@@ -54,12 +55,29 @@ def create_sft_data(
         multi_input_prob: Probability of using multiple items as input (0=disabled).
             When triggered, randomly picks a split point in the first half of
             training items so that more items go into input, reducing output length.
+        short_seq_sample_prob: Sampling probability for sequences shorter than
+            the mean length (default: 1.0 = keep all). E.g., 0.4 means only
+            40% of below-mean sequences are kept.
     """
+    # --- First pass: compute mean sequence length for short-seq filtering ---
+    mean_seq_len = None
+    if short_seq_sample_prob < 1.0:
+        all_lens = []
+        for line in user_interactions:
+            parts = line.strip().split()
+            if len(parts) > 1:
+                all_lens.append(len(parts) - 1)  # exclude user_id
+        if all_lens:
+            mean_seq_len = sum(all_lens) / len(all_lens)
+        print(f"  Short-seq downsampling enabled:")
+        print(f"    Mean sequence length: {mean_seq_len:.2f}")
+        print(f"    Sample prob for < mean: {short_seq_sample_prob}")
+
     sft_data = []
     skipped_users = 0
     skip_reasons = {
         "id_not_found": 0, "empty_summary": 0, "too_short": 0,
-        "too_many_skipped": 0,
+        "too_many_skipped": 0, "short_seq_sampled_out": 0,
     }
     # Per-type skip counters
     skipped_p_items = 0        # P-prefixed items skipped
@@ -77,6 +95,14 @@ def create_sft_data(
         elements = line.split()
         if len(elements) <= 1:
             continue
+
+        # --- Short-sequence downsampling ---
+        raw_seq_len = len(elements) - 1
+        if mean_seq_len is not None and raw_seq_len < mean_seq_len:
+            if random.random() >= short_seq_sample_prob:
+                skip_reasons["short_seq_sampled_out"] += 1
+                skipped_users += 1
+                continue
 
         user_id = elements[0]
         item_ids = elements[1:]
@@ -190,6 +216,7 @@ def create_sft_data(
     print(f"\nData statistics:")
     print(f"  Total users:          {len(user_interactions):>10,}")
     print(f"  Skipped users:        {skipped_users:>10,}")
+    print(f"    - Short seq sampled:{skip_reasons['short_seq_sampled_out']:>10,}")
     print(f"    - Too short seq:    {skip_reasons['too_short']:>10,}")
     print(f"    - Too many skipped: {skip_reasons['too_many_skipped']:>10,}")
     print(f"  Generated samples:    {total_sequences:>10,}")
@@ -263,6 +290,8 @@ def _create_instruction_sample(
         words = input_words[idx * 7 : (idx + 1) * 7]
         input_text += "Item text ID: [" + ", ".join(words) + "]"
         title = meta_msg_list[idx].get("title", "")
+        if len(title) > 150:
+            title = title[:150] + "..."
         input_text += f" Title: {title}.\n" if title else " Title: None.\n"
 
     # Output: items from num_input_items to total_items - 2 (exclusive of valid/test)
@@ -330,7 +359,7 @@ def parse_args():
     parser.add_argument(
         "--sequential_file",
         type=str,
-        default="./raw_data/item_sequential_data.txt",
+        default="./raw_data/item_sequential_data_sample.txt",
         help="Path to sequential interaction data file "
              "(default: ./raw_data/item_sequential_data.txt)",
     )
@@ -356,6 +385,13 @@ def parse_args():
         "When triggered and train items > 5, randomly picks a split point in "
         "the first half of training items to use as input.",
     )
+    parser.add_argument(
+        "--short_seq_sample_prob",
+        type=float,
+        default=0.4,
+        help="Sampling probability for sequences shorter than the mean length. E.g., 0.4 means sequences below the mean "
+        "length are kept with 40%% probability.",
+    )
     return parser.parse_args()
 
 
@@ -375,6 +411,7 @@ def main():
         output_dir,
         max_seq_len=args.max_seq_len,
         multi_input_prob=args.multi_input_prob,
+        short_seq_sample_prob=args.short_seq_sample_prob,
     )
 
     save_sft_data(sft_data, output_file)

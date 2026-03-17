@@ -628,8 +628,8 @@ def parse_args():
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=100000,
-        help="Number of prompts per vLLM generate() call (default: 100000)",
+        default=200000,
+        help="Number of prompts per vLLM generate() call (default: 200000)",
     )
     parser.add_argument(
         "--enable_thinking",
@@ -648,18 +648,19 @@ def parse_args():
         "--copilot_model",
         type=str,
         default="gpt-5.2",
-        help="Copilot model name (default: gpt-5.2)",
+        #default="gemini-3-flash-preview",
+        help="Copilot model name",
     )
     parser.add_argument(
         "--copilot_workers",
         type=int,
-        default=40,
+        default=150,
         help="Number of parallel workers for Copilot API calls",
     )
     parser.add_argument(
         "--copilot_chunk_size",
         type=int,
-        default=10000,
+        default=20000,
         help="Number of items per Copilot processing chunk for checkpoint "
              "saving",
     )
@@ -667,7 +668,7 @@ def parse_args():
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=100,
+        default=50,
         help="Maximum number of output tokens per prompt",
     )
     parser.add_argument(
@@ -701,11 +702,13 @@ def parse_args():
         help="Only process GlobalOfferID items (IDs not starting with 'P')",
     )
     parser.add_argument(
-        "--resume",
-        action="store_true",
-        default=False,
-        help="Resume from previous run: load existing output files, only "
-             "process items not yet completed, then merge and overwrite",
+        "--resume_from_dir",
+        type=str,
+        default="./processed/",
+        help="Directory containing a previous run's output files to resume "
+             "from. Loads summaries_with_similarity.jsonl from this directory, "
+             "skips already-completed items, and merges results into the "
+             "current output_dir. If empty (default), no resume.",
     )
     return parser.parse_args()
 
@@ -798,8 +801,10 @@ def main():
 
     # ---- Resume: load previous results if available ----
     previous_results = {}  # item_id -> result dict
-    if args.resume:
-        prev_file = os.path.join(args.output_dir, "summaries_with_similarity.jsonl")
+    if args.resume_from_dir:
+        prev_file = os.path.join(
+            args.resume_from_dir, "summaries_with_similarity.jsonl"
+        )
         if os.path.exists(prev_file):
             print(f"\n[RESUME] Loading previous results from: {prev_file}")
             with open(prev_file, "r", encoding="utf-8") as f:
@@ -844,6 +849,76 @@ def main():
             _skip_inference = False
     else:
         _skip_inference = False
+
+    # ---- Load checkpoint results from interrupted previous runs ----
+    # Handles both vLLM checkpoint format (full item dicts with 'id' key)
+    # and Copilot checkpoint format ({"id": item_id, "result": response_text})
+    if not _skip_inference:
+        # Build a quick lookup for item data by id
+        data_by_id = {item["id"]: item for item in data}
+
+        # Try vLLM format first: each line is a full result dict
+        ckpt_loaded = _load_vllm_checkpoint(checkpoint_dir)
+        if ckpt_loaded:
+            remaining_ids = {item["id"] for item in data}
+            new_from_ckpt = 0
+            for cid, cresult in ckpt_loaded.items():
+                if cid in remaining_ids and cid not in previous_results:
+                    previous_results[cid] = cresult
+                    new_from_ckpt += 1
+            if new_from_ckpt > 0:
+                print(f"  [CHECKPOINT-vLLM] Recovered {new_from_ckpt:,} items")
+
+        # Also try Copilot format: {"id": item_id, "result": response_text}
+        copilot_ckpt = _load_checkpoint_raw(checkpoint_dir)
+        if copilot_ckpt:
+            new_from_copilot_ckpt = 0
+            for cid, response_text in copilot_ckpt.items():
+                if cid in data_by_id and cid not in previous_results:
+                    item = data_by_id[cid]
+                    words = parse_summary_words(response_text)
+                    similar_item_ids = [
+                        sim["item_id"]
+                        for sim in similarities_dict.get(cid, [])[:5]
+                    ]
+                    result = item.copy()
+                    result["llm_output"] = response_text
+                    result["summary_words"] = words
+                    result["similar_item_ids"] = similar_item_ids
+                    previous_results[cid] = result
+                    new_from_copilot_ckpt += 1
+            if new_from_copilot_ckpt > 0:
+                print(f"  [CHECKPOINT-Copilot] Recovered "
+                      f"{new_from_copilot_ckpt:,} items")
+
+        # Update remaining data after all checkpoint loading
+        total_recovered = len(previous_results)
+        if total_recovered > 0:
+            data = [item for item in data
+                    if item["id"] not in previous_results]
+            print(f"\n  Total recovered from all sources: {total_recovered:,}")
+            print(f"  Remaining to process: {len(data):,}")
+            if not data:
+                all_results = [
+                    previous_results[item["id"]]
+                    for item in full_data
+                    if item["id"] in previous_results
+                ]
+                inference_time = 0.001
+                _skip_inference = True
+
+    # ---- Pre-save: save all known results before processing new data ----
+    if previous_results:
+        os.makedirs(args.output_dir, exist_ok=True)
+        presave_file = os.path.join(
+            args.output_dir, "summaries_with_similarity.jsonl"
+        )
+        print(f"\n[PRE-SAVE] Writing {len(previous_results):,} completed "
+              f"results before processing new data ...")
+        with open(presave_file, "w", encoding="utf-8") as f:
+            for result in previous_results.values():
+                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        print(f"  Saved to: {presave_file}")
 
     # ---- Run inference ----
     start_time = time.time()
@@ -963,7 +1038,7 @@ def main():
               f"({len(data) / inference_time:.1f} items/s)")
 
         # Merge with previous results if resuming
-        if args.resume and previous_results:
+        if args.resume_from_dir and previous_results:
             print(f"\n[RESUME] Merging {len(previous_results):,} previous + "
                   f"{len(all_results):,} new results")
             merged = dict(previous_results)  # start with previous

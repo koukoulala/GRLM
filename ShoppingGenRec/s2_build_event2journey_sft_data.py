@@ -184,6 +184,8 @@ def create_sft_sample(
 
     input_lines.append("User Event History:")
     for idx, event in enumerate(events, 1):
+        if len(event) > 150:
+            event = event[:150] + "..."
         input_lines.append(f"{idx} | {event}")
 
     input_lines.append("")

@@ -32,6 +32,8 @@ def prepare_data(item: dict) -> dict:
 
     title = item.get("title", "")
     if title:
+        if len(title) > 150:
+            title = title[:150] + "..."
         info_lines.append(f"Title: {title}")
 
     description = item.get("description", "")
@@ -42,6 +44,8 @@ def prepare_data(item: dict) -> dict:
 
     categories = item.get("categories", "")
     if categories:
+        if len(categories) > 150:
+            categories = categories[:150] + "..."
         info_lines.append(f"Categories: {categories}")
 
     # Append structured attributes (from s6 enrichment)

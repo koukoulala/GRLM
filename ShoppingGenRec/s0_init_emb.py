@@ -281,7 +281,10 @@ def compute_similarities_faiss(
     search_batch_size = 100000
     all_distances = []
     all_indices = []
-    for start in range(0, n, search_batch_size):
+    num_batches = (n + search_batch_size - 1) // search_batch_size
+    for start in tqdm(range(0, n, search_batch_size),
+                      total=num_batches, desc="  FAISS search",
+                      dynamic_ncols=True):
         end = min(start + search_batch_size, n)
         D_batch, I_batch = index.search(embeddings[start:end], search_k)
         all_distances.append(D_batch)
@@ -291,7 +294,7 @@ def compute_similarities_faiss(
 
     # Build results dict, excluding self-matches
     results = {}
-    for i in range(n):
+    for i in tqdm(range(n), desc="  Building results", dynamic_ncols=True):
         similar_items = []
         for j in range(search_k):
             idx = int(I[i, j])
@@ -340,9 +343,9 @@ def parse_args():
         default=None,
         help="Number of GPUs (default: all available)",
     )
-    parser.add_argument("--batch_size", type=int, default=64, help="Batch size per GPU")
+    parser.add_argument("--batch_size", type=int, default=256, help="Batch size per GPU")
     parser.add_argument(
-        "--top_k", type=int, default=10, help="Top-k similar items to compute"
+        "--top_k", type=int, default=8, help="Top-k similar items to compute"
     )
     parser.add_argument(
         "--max_length",
@@ -371,7 +374,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="./raw_data",
+        default="./processed",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()

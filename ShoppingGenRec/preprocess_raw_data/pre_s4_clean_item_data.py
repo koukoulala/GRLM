@@ -136,7 +136,7 @@ def parse_args():
     parser.add_argument(
         "--sequential_data_file",
         type=str,
-        default="./raw_data/item_sequential_data.txt",
+        default="./raw_data/item_sequential_data_sample.txt",
         help="Path to item_sequential_data.txt (from s2). "
              "(default: ./raw_data/item_sequential_data.txt)",
     )
@@ -157,9 +157,10 @@ def parse_args():
     parser.add_argument(
         "--page_title_item_file",
         type=str,
-        default="./raw_data/page_title_item.json",
-        help="Path to page_title_item.json (from s1). "
-             "(default: ./raw_data/page_title_item.json)",
+        default="",
+        help="Path to page_title_item.json (from pre_s1). "
+             "If empty (default), page title items are skipped and "
+             "merged_clean_item.json contains only GlobalOfferId items.",
     )
     parser.add_argument(
         "--output_dir",
@@ -267,33 +268,45 @@ def main():
         print(f"  Referenced but missing in item.json:{len(missing_gids):>12,}")
 
     # =========================================================================
-    # Step 5: Clean page_title_item.json
+    # Step 5: Clean page_title_item.json (optional)
     # =========================================================================
     print()
     print("=" * 70)
     print("Step 5: Cleaning page_title_item.json")
     print("=" * 70)
 
-    pt_data = load_json(args.page_title_item_file)
-    original_pt_count = len(pt_data)
+    cleaned_pt_data = {}
+    original_pt_count = 0
+    cleaned_pt_count = 0
+    removed_pt_count = 0
 
-    # Keep only entries whose key is in the referenced PageTitle index set
-    cleaned_pt_data = {
-        ptid: info for ptid, info in pt_data.items() if ptid in merged_ptids
-    }
-    cleaned_pt_count = len(cleaned_pt_data)
-    removed_pt_count = original_pt_count - cleaned_pt_count
+    if args.page_title_item_file and os.path.exists(args.page_title_item_file):
+        pt_data = load_json(args.page_title_item_file)
+        original_pt_count = len(pt_data)
 
-    # Check for referenced IDs missing from page_title_item.json
-    pt_keys = set(pt_data.keys())
-    missing_ptids = merged_ptids - pt_keys
+        # Keep only entries whose key is in the referenced PageTitle index set
+        cleaned_pt_data = {
+            ptid: info for ptid, info in pt_data.items() if ptid in merged_ptids
+        }
+        cleaned_pt_count = len(cleaned_pt_data)
+        removed_pt_count = original_pt_count - cleaned_pt_count
 
-    print(f"  Original entries:                   {original_pt_count:>12,}")
-    print(f"  Referenced PageTitle indices:        {len(merged_ptids):>12,}")
-    print(f"  Entries kept:                       {cleaned_pt_count:>12,}")
-    print(f"  Entries removed (unused):           {removed_pt_count:>12,}")
-    if missing_ptids:
-        print(f"  Referenced but missing in file:     {len(missing_ptids):>12,}")
+        # Check for referenced IDs missing from page_title_item.json
+        pt_keys = set(pt_data.keys())
+        missing_ptids = merged_ptids - pt_keys
+
+        print(f"  Original entries:                   {original_pt_count:>12,}")
+        print(f"  Referenced PageTitle indices:        {len(merged_ptids):>12,}")
+        print(f"  Entries kept:                       {cleaned_pt_count:>12,}")
+        print(f"  Entries removed (unused):           {removed_pt_count:>12,}")
+        if missing_ptids:
+            print(f"  Referenced but missing in file:     {len(missing_ptids):>12,}")
+    else:
+        if not args.page_title_item_file:
+            print(f"  Skipped: no page_title_item_file specified")
+        else:
+            print(f"  Skipped: file not found: {args.page_title_item_file}")
+        print(f"  merged_clean_item.json will contain GlobalOfferId items only.")
 
     # =========================================================================
     # Step 6: Write cleaned files

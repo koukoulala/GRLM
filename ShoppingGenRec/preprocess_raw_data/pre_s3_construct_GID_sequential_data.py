@@ -226,8 +226,8 @@ def parse_args():
     parser.add_argument(
         "--min_seq_length",
         type=int,
-        default=3,
-        help="Minimum item sequence length per user to be kept (default: 3)",
+        default=4,
+        help="Minimum item sequence length per user to be kept",
     )
     return parser.parse_args()
 
@@ -252,32 +252,52 @@ def main():
     print(f"  Items in item.json: {len(item_data):>12,}")
 
     # =========================================================================
-    # Step 2: Streaming TSV -> group actions by user (with progress bar)
+    # Step 2: Streaming TSV -> group actions by user (with GID validation)
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 2: Streaming TSV and grouping actions by user")
+    print("Step 2: Streaming TSV, grouping by user & validating GIDs")
     print("=" * 70)
 
     columns = ["UserId", "PageTitle", "GlobalOfferId", "Timestamp", "Source", "Query"]
+    item_data_keys = set(item_data.keys())
     user_actions = defaultdict(list)
     skipped_no_user = 0
     skipped_no_timestamp = 0
     source_counts = defaultdict(int)
     total_rows = 0
+    # GID validation counters (inline during read)
+    total_gids_checked = 0
+    valid_gids_count = 0
+    invalid_gid_count = 0
+    invalid_gid_set = set()
 
     file_size = os.path.getsize(args.sequence_data_file)
 
+    # Wrapper to track bytes read (f.tell() is disabled after csv.reader calls next())
+    class _ByteCounter:
+        __slots__ = ("_f", "bytes_read")
+        def __init__(self, f):
+            self._f = f
+            self.bytes_read = 0
+        def __iter__(self):
+            return self
+        def __next__(self):
+            line = next(self._f)
+            self.bytes_read += len(line.encode("utf-8"))
+            return line
+
     with open(args.sequence_data_file, "r", encoding="utf-8") as f:
+        counter = _ByteCounter(f)
         pbar = tqdm(total=file_size, unit="B", unit_scale=True,
                     desc="  Reading TSV", dynamic_ncols=True)
-        reader = csv.reader(f, delimiter="\t")
+        reader = csv.reader(counter, delimiter="\t")
         # Skip the header row
         next(reader, None)
 
         for row in reader:
             # Update progress bar by bytes consumed
-            pbar.update(f.tell() - pbar.n)
+            pbar.update(counter.bytes_read - pbar.n)
             total_rows += 1
 
             if len(row) < len(columns):
@@ -301,10 +321,20 @@ def main():
             source = row_dict["Source"].strip()
             source_counts[source] += 1
 
+            # Validate GlobalOfferId inline
+            gid = row_dict["GlobalOfferId"].strip()
+            if gid:
+                total_gids_checked += 1
+                if gid in item_data_keys:
+                    valid_gids_count += 1
+                else:
+                    invalid_gid_count += 1
+                    invalid_gid_set.add(gid)
+                    gid = ""  # Clear invalid GID
+
             action = {
-                "UserId": user_id,
                 "PageTitle": row_dict["PageTitle"].strip(),
-                "GlobalOfferId": row_dict["GlobalOfferId"].strip(),
+                "GlobalOfferId": gid,
                 "_timestamp": ts,
                 "Timestamp": ts_str,
                 "Source": source,
@@ -322,6 +352,18 @@ def main():
     print(f"  Total users: {len(user_actions):>12,}")
     print(f"  Total valid actions: {total_actions:>12,}")
 
+    # GID validation summary
+    print(f"\n  GID validation (inline):")
+    print(f"    Non-empty GlobalOfferIds checked: {total_gids_checked:>12,}")
+    print(f"    Valid GlobalOfferIds: {valid_gids_count:>12,}")
+    print(f"    Invalid GlobalOfferIds cleared: {invalid_gid_count:>12,}")
+    print(f"    Invalid GlobalOfferIds (distinct): {len(invalid_gid_set):>12,}")
+    if invalid_gid_set:
+        sample_invalid = sorted(invalid_gid_set)[:5]
+        print(f"    Sample invalid GIDs:")
+        for gid in sample_invalid:
+            print(f"      -> {gid}")
+
     # Source distribution
     print(f"\n  Source distribution:")
     for src, cnt in sorted(source_counts.items(), key=lambda x: -x[1]):
@@ -334,141 +376,90 @@ def main():
         print(f"\n  User sequence length stats (before cleaning):")
         print(f"    Min:  {min(seq_lengths):>6}")
         print(f"    P50:  {seq_sorted[len(seq_sorted) // 2]:>6}")
-        print(f"    P90:  {seq_sorted[int(len(seq_sorted) * 0.9)]:>6}")
+        print(f"    P90:  {seq_sorted[int(len(seq_lengths) * 0.9)]:>6}")
         print(f"    Max:  {max(seq_lengths):>6}")
         print(f"    Avg:  {sum(seq_lengths) / len(seq_lengths):>6.1f}")
 
     # =========================================================================
-    # Step 3: Temporal deduplication
+    # Step 3: Dedup + build sequences + filter (single pass per user)
     # =========================================================================
     print()
     print("=" * 70)
-    print(f"Step 3: Temporal deduplication (window = {args.dedup_window:.1f}s)")
+    print(f"Step 3: Dedup + build sequences + filter "
+          f"(window={args.dedup_window:.1f}s, "
+          f"min_seq={args.min_seq_length})")
     print("=" * 70)
 
     total_before_dedup = 0
     total_after_dedup = 0
     source_removed = defaultdict(int)
+    users_too_short = 0
+    actions_lost_short = 0
+    final_users = {}
+    total_users = len(user_actions)
 
-    for user_id in tqdm(user_actions, desc="  Dedup users", dynamic_ncols=True):
-        actions = user_actions[user_id]
+    # Iterate over a snapshot of keys so we can pop from user_actions
+    user_ids = list(user_actions.keys())
+    for user_id in tqdm(user_ids, desc="  Processing users",
+                        dynamic_ncols=True):
+        actions = user_actions.pop(user_id)  # pop to free memory immediately
         total_before_dedup += len(actions)
 
-        # Count source types before dedup for this user
+        # --- Temporal deduplication ---
         before_sources = defaultdict(int)
         for a in actions:
             before_sources[a["Source"]] += 1
 
         deduped = deduplicate_within_time_window(actions, args.dedup_window)
-        user_actions[user_id] = deduped
+        del actions  # free original list
         total_after_dedup += len(deduped)
 
-        # Count source types after dedup for this user
         after_sources = defaultdict(int)
         for a in deduped:
             after_sources[a["Source"]] += 1
-
         for src, cnt in before_sources.items():
             removed = cnt - after_sources.get(src, 0)
             if removed > 0:
                 source_removed[src] += removed
 
+        # --- Sort by timestamp ---
+        deduped.sort(key=lambda a: a["_timestamp"])
+
+        # --- Build item sequence (GIDs already validated in Step 2) ---
+        item_sequence = []
+        for action in deduped:
+            gid = action["GlobalOfferId"]
+            if gid:
+                item_sequence.append(gid)
+
+        # --- Min sequence length filter ---
+        if len(item_sequence) < args.min_seq_length:
+            users_too_short += 1
+            actions_lost_short += len(deduped)
+            continue
+
+        final_users[user_id] = {
+            "actions": deduped,
+            "item_sequence": item_sequence,
+        }
+
+    del user_ids  # free the keys list
+
     removed_dedup = total_before_dedup - total_after_dedup
+    total_items = sum(len(u["item_sequence"]) for u in final_users.values())
+    total_actions_final = sum(len(u["actions"]) for u in final_users.values())
+
     print(f"  Actions before dedup: {total_before_dedup:>12,}")
     print(f"  Actions after dedup: {total_after_dedup:>12,}")
-    print(f"  Actions removed: {removed_dedup:>12,}")
+    print(f"  Actions removed by dedup: {removed_dedup:>12,}")
     if total_before_dedup > 0:
         print(f"  Dedup rate: {removed_dedup / total_before_dedup * 100:>11.2f}%")
-
     if source_removed:
         print(f"\n  Actions removed by source:")
         for src, cnt in sorted(source_removed.items(), key=lambda x: -x[1]):
             print(f"    {src:40s} {cnt:>10,}")
 
-    # =========================================================================
-    # Step 4: Validate GlobalOfferIds against item.json
-    # =========================================================================
-    print()
-    print("=" * 70)
-    print("Step 4: Validating GlobalOfferIds against item.json")
-    print("=" * 70)
-
-    item_data_keys = set(item_data.keys())
-    total_gids_checked = 0
-    valid_gids_count = 0
-    invalid_gid_count = 0
-    invalid_gid_set = set()
-
-    for user_id, actions in tqdm(user_actions.items(),
-                                   desc="  Validating GIDs",
-                                   total=len(user_actions),
-                                   dynamic_ncols=True):
-        for action in actions:
-            gid = action["GlobalOfferId"]
-            if gid:
-                total_gids_checked += 1
-                if gid in item_data_keys:
-                    valid_gids_count += 1
-                else:
-                    # Clear invalid GIDs (keep the action for full_seq)
-                    invalid_gid_count += 1
-                    invalid_gid_set.add(gid)
-                    action["GlobalOfferId"] = ""
-
-    print(f"  Non-empty GlobalOfferIds checked: {total_gids_checked:>12,}")
-    print(f"  Valid GlobalOfferIds: {valid_gids_count:>12,}")
-    print(f"  Invalid GlobalOfferIds cleared: {invalid_gid_count:>12,}")
-    print(f"  Invalid GlobalOfferIds (distinct): {len(invalid_gid_set):>12,}")
-    print(f"  Remaining users: {len(user_actions):>12,}")
-
-    if invalid_gid_set:
-        sample_invalid = sorted(invalid_gid_set)[:5]
-        print(f"\n  Sample invalid GlobalOfferIds:")
-        for gid in sample_invalid:
-            print(f"    -> {gid}")
-
-    # =========================================================================
-    # Step 5: Build item sequences and filter short sequences
-    # =========================================================================
-    print()
-    print("=" * 70)
-    print(f"Step 5: Building sequences and filtering "
-          f"(min_seq_length = {args.min_seq_length})")
-    print("=" * 70)
-
-    users_too_short = 0
-    actions_lost_short = 0
-    final_users = {}
-
-    for user_id, actions in tqdm(user_actions.items(),
-                                   desc="  Building seqs",
-                                   total=len(user_actions),
-                                   dynamic_ncols=True):
-        # Sort actions by timestamp (ascending = chronological order)
-        actions.sort(key=lambda a: a["_timestamp"])
-
-        # Build item sequence: only valid GlobalOfferIds
-        item_sequence = []
-        for action in actions:
-            gid = action["GlobalOfferId"]
-            if gid and gid in item_data_keys:
-                item_sequence.append(gid)
-
-        # Apply minimum sequence length filter on item sequence
-        if len(item_sequence) < args.min_seq_length:
-            users_too_short += 1
-            actions_lost_short += len(actions)
-            continue
-
-        final_users[user_id] = {
-            "actions": actions,
-            "item_sequence": item_sequence,
-        }
-
-    total_items = sum(len(u["item_sequence"]) for u in final_users.values())
-    total_actions_final = sum(len(u["actions"]) for u in final_users.values())
-
-    print(f"  Users with short item sequence "
+    print(f"\n  Users with short item sequence "
           f"(< {args.min_seq_length}): {users_too_short:>12,}")
     print(f"  Actions lost from short sequences: {actions_lost_short:>12,}")
     print(f"  Final users: {len(final_users):>12,}")
@@ -514,11 +505,11 @@ def main():
         print(f"    Max:  {max(full_seq_lengths):>6}")
 
     # =========================================================================
-    # Step 6: Final source distribution statistics
+    # Step 4: Final source distribution statistics
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 6: Final source distribution (after all filtering)")
+    print("Step 4: Final source distribution (after all filtering)")
     print("=" * 70)
 
     final_source_counts = defaultdict(int)
@@ -534,17 +525,14 @@ def main():
         print(f"    {src:40s} {cnt:>10,} ({pct:5.1f}%)")
 
     # =========================================================================
-    # Step 7: Write output files
+    # Step 5: Write output files (streaming JSON)
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 7: Writing output files")
+    print("Step 5: Writing output files")
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
-
-    # --- item_sequential_data.txt ---
-    item_seq_path = os.path.join(args.output_dir, "item_sequential_data.txt")
 
     # Sort users: numeric IDs sorted numerically, others alphabetically
     def user_sort_key(uid):
@@ -554,6 +542,9 @@ def main():
             return (1, 0, uid)
 
     sorted_user_ids = sorted(final_users.keys(), key=user_sort_key)
+
+    # --- item_sequential_data.txt ---
+    item_seq_path = os.path.join(args.output_dir, "item_sequential_data.txt")
 
     with open(item_seq_path, "w", encoding="utf-8") as f:
         for user_id in sorted_user_ids:
@@ -566,37 +557,45 @@ def main():
     print(f"    Users: {len(final_users):,}")
     print(f"    Total item entries: {total_items:,}")
 
-    # --- full_sequential_data.json ---
-    full_seq_data = {}
-
-    for user_id in sorted_user_ids:
-        user_data = final_users[user_id]
-        seq = []
-
-        for action in user_data["actions"]:
-            entry = {
-                "Timestamp": action["Timestamp"],
-                "Source": action["Source"],
-                "GlobalOfferId": action["GlobalOfferId"],
-                "PageTitle": action["PageTitle"],
-                "Query": action["Query"],
-            }
-            seq.append(entry)
-
-        full_seq_data[user_id] = seq
-
+    # --- full_sequential_data.json (streaming write) ---
     full_seq_path = os.path.join(args.output_dir, "full_sequential_data.json")
+
     with open(full_seq_path, "w", encoding="utf-8") as f:
-        json.dump(full_seq_data, f, indent=2, ensure_ascii=False)
+        f.write("{\n")
+        for idx, user_id in enumerate(tqdm(sorted_user_ids,
+                                           desc="  Writing JSON",
+                                           dynamic_ncols=True)):
+            user_data = final_users[user_id]
+            seq = []
+            for action in user_data["actions"]:
+                seq.append({
+                    "Timestamp": action["Timestamp"],
+                    "Source": action["Source"],
+                    "GlobalOfferId": action["GlobalOfferId"],
+                    "PageTitle": action["PageTitle"],
+                    "Query": action["Query"],
+                })
+
+            # Write this user's entry
+            key_str = json.dumps(user_id, ensure_ascii=False)
+            val_str = json.dumps(seq, indent=2, ensure_ascii=False)
+            # Indent the value block by 2 spaces for readability
+            val_str = val_str.replace("\n", "\n  ")
+            f.write(f"  {key_str}: {val_str}")
+            if idx < len(sorted_user_ids) - 1:
+                f.write(",\n")
+            else:
+                f.write("\n")
+        f.write("}\n")
 
     full_seq_size = os.path.getsize(full_seq_path) / (1024 * 1024)
     print(f"\n  Written: {full_seq_path}")
     print(f"    Size: {full_seq_size:.2f} MB")
-    print(f"    Users: {len(full_seq_data):,}")
+    print(f"    Users: {len(final_users):,}")
     print(f"    Total action entries: {total_actions_final:,}")
 
     # =========================================================================
-    # Step 8: Summary
+    # Step 6: Summary
     # =========================================================================
     print()
     print("=" * 70)
@@ -606,7 +605,7 @@ def main():
     print(f"  Input:")
     print(f"    TSV rows:                         {total_rows:>12,}")
     print(f"    Distinct users (before filter):   "
-          f"{len(user_actions) + users_too_short:>12,}")
+          f"{total_users:>12,}")
     print(f"  Filtering:")
     print(f"    Skipped (no UserId/Timestamp):    "
           f"{skipped_no_user + skipped_no_timestamp:>12,}")

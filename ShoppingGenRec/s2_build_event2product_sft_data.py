@@ -220,74 +220,103 @@ def get_item_tid(item_id, id2meta):
     return valid_words[:7]
 
 
-def has_valid_item_id(action):
-    """Check if an action has a non-empty GlobalOfferId or PageTitle.
+def has_valid_item_id(action, use_page_title=True):
+    """Check if an action has a non-empty item identifier.
 
     Args:
         action: Dict with keys GlobalOfferId, PageTitle.
+        use_page_title: If True, also accept PageTitle as a valid item ID.
+            If False, only accept GlobalOfferId.
 
     Returns:
-        True if either GlobalOfferId or PageTitle is non-empty.
+        True if the action has a valid item identifier.
     """
-    return bool(action.get("GlobalOfferId", "")) or bool(action.get("PageTitle", ""))
+    if bool(action.get("GlobalOfferId", "")):
+        return True
+    if use_page_title and bool(action.get("PageTitle", "")):
+        return True
+    return False
 
 
-def get_action_item_id(action):
+def get_action_item_id(action, use_page_title=True):
     """Get the item ID from an action, preferring GlobalOfferId over PageTitle.
 
     Args:
         action: Dict with keys GlobalOfferId, PageTitle.
+        use_page_title: If True, fall back to PageTitle when GlobalOfferId
+            is empty. If False, only return GlobalOfferId.
 
     Returns:
-        Item ID string, or empty string if neither is present.
+        Item ID string, or empty string if not found.
     """
     gid = action.get("GlobalOfferId", "")
     if gid:
         return gid
-    return action.get("PageTitle", "")
+    if use_page_title:
+        return action.get("PageTitle", "")
+    return ""
 
 
 # =============================================================================
 # Core Logic
 # =============================================================================
 
-def find_target_and_context(actions, gap_threshold, min_events=MIN_PRECEDING_EVENTS):
+def find_target_and_context(
+    actions, gap_threshold, id2meta,
+    use_page_title=True, min_events=MIN_PRECEDING_EVENTS,
+):
     """Find a valid prediction target and its preceding event context.
 
     Walks backwards from the end of the action list to find the last action
-    with a valid item ID (GlobalOfferId or PageTitle). Enforces:
-      1. The target must be within gap_threshold seconds of the preceding action.
-      2. There must be at least min_events preceding actions.
+    that satisfies all of:
+      1. Has a valid item ID (GlobalOfferId; or PageTitle if use_page_title).
+      2. The item has a valid TID in id2meta.
+      3. The target is within gap_threshold seconds of the preceding action.
+      4. There are at least min_events preceding actions.
 
-    If the gap constraint is violated, continues searching backwards for
-    another valid target.
+    If any constraint is violated, continues searching backwards.
 
     Args:
         actions: List of action dicts sorted by timestamp (ascending).
         gap_threshold: Maximum allowed time gap in seconds between the target
             and the preceding action.
+        id2meta: Dict mapping item IDs to metadata (used for TID validation).
+        use_page_title: If True, also consider PageTitle as a valid item ID
+            for the target. If False, only GlobalOfferId is accepted.
         min_events: Minimum number of preceding events required.
 
     Returns:
-        Tuple of (target_action, preceding_actions, skip_reason) where:
-          - target_action: the action dict chosen as prediction target, or None
+        Tuple of (target_action, target_item_id, target_tid, preceding_actions,
+                  skip_reason) where:
+          - target_action: the action dict chosen, or None
+          - target_item_id: item ID of the target, or None
+          - target_tid: list of 7 summary words, or None
           - preceding_actions: list of action dicts before the target
           - skip_reason: string describing why skipped, or None if successful
     """
     n = len(actions)
     if n < min_events + 1:
-        return None, None, "too_few_actions"
+        return None, None, None, None, "too_few_actions"
 
     # Walk backwards to find a valid target
     for target_idx in range(n - 1, min_events - 1, -1):
         candidate = actions[target_idx]
 
         # Must have a valid item ID
-        if not has_valid_item_id(candidate):
+        if not has_valid_item_id(candidate, use_page_title=use_page_title):
             continue
 
         # Must have at least min_events actions before it
         if target_idx < min_events:
+            continue
+
+        # Get item ID and check TID
+        item_id = get_action_item_id(candidate, use_page_title=use_page_title)
+        if not item_id:
+            continue
+        tid = get_item_tid(item_id, id2meta)
+        if tid is None:
+            # No valid TID for this item; keep searching backwards
             continue
 
         # Parse timestamps for gap check
@@ -308,9 +337,9 @@ def find_target_and_context(actions, gap_threshold, min_events=MIN_PRECEDING_EVE
 
         # Valid target found
         preceding = actions[:target_idx]
-        return candidate, preceding, None
+        return candidate, item_id, tid, preceding, None
 
-    return None, None, "no_valid_target"
+    return None, None, None, None, "no_valid_target"
 
 
 def build_event_sequence(
@@ -364,8 +393,8 @@ def build_event_sequence(
             # Searched: use the query text directly
             desc = raw_desc
             
-        if len(desc) > 500:
-            desc = desc[:500] + "..."
+        if len(desc) > 150:
+            desc = desc[:150] + "..."
 
         time_diff = target_timestamp - ts
         time_ago = format_time_ago(max(0, time_diff))
@@ -470,11 +499,17 @@ def create_event2product_sft_data(
 ):
     """Create SFT data from full sequential interaction data.
 
+    When page_title_items is None, only GlobalOfferId is used for target
+    selection; PageTitle text appears as raw browsing descriptions in the
+    event sequence. When page_title_items is provided, both GlobalOfferId
+    and PageTitle IDs are considered as potential targets.
+
     Args:
         full_sequential_data: Dict of UserId -> list of action dicts.
         id2meta: Item ID to metadata mapping.
         output_dir: Directory for output files.
         page_title_items: Optional PageTitle index to data mapping.
+            If None, targets are selected by GlobalOfferId only.
         max_events: Maximum events per input sequence.
         gap_threshold: Maximum time gap (seconds) between target and
             preceding action.
@@ -485,6 +520,7 @@ def create_event2product_sft_data(
     sft_data = []
     skip_reasons = defaultdict(int)
     total_users = len(full_sequential_data)
+    use_page_title = page_title_items is not None
 
     # Statistics
     event_counts = []
@@ -497,32 +533,15 @@ def create_event2product_sft_data(
             skip_reasons["empty_actions"] += 1
             continue
 
-        # Find target and preceding context
-        target_action, preceding_actions, skip_reason = find_target_and_context(
-            actions, gap_threshold
+        # Find target with TID validation integrated into the search
+        (target_action, target_item_id, target_tid,
+         preceding_actions, skip_reason) = find_target_and_context(
+            actions, gap_threshold, id2meta,
+            use_page_title=use_page_title,
         )
 
         if skip_reason:
             skip_reasons[skip_reason] += 1
-            continue
-
-        # Get the item ID of the target action
-        target_item_id = get_action_item_id(target_action)
-        if not target_item_id:
-            skip_reasons["no_target_item_id"] += 1
-            continue
-
-        # Get the text ID (TID) for the target product
-        target_tid = get_item_tid(target_item_id, id2meta)
-        if target_tid is None:
-            # For P-prefixed PageTitle items, they may not be in id2meta
-            # Try to find them in page_title_items and check if they have
-            # been processed with summary_words
-            if target_item_id.startswith("P") and page_title_items:
-                # PageTitle items might have been merged into id2meta
-                # during s1_generate_tid / s4_clean_item_data
-                pass
-            skip_reasons["no_target_tid"] += 1
             continue
 
         target_meta = id2meta.get(target_item_id, {})
@@ -645,7 +664,7 @@ def parse_args():
     parser.add_argument(
         "--full_sequential_file",
         type=str,
-        default="./raw_data/full_sequential_data.json",
+        default="./raw_data/full_sequential_data_sample.json",
         help="Path to full_sequential_data.json from s2_construct_sequential_data "
              "(default: ./raw_data/full_sequential_data.json)",
     )
@@ -659,9 +678,10 @@ def parse_args():
     parser.add_argument(
         "--page_title_items_file",
         type=str,
-        default="./raw_data/page_title_item.json",
-        help="Path to page_title_item.json from s1_construct_page_title_data "
-             "(default: ./raw_data/page_title_item.json)",
+        default="",
+        help="Path to page_title_item.json from s1_construct_page_title_data. "
+             "If empty (default), only GlobalOfferId is used for targets "
+             "and PageTitle appears as raw text in events.",
     )
     parser.add_argument(
         "--item_file",
@@ -720,16 +740,21 @@ def main():
         id2meta = json.load(f)
     print(f"    Items: {len(id2meta):,}")
 
-    # Load page title items (optional)
+    # Load page title items (optional — empty path disables PageTitle ID mode)
     page_title_items = None
-    if os.path.exists(args.page_title_items_file):
-        print(f"  Loading page title items: {args.page_title_items_file}")
-        with open(args.page_title_items_file, "r", encoding="utf-8") as f:
-            page_title_items = json.load(f)
-        print(f"    Page title items: {len(page_title_items):,}")
+    if args.page_title_items_file:
+        if os.path.exists(args.page_title_items_file):
+            print(f"  Loading page title items: {args.page_title_items_file}")
+            with open(args.page_title_items_file, "r", encoding="utf-8") as f:
+                page_title_items = json.load(f)
+            print(f"    Page title items: {len(page_title_items):,}")
+        else:
+            print(f"  WARNING: page_title_items_file not found: "
+                  f"{args.page_title_items_file}")
+            print(f"    Falling back to GlobalOfferId-only mode.")
     else:
-        print(f"  Page title items file not found: {args.page_title_items_file}")
-        print(f"    (PageTitle descriptions will use raw index IDs)")
+        print(f"  Page title items: disabled (GlobalOfferId-only mode)")
+        print(f"    Targets use GlobalOfferId only; PageTitle used as raw text.")
 
     # Load full item data for description fallback
     item_data = None
@@ -747,6 +772,7 @@ def main():
     print()
     print("=" * 70)
     print("Step 2: Building event2product SFT data")
+    print(f"  mode = {'GID+PageTitle' if page_title_items else 'GlobalOfferId-only'}")
     print(f"  gap_threshold = {args.gap_threshold:.0f}s "
           f"({args.gap_threshold / 3600:.1f}h)")
     print(f"  max_events = {args.max_events}")

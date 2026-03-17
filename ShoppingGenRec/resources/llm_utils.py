@@ -337,7 +337,7 @@ def run_llm_parallel(inputs, token_file=None, num_workers=4, system_prompt="",
             idx, response_text = future.result()
             results[idx] = response_text
             completed += 1
-            if completed % 100 == 0 or completed == total:
+            if completed % 200 == 0 or completed == total:
                 success_count = sum(1 for v in results.values() if v != "")
                 print(f"  Progress: {completed}/{total} completed "
                       f"({success_count} success, {completed - success_count} failed)")

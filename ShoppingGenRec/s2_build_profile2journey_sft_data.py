@@ -228,6 +228,8 @@ def create_sft_sample(
 
     input_lines.append("Recent Shopping Events:")
     for idx, event in enumerate(recent_events, 1):
+        if len(event) > 150:
+            event = event[:150] + "..."
         input_lines.append(f"{idx} | {event}")
 
     input_lines.append("")
