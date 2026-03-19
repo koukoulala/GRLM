@@ -280,9 +280,7 @@ def parse_summary_words(content: str) -> list:
         if w_lower not in seen:
             seen.add(w_lower)
             deduped.append(w)
-    words = deduped[:7]
-
-    return words
+    return deduped[:7]
 
 
 # =============================================================================
@@ -378,7 +376,11 @@ def analyze_statistics(all_items):
 # =============================================================================
 
 def _load_vllm_checkpoint(checkpoint_dir):
-    """Load vLLM checkpoint results (full item dicts keyed by item id)."""
+    """Load vLLM checkpoint results (full item dicts keyed by item id).
+
+    Only loads records that have 'llm_output' key, which distinguishes
+    vLLM format (full item dicts) from Copilot format ({"id", "result"}).
+    """
     completed = {}
     if not os.path.exists(checkpoint_dir):
         return completed
@@ -390,7 +392,10 @@ def _load_vllm_checkpoint(checkpoint_dir):
                     line = line.strip()
                     if line:
                         result = json.loads(line)
-                        completed[result['id']] = result
+                        # Only accept vLLM format (has llm_output);
+                        # skip Copilot format (has 'result' instead)
+                        if 'llm_output' in result and 'id' in result:
+                            completed[result['id']] = result
     if completed:
         print(f"  [CHECKPOINT] Loaded {len(completed)} completed items "
               f"from {checkpoint_dir}")
@@ -654,7 +659,7 @@ def parse_args():
     parser.add_argument(
         "--copilot_workers",
         type=int,
-        default=150,
+        default=80,
         help="Number of parallel workers for Copilot API calls",
     )
     parser.add_argument(
@@ -668,7 +673,7 @@ def parse_args():
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=50,
+        default=100,
         help="Maximum number of output tokens per prompt",
     )
     parser.add_argument(
@@ -693,7 +698,18 @@ def parse_args():
         "--export_prompts_only",
         action="store_true",
         default=False,
-        help="Only export prompts to a TSV file without running inference",
+        help="Build prompts for all remaining items (after resume/checkpoint), "
+             "save to <output_dir>/prompts/<item_file_stem>_prompts.tsv, "
+             "then exit without running inference.",
+    )
+    parser.add_argument(
+        "--save_intermediate_only",
+        action="store_true",
+        default=False,
+        help="Load resume + checkpoint results, save all output files "
+             "(summaries, id2meta, statistics, etc.), then exit without "
+             "running inference. Useful for testing downstream code while "
+             "s1 is still running in another process.",
     )
     parser.add_argument(
         "--global_offer_only",
@@ -702,15 +718,104 @@ def parse_args():
         help="Only process GlobalOfferID items (IDs not starting with 'P')",
     )
     parser.add_argument(
-        "--resume_from_dir",
+        "--resume_from_multi_path",
         type=str,
-        default="./processed/",
-        help="Directory containing a previous run's output files to resume "
-             "from. Loads summaries_with_similarity.jsonl from this directory, "
-             "skips already-completed items, and merges results into the "
-             "current output_dir. If empty (default), no resume.",
+        nargs="*",
+        default=["./processed/bak/summaries_with_similarity.jsonl","./processed/summaries_with_similarity.jsonl","./processed/s1_split_2/summaries_with_similarity.jsonl"],
+        help="One or more paths to .jsonl files from previous runs to resume "
+             "from. Each file should be a summaries_with_similarity.jsonl. "
+             "Results are merged (later files overwrite earlier ones for "
+             "duplicate IDs). Set to empty to skip resume.",
     )
     return parser.parse_args()
+
+
+# =============================================================================
+# Output Saving
+# =============================================================================
+
+def save_all_outputs(all_results, output_dir, id2meta_file=None):
+    """Save all output files from a list of result dicts.
+
+    Saves: summaries_with_similarity.jsonl, id2meta.json, id2words.tsv,
+           statistics.json, failed_items.json.
+
+    Args:
+        all_results: List of result dicts (each has 'id', 'summary_words', etc.)
+        output_dir: Directory for output files.
+        id2meta_file: Optional custom path for id2meta.json.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # ---- summaries_with_similarity.jsonl ----
+    output_file = os.path.join(output_dir, "summaries_with_similarity.jsonl")
+    print(f"\nSaving results to: {output_file}")
+    with open(output_file, "w", encoding="utf-8") as f:
+        for item in all_results:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    # ---- Statistics ----
+    stats, failed_items, non_product_items = analyze_statistics(all_results)
+
+    stats_file = os.path.join(output_dir, "statistics.json")
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+    print(f"Statistics saved to: {stats_file}")
+
+    # ---- Failed items ----
+    all_problematic = []
+    for item in failed_items:
+        all_problematic.append({
+            "id": item["id"],
+            "title": item.get("title", ""),
+            "reason": "failed_parse",
+            "llm_output": item.get("llm_output", ""),
+            "summary_words": item.get("summary_words", []),
+        })
+    for item in non_product_items:
+        all_problematic.append({
+            "id": item["id"],
+            "title": item.get("title", ""),
+            "reason": "non_product",
+            "llm_output": item.get("llm_output", ""),
+        })
+
+    failed_file = os.path.join(output_dir, "failed_items.json")
+    with open(failed_file, "w", encoding="utf-8") as f:
+        json.dump(all_problematic, f, ensure_ascii=False, indent=2)
+    print(f"Failed/non-product items saved to: {failed_file} "
+          f"({len(all_problematic)} items)")
+
+    # ---- Build id2meta mapping ----
+    print("\nBuilding id2meta mapping ...")
+    id2meta = {}
+    skipped_count = 0
+    for item in all_results:
+        words = item.get("summary_words", [])
+        non_empty_words = [w for w in words if w]
+        if len(non_empty_words) != 7:
+            skipped_count += 1
+            continue
+        item_id = item.get("id")
+        if item_id:
+            id2meta[item_id] = item
+
+    id2meta_path = id2meta_file or os.path.join(output_dir, "id2meta.json")
+    with open(id2meta_path, "w", encoding="utf-8") as f:
+        json.dump(id2meta, f, ensure_ascii=False, indent=2)
+    print(f"id2meta saved to: {id2meta_path}")
+    print(f"  Mapped items: {len(id2meta):,} "
+          f"(skipped {skipped_count:,} without valid 7-word summary)")
+
+    # ---- Build id2words mapping ----
+    id2words_file = os.path.join(output_dir, "id2words.tsv")
+    with open(id2words_file, "w", encoding="utf-8") as f:
+        for item_id, meta in id2meta.items():
+            f.write(json.dumps({item_id: meta["summary_words"]},
+                               ensure_ascii=False) + "\n")
+    print(f"id2words saved to: {id2words_file} ({len(id2meta):,} items)")
+
+    return stats
 
 
 # =============================================================================
@@ -776,78 +881,95 @@ def main():
     similarities_dict = load_similarities(args.similarity_file)
     print(f"Loaded similarities for {len(similarities_dict)} items")
 
-    # ---- Export prompts only (if requested) ----
-    if args.export_prompts_only:
-        os.makedirs(args.output_dir, exist_ok=True)
-        prompts_file = os.path.join(args.output_dir, "prompts.tsv")
-        print(f"\nExporting prompts to: {prompts_file}")
-        with open(prompts_file, "w", encoding="utf-8") as f:
-            f.write("item_id\tprompt\n")
-            for item in tqdm(data, desc="Building prompts"):
-                item_id = item["id"]
-                top_similar_items = similarities_dict.get(item_id, [])[:5]
-                raw_prompt = prepare_prompt(
-                    item, top_similar_items, all_items_dict, prompt_template
-                )
-                escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
-                f.write(f"{item_id}\t{escaped_prompt}\n")
-        file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
-        print(f"  Saved {len(data):,} prompts ({file_size_mb:.1f} MB)")
-        print("\nDone! (--export_prompts_only mode, inference skipped)")
-        return
-
     # ---- Checkpoint setup ----
     checkpoint_dir = os.path.join(args.output_dir, "_s1_checkpoint")
 
     # ---- Resume: load previous results if available ----
     previous_results = {}  # item_id -> result dict
-    if args.resume_from_dir:
-        prev_file = os.path.join(
-            args.resume_from_dir, "summaries_with_similarity.jsonl"
-        )
-        if os.path.exists(prev_file):
+    resume_paths = args.resume_from_multi_path or []
+    # Filter to existing .jsonl files
+    valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
+
+    if valid_resume_files:
+        repaired_count = 0
+        for prev_file in valid_resume_files:
             print(f"\n[RESUME] Loading previous results from: {prev_file}")
+            file_count = 0
             with open(prev_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:
                         result = json.loads(line)
-                        previous_results[result["id"]] = result
-            # Only keep results that are in the current data set
-            current_ids = {item["id"] for item in data}
-            prev_total = len(previous_results)
-            previous_results = {
-                k: v for k, v in previous_results.items() if k in current_ids
-            }
-            prev_kept = len(previous_results)
-            prev_discarded = prev_total - prev_kept
+                        rid = result["id"]
 
-            # Filter data to only items not yet processed
-            remaining_data_for_run = [
-                item for item in data if item["id"] not in previous_results
-            ]
+                        # Repair records from Copilot checkpoint that were
+                        # saved with 'result' instead of 'llm_output'
+                        if "llm_output" not in result and "result" in result:
+                            result["llm_output"] = result.pop("result")
+                            result["summary_words"] = parse_summary_words(
+                                result["llm_output"]
+                            )
+                            repaired_count += 1
+                        # Also repair records with missing summary_words
+                        elif "summary_words" not in result and "llm_output" in result:
+                            result["summary_words"] = parse_summary_words(
+                                result["llm_output"]
+                            )
+                            repaired_count += 1
 
-            print(f"  Previous results loaded:    {prev_total:>10,}")
-            print(f"  Kept (in current input):    {prev_kept:>10,}")
-            print(f"  Discarded (not in input):   {prev_discarded:>10,}")
-            print(f"  Total items in current run: {len(data):>10,}")
-            print(f"  Already completed:          {prev_kept:>10,}")
-            print(f"  Remaining to process:       {len(remaining_data_for_run):>10,}")
+                        previous_results[rid] = result
+                        file_count += 1
+            print(f"  Loaded {file_count:,} records from this file")
 
-            if not remaining_data_for_run:
-                print(f"\n[RESUME] All {len(data)} items already completed!")
-                all_results = [previous_results[item["id"]] for item in data]
-                inference_time = 0.001  # avoid division by zero
-                # Skip inference, jump to output
-                _skip_inference = True
-            else:
-                data = remaining_data_for_run
-                _skip_inference = False
+        if repaired_count > 0:
+            print(f"  [RESUME] Repaired {repaired_count:,} records "
+                  f"(re-parsed llm_output)")
+
+        # Only keep results that are in the current data set
+        current_ids = {item["id"] for item in data}
+        prev_total = len(previous_results)
+        previous_results = {
+            k: v for k, v in previous_results.items() if k in current_ids
+        }
+        prev_kept = len(previous_results)
+        prev_discarded = prev_total - prev_kept
+
+        # Backfill item metadata for records missing title/description
+        backfilled = 0
+        for rid, result in previous_results.items():
+            if "title" not in result and rid in all_items_dict:
+                item_meta = all_items_dict[rid]
+                for key, val in item_meta.items():
+                    if key not in result:
+                        result[key] = val
+                backfilled += 1
+        if backfilled > 0:
+            print(f"  [RESUME] Backfilled metadata for {backfilled:,} records")
+
+        # Filter data to only items not yet processed
+        remaining_data_for_run = [
+            item for item in data if item["id"] not in previous_results
+        ]
+
+        print(f"\n  Resume summary ({len(valid_resume_files)} files):")
+        print(f"    Total loaded:             {prev_total:>10,}")
+        print(f"    Kept (in current input):  {prev_kept:>10,}")
+        print(f"    Discarded (not in input): {prev_discarded:>10,}")
+        print(f"    Total items in run:       {len(data):>10,}")
+        print(f"    Already completed:        {prev_kept:>10,}")
+        print(f"    Remaining to process:     {len(remaining_data_for_run):>10,}")
+
+        if not remaining_data_for_run:
+            print(f"\n[RESUME] All {len(data)} items already completed!")
+            all_results = [previous_results[item["id"]] for item in data]
+            inference_time = 0.001
+            _skip_inference = True
         else:
-            print(f"\n[RESUME] No previous output found at {prev_file}, "
-                  f"running from scratch")
+            data = remaining_data_for_run
             _skip_inference = False
     else:
+        if resume_paths:
+            print(f"\n[RESUME] No valid resume files found in: {resume_paths}")
         _skip_inference = False
 
     # ---- Load checkpoint results from interrupted previous runs ----
@@ -907,18 +1029,56 @@ def main():
                 inference_time = 0.001
                 _skip_inference = True
 
-    # ---- Pre-save: save all known results before processing new data ----
+    # ---- Pre-save: save all output files before processing new data ----
     if previous_results:
-        os.makedirs(args.output_dir, exist_ok=True)
-        presave_file = os.path.join(
-            args.output_dir, "summaries_with_similarity.jsonl"
+        print(f"\n[PRE-SAVE] Saving {len(previous_results):,} completed "
+              f"results and all derived files ...")
+        save_all_outputs(
+            list(previous_results.values()), args.output_dir,
+            id2meta_file=args.id2meta_file,
         )
-        print(f"\n[PRE-SAVE] Writing {len(previous_results):,} completed "
-              f"results before processing new data ...")
-        with open(presave_file, "w", encoding="utf-8") as f:
-            for result in previous_results.values():
-                f.write(json.dumps(result, ensure_ascii=False) + "\n")
-        print(f"  Saved to: {presave_file}")
+        # Only clean checkpoint if we're about to run inference
+        # (not in export_prompts_only or save_intermediate_only mode)
+        if not args.export_prompts_only and not args.save_intermediate_only:
+            cleanup_checkpoint(checkpoint_dir)
+
+    # ---- Save intermediate only (if requested) ----
+    if args.save_intermediate_only:
+        if previous_results:
+            print(f"\nDone! (--save_intermediate_only mode, inference skipped)")
+        else:
+            print(f"\n[SAVE-INTERMEDIATE] No results to save "
+                  f"(no resume or checkpoint data found).")
+        return
+
+    # ---- Export prompts only (if requested) ----
+    if args.export_prompts_only:
+        # Build prompts for remaining items (after resume/checkpoint)
+        print(f"\n[EXPORT-PROMPTS] Building prompts for {len(data):,} "
+              f"remaining items ...")
+
+        # Derive output filename from item_file stem
+        item_stem = os.path.splitext(os.path.basename(args.item_file))[0]
+        prompts_dir = os.path.join(args.output_dir, "prompts")
+        os.makedirs(prompts_dir, exist_ok=True)
+        prompts_file = os.path.join(prompts_dir, f"{item_stem}_prompts.tsv")
+
+        with open(prompts_file, "w", encoding="utf-8") as f:
+            f.write("GlobalOfferId\tPrompt\n")
+            for item in tqdm(data, desc="Building prompts"):
+                item_id = item["id"]
+                top_similar_items = similarities_dict.get(item_id, [])[:5]
+                raw_prompt = prepare_prompt(
+                    item, top_similar_items, all_items_dict, prompt_template
+                )
+                escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
+                f.write(f"{item_id}\t{escaped_prompt}\n")
+
+        file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
+        print(f"  Saved {len(data):,} prompts to: {prompts_file} "
+              f"({file_size_mb:.1f} MB)")
+        print(f"\nDone! (--export_prompts_only mode, inference skipped)")
+        return
 
     # ---- Run inference ----
     start_time = time.time()
@@ -1038,7 +1198,7 @@ def main():
               f"({len(data) / inference_time:.1f} items/s)")
 
         # Merge with previous results if resuming
-        if args.resume_from_dir and previous_results:
+        if valid_resume_files and previous_results:
             print(f"\n[RESUME] Merging {len(previous_results):,} previous + "
                   f"{len(all_results):,} new results")
             merged = dict(previous_results)  # start with previous
@@ -1064,74 +1224,9 @@ def main():
         print(f"      Parsed words:   {res.get('summary_words', [])}")
     print(f"\n{'='*60}")
 
-    # ---- Save results ----
-    os.makedirs(args.output_dir, exist_ok=True)
-    output_file = os.path.join(args.output_dir, "summaries_with_similarity.jsonl")
-    print(f"\nSaving results to: {output_file}")
-    with open(output_file, "w", encoding="utf-8") as f:
-        for item in all_results:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-    # ---- Statistics ----
-    stats, failed_items, non_product_items = analyze_statistics(all_results)
-
-    stats_file = os.path.join(args.output_dir, "statistics.json")
-    with open(stats_file, "w", encoding="utf-8") as f:
-        json.dump(stats, f, ensure_ascii=False, indent=2)
-    print(f"Statistics saved to: {stats_file}")
-
-    # ---- Failed items ----
-    all_problematic = []
-    for item in failed_items:
-        all_problematic.append({
-            "id": item["id"],
-            "title": item.get("title", ""),
-            "reason": "failed_parse",
-            "llm_output": item.get("llm_output", ""),
-            "summary_words": item.get("summary_words", []),
-        })
-    for item in non_product_items:
-        all_problematic.append({
-            "id": item["id"],
-            "title": item.get("title", ""),
-            "reason": "non_product",
-            "llm_output": item.get("llm_output", ""),
-        })
-
-    failed_file = os.path.join(args.output_dir, "failed_items.json")
-    with open(failed_file, "w", encoding="utf-8") as f:
-        json.dump(all_problematic, f, ensure_ascii=False, indent=2)
-    print(f"Failed/non-product items saved to: {failed_file} "
-          f"({len(all_problematic)} items)")
-
-    # ---- Build id2meta mapping ----
-    print("\nBuilding id2meta mapping ...")
-    id2meta = {}
-    skipped_count = 0
-    for item in all_results:
-        words = item.get("summary_words", [])
-        non_empty_words = [w for w in words if w]
-        if len(non_empty_words) != 7:
-            skipped_count += 1
-            continue
-        item_id = item.get("id")
-        if item_id:
-            id2meta[item_id] = item
-
-    id2meta_file = args.id2meta_file or os.path.join(args.output_dir, "id2meta.json")
-    with open(id2meta_file, "w", encoding="utf-8") as f:
-        json.dump(id2meta, f, ensure_ascii=False, indent=2)
-    print(f"id2meta saved to: {id2meta_file}")
-    print(f"  Mapped items: {len(id2meta):,} "
-          f"(skipped {skipped_count:,} without valid 7-word summary)")
-
-    # ---- Build id2words mapping (one JSON per line) ----
-    id2words_file = os.path.join(args.output_dir, "id2words.tsv")
-    with open(id2words_file, "w", encoding="utf-8") as f:
-        for item_id, meta in id2meta.items():
-            f.write(json.dumps({item_id: meta["summary_words"]},
-                               ensure_ascii=False) + "\n")
-    print(f"id2words saved to: {id2words_file} ({len(id2meta):,} items)")
+    # ---- Save all output files ----
+    stats = save_all_outputs(all_results, args.output_dir,
+                             id2meta_file=args.id2meta_file)
 
     # ---- Clean up checkpoint ----
     cleanup_checkpoint(checkpoint_dir)

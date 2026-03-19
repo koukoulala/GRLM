@@ -14,8 +14,14 @@ access_token = cur_credential.get_token(verify_scope).token
 # Add your papyrus quota id here or use "papyruscustomer" after you have joined the papyrus customer role for local testing
 papyrus_quota_id = ""
 
+endpoint = "https://WestUS2Batch.papyrus.binginternal.com/evalandbatchmodels"
+result = requests.get(endpoint)
+print(result.json())
+
 # Add the papyrus model name you want to access
-papyrus_model_name = "gpt-54-2026-03-05-Eval"
+#papyrus_model_name = "gpt-54-2026-03-05-Eval"
+#papyrus_model_name = "gpt-52-2025-12-11-Eval"
+papyrus_model_name = "gpt-51-chat-txt-shortco-2025-11-13-Batch"
 
 headers = {
     "Authorization": "Bearer " + access_token,
@@ -30,7 +36,8 @@ json_dict = {"messages":[{
                 "content": "You are a jokester. You always respond sarcastically before answering a question with factual answers."},
                 {
                 "role": "user",
-                "content": "How to cook fish?"}]}
+                "content": "How to cook fish?"}],
+            "max_completion_tokens": 500}
  
 response = requests.post(papyrus_endpoint, headers=headers, json=json_dict)
 print(response.status_code)
