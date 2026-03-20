@@ -353,20 +353,20 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="./processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
         help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--sequential_file",
         type=str,
-        default="./raw_data/item_sequential_data_sample.txt",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/item_sequential_data_sample2.txt",
         help="Path to sequential interaction data file "
              "(default: ./raw_data/item_sequential_data.txt)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./sft_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/",
         help="Output directory. SFT data saved to <output_dir>/rec_sft.json, "
              "auxiliary mappings to <output_dir>/item_id2tid/ "
              "(default: ./sft_data)",

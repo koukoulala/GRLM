@@ -136,9 +136,8 @@ def parse_args():
     parser.add_argument(
         "--sequential_data_file",
         type=str,
-        default="./raw_data/item_sequential_data_sample.txt",
+        default="./raw_data/item_sequential_data_sample2.txt",
         help="Path to item_sequential_data.txt (from s2). "
-             "(default: ./raw_data/item_sequential_data.txt)",
     )
     parser.add_argument(
         "--shopping_journey_file",
@@ -168,6 +167,14 @@ def parse_args():
         default="./raw_data",
         help="Path to the output directory (default: ./raw_data)",
     )
+    parser.add_argument(
+        "--split_n",
+        type=int,
+        default=0,
+        help="If > 0, skip cleaning and instead load the existing "
+             "merged_clean_item2.json, split it into N equal parts, "
+             "and write to <output_dir>/split/ (default: 0 = no split)",
+    )
     return parser.parse_args()
 
 
@@ -177,6 +184,40 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # =========================================================================
+    # Split-only mode
+    # =========================================================================
+    if args.split_n > 0:
+        merged_path = os.path.join(args.output_dir, "merged_clean_item2.json")
+        print("=" * 70)
+        print(f"Split-only mode: splitting {merged_path} into {args.split_n} parts")
+        print("=" * 70)
+
+        merged_data = load_json(merged_path)
+        keys = list(merged_data.keys())
+        total = len(keys)
+        print(f"  Total entries: {total:,}")
+
+        split_dir = os.path.join(args.output_dir, "split")
+        os.makedirs(split_dir, exist_ok=True)
+
+        chunk_size = (total + args.split_n - 1) // args.split_n
+        for i in range(args.split_n):
+            start = i * chunk_size
+            end = min(start + chunk_size, total)
+            chunk_keys = keys[start:end]
+            chunk_data = {k: merged_data[k] for k in chunk_keys}
+
+            out_path = os.path.join(split_dir,
+                                    f"merged_clean_item_{i + 1}.json")
+            save_json(chunk_data, out_path)
+            size_mb = os.path.getsize(out_path) / (1024 * 1024)
+            print(f"  Written: {out_path} "
+                  f"({len(chunk_data):,} entries, {size_mb:.2f} MB)")
+
+        print(f"\nDone! Split into {args.split_n} files in {split_dir}")
+        return
 
     # =========================================================================
     # Step 1: Collect IDs from item_sequential_data.txt
@@ -337,7 +378,7 @@ def main():
             "attributes": {},
         }
 
-    merged_output_path = os.path.join(args.output_dir, "merged_clean_item.json")
+    merged_output_path = os.path.join(args.output_dir, "merged_clean_item2.json")
     save_json(merged_data, merged_output_path)
     merged_size_mb = os.path.getsize(merged_output_path) / (1024 * 1024)
     merged_count = len(merged_data)

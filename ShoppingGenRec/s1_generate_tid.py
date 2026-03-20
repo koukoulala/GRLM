@@ -63,6 +63,8 @@ from llm_utils import (load_prompts, run_llm_parallel,
                       load_checkpoint as _load_checkpoint_raw,
                       save_checkpoint as _save_checkpoint_raw,
                       cleanup_checkpoint)
+from Infer_by_papyrus import (run_papyrus_parallel,
+                              run_papyrus_parallel_with_checkpoint)
 
 
 # =============================================================================
@@ -430,6 +432,20 @@ def should_use_copilot(summary_model):
     return False
 
 
+def determine_backend(args):
+    """Determine which inference backend to use.
+
+    Returns:
+        str: One of 'vllm', 'copilot', 'papyrus'.
+    """
+    backend = args.inference_backend
+    if backend == "auto":
+        if should_use_copilot(args.summary_model):
+            return "copilot"
+        return "vllm"
+    return backend
+
+
 # =============================================================================
 # vLLM Inference
 # =============================================================================
@@ -576,19 +592,20 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/merged_clean_item2.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="./processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./processed/",
+        #default="./processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
@@ -598,6 +615,14 @@ def parse_args():
         #default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
         help="Path to local LLM for vLLM inference. Set to empty string "
              "or non-existent path to use Copilot API instead.",
+    )
+    parser.add_argument(
+        "--inference_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "vllm", "copilot", "papyrus"],
+        help="Inference backend: 'auto' selects vLLM if summary_model "
+             "exists, else Copilot. (default: auto)",
     )
     parser.add_argument(
         "--prompts_file",
@@ -669,6 +694,45 @@ def parse_args():
         help="Number of items per Copilot processing chunk for checkpoint "
              "saving",
     )
+    # --- Papyrus API-specific args ---
+    parser.add_argument(
+        "--papyrus_endpoint",
+        type=str,
+        default="https://westus2batch.papyrus.binginternal.com",
+        help="Papyrus API base endpoint (without /chat/completions)",
+    )
+    parser.add_argument(
+        "--papyrus_model",
+        type=str,
+        #default="gpt-54-2026-03-05-Eval",
+        default="gpt-5-chat-shortco-2025-08-07-Bing",
+        help="Papyrus model name",
+    )
+    parser.add_argument(
+        "--papyrus_quota_id",
+        type=str,
+        default="",
+        help="Papyrus quota ID (default: empty)",
+    )
+    parser.add_argument(
+        "--papyrus_timeout_ms",
+        type=int,
+        default=120000,
+        help="Papyrus request timeout in ms (default: 120000)",
+    )
+    parser.add_argument(
+        "--papyrus_workers",
+        type=int,
+        default=40,
+        help="Number of parallel async workers for Papyrus API (default: 5)",
+    )
+    parser.add_argument(
+        "--papyrus_chunk_size",
+        type=int,
+        default=40000,
+        help="Number of items per Papyrus processing chunk for checkpoint "
+             "saving",
+    )
     # --- Common args ---
     parser.add_argument(
         "--max_tokens",
@@ -685,8 +749,8 @@ def parse_args():
     parser.add_argument(
         "--debug_sample_size",
         type=int,
-        default=100,
-        help="Number of items to sample in debug mode (default: 100)",
+        default=2000,
+        help="Number of items to sample in debug mode",
     )
     parser.add_argument(
         "--id2meta_file",
@@ -721,11 +785,21 @@ def parse_args():
         "--resume_from_multi_path",
         type=str,
         nargs="*",
-        default=["./processed/bak/summaries_with_similarity.jsonl","./processed/summaries_with_similarity.jsonl","./processed/s1_split_2/summaries_with_similarity.jsonl"],
+        #default=[],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl files from previous runs to resume "
              "from. Each file should be a summaries_with_similarity.jsonl. "
              "Results are merged (later files overwrite earlier ones for "
              "duplicate IDs). Set to empty to skip resume.",
+    )
+    parser.add_argument(
+        "--checkpoint_dirs",
+        type=str,
+        nargs="*",
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/_s1_checkpoint"],
+        help="Additional checkpoint directories to load results from. "
+             "Each should be a _s1_checkpoint folder. Results are merged "
+             "with resume files and the default checkpoint_dir.",
     )
     return parser.parse_args()
 
@@ -824,16 +898,24 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
 
 def main():
     args = parse_args()
-    use_copilot = should_use_copilot(args.summary_model)
+    backend = determine_backend(args)
 
-    if use_copilot:
+    if backend == "copilot":
         print("=" * 60)
         print("Inference mode: GitHub Copilot API")
         print(f"  Model: {args.copilot_model}")
         print(f"  Workers: {args.copilot_workers}")
         print(f"  Token file: {args.token_file}")
         print("=" * 60)
-    else:
+    elif backend == "papyrus":
+        print("=" * 60)
+        print("Inference mode: Papyrus API")
+        print(f"  Endpoint: {args.papyrus_endpoint}")
+        print(f"  Model: {args.papyrus_model}")
+        print(f"  Workers: {args.papyrus_workers}")
+        print(f"  Quota ID: {args.papyrus_quota_id or '(default)'}")
+        print("=" * 60)
+    else:  # vllm
         import torch
         available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
         num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
@@ -850,7 +932,7 @@ def main():
 
     debug = args.debug
     if debug:
-        print("\n*** DEBUG MODE: processing only 100 items ***\n")
+        print("\n*** DEBUG MODE: processing only sampled items, NO files written ***\n")
 
     # ---- Load prompt template from prompts.yaml ----
     print(f"\nLoading prompt template from: {args.prompts_file}")
@@ -886,9 +968,13 @@ def main():
 
     # ---- Resume: load previous results if available ----
     previous_results = {}  # item_id -> result dict
-    resume_paths = args.resume_from_multi_path or []
-    # Filter to existing .jsonl files
-    valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
+    _skip_inference = False
+    valid_resume_files = []
+
+    if not debug:
+        resume_paths = args.resume_from_multi_path or []
+        # Filter to existing .jsonl files
+        valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
 
     if valid_resume_files:
         repaired_count = 0
@@ -968,50 +1054,57 @@ def main():
             data = remaining_data_for_run
             _skip_inference = False
     else:
-        if resume_paths:
-            print(f"\n[RESUME] No valid resume files found in: {resume_paths}")
-        _skip_inference = False
+        print("  [DEBUG] Skipping resume loading")
 
     # ---- Load checkpoint results from interrupted previous runs ----
     # Handles both vLLM checkpoint format (full item dicts with 'id' key)
     # and Copilot checkpoint format ({"id": item_id, "result": response_text})
-    if not _skip_inference:
+    if not _skip_inference and not debug:
         # Build a quick lookup for item data by id
         data_by_id = {item["id"]: item for item in data}
 
         # Try vLLM format first: each line is a full result dict
-        ckpt_loaded = _load_vllm_checkpoint(checkpoint_dir)
-        if ckpt_loaded:
-            remaining_ids = {item["id"] for item in data}
-            new_from_ckpt = 0
-            for cid, cresult in ckpt_loaded.items():
-                if cid in remaining_ids and cid not in previous_results:
-                    previous_results[cid] = cresult
-                    new_from_ckpt += 1
-            if new_from_ckpt > 0:
-                print(f"  [CHECKPOINT-vLLM] Recovered {new_from_ckpt:,} items")
+        all_ckpt_dirs = [checkpoint_dir]
+        extra_ckpt_dirs = args.checkpoint_dirs or []
+        for d in extra_ckpt_dirs:
+            if d and os.path.exists(d) and d != checkpoint_dir:
+                all_ckpt_dirs.append(d)
 
-        # Also try Copilot format: {"id": item_id, "result": response_text}
-        copilot_ckpt = _load_checkpoint_raw(checkpoint_dir)
-        if copilot_ckpt:
-            new_from_copilot_ckpt = 0
-            for cid, response_text in copilot_ckpt.items():
-                if cid in data_by_id and cid not in previous_results:
-                    item = data_by_id[cid]
-                    words = parse_summary_words(response_text)
-                    similar_item_ids = [
-                        sim["item_id"]
-                        for sim in similarities_dict.get(cid, [])[:5]
-                    ]
-                    result = item.copy()
-                    result["llm_output"] = response_text
-                    result["summary_words"] = words
-                    result["similar_item_ids"] = similar_item_ids
-                    previous_results[cid] = result
-                    new_from_copilot_ckpt += 1
-            if new_from_copilot_ckpt > 0:
-                print(f"  [CHECKPOINT-Copilot] Recovered "
-                      f"{new_from_copilot_ckpt:,} items")
+        for ckpt_dir_path in all_ckpt_dirs:
+            ckpt_loaded = _load_vllm_checkpoint(ckpt_dir_path)
+            if ckpt_loaded:
+                remaining_ids = {item["id"] for item in data}
+                new_from_ckpt = 0
+                for cid, cresult in ckpt_loaded.items():
+                    if cid in remaining_ids and cid not in previous_results:
+                        previous_results[cid] = cresult
+                        new_from_ckpt += 1
+                if new_from_ckpt > 0:
+                    print(f"  [CHECKPOINT-vLLM] Recovered {new_from_ckpt:,} items "
+                          f"from {ckpt_dir_path}")
+
+            # Also try Copilot format: {"id": item_id, "result": response_text}
+            copilot_ckpt = _load_checkpoint_raw(ckpt_dir_path)
+            if copilot_ckpt:
+                new_from_copilot_ckpt = 0
+                for cid, response_text in copilot_ckpt.items():
+                    if cid in data_by_id and cid not in previous_results:
+                        item = data_by_id[cid]
+                        words = parse_summary_words(response_text)
+                        similar_item_ids = [
+                            sim["item_id"]
+                            for sim in similarities_dict.get(cid, [])[:5]
+                        ]
+                        result = item.copy()
+                        result["llm_output"] = response_text
+                        result["summary_words"] = words
+                        result["similar_item_ids"] = similar_item_ids
+                        previous_results[cid] = result
+                        new_from_copilot_ckpt += 1
+                if new_from_copilot_ckpt > 0:
+                    print(f"  [CHECKPOINT-Copilot] Recovered "
+                          f"{new_from_copilot_ckpt:,} items "
+                          f"from {ckpt_dir_path}")
 
         # Update remaining data after all checkpoint loading
         total_recovered = len(previous_results)
@@ -1030,7 +1123,7 @@ def main():
                 _skip_inference = True
 
     # ---- Pre-save: save all output files before processing new data ----
-    if previous_results:
+    if previous_results and not debug:
         print(f"\n[PRE-SAVE] Saving {len(previous_results):,} completed "
               f"results and all derived files ...")
         save_all_outputs(
@@ -1085,7 +1178,7 @@ def main():
 
     if _skip_inference:
         pass  # all_results already set above
-    elif use_copilot:
+    elif backend == "copilot":
         # --- Copilot API path ---
         # Build (item_id, prompt) inputs for all items
         print("\nBuilding prompts for Copilot API ...")
@@ -1116,6 +1209,59 @@ def main():
         for item in data:
             item_id = item["id"]
             gen_text = copilot_map.get(item_id, "")
+            words = parse_summary_words(gen_text)
+            similar_item_ids = [
+                sim["item_id"]
+                for sim in similarities_dict.get(item_id, [])[:5]
+            ]
+            result = item.copy()
+            result["llm_output"] = gen_text
+            result["summary_words"] = words
+            result["similar_item_ids"] = similar_item_ids
+            all_results.append(result)
+    elif backend == "papyrus":
+        # --- Papyrus API path ---
+        print("\nBuilding prompts for Papyrus API ...")
+        papyrus_inputs = []
+        for item in tqdm(data, desc="Building prompts"):
+            item_id = item["id"]
+            top_similar_items = similarities_dict.get(item_id, [])[:5]
+            raw_prompt = prepare_prompt(
+                item, top_similar_items, all_items_dict, prompt_template
+            )
+            papyrus_inputs.append((item_id, raw_prompt))
+
+        if debug:
+            from Infer_by_papyrus import run_papyrus_parallel
+            papyrus_results = run_papyrus_parallel(
+                inputs=papyrus_inputs,
+                papyrus_endpoint=args.papyrus_endpoint,
+                model_name=args.papyrus_model,
+                quota_id=args.papyrus_quota_id,
+                timeout_ms=args.papyrus_timeout_ms,
+                num_workers=args.papyrus_workers,
+                max_tokens=args.max_tokens,
+                max_retries=3,
+            )
+        else:
+            papyrus_results = run_papyrus_parallel_with_checkpoint(
+                inputs=papyrus_inputs,
+                checkpoint_dir=checkpoint_dir,
+                papyrus_endpoint=args.papyrus_endpoint,
+                model_name=args.papyrus_model,
+                quota_id=args.papyrus_quota_id,
+                timeout_ms=args.papyrus_timeout_ms,
+                num_workers=args.papyrus_workers,
+                max_tokens=args.max_tokens,
+                max_retries=3,
+                chunk_size=args.papyrus_chunk_size,
+            )
+
+        papyrus_map = {item_id: gen_text for item_id, gen_text in papyrus_results}
+        all_results = []
+        for item in data:
+            item_id = item["id"]
+            gen_text = papyrus_map.get(item_id, "")
             words = parse_summary_words(gen_text)
             similar_item_ids = [
                 sim["item_id"]
@@ -1214,7 +1360,7 @@ def main():
             print(f"  Merged total: {len(all_results):,} items")
 
     # Print first few examples
-    num_debug_show = 10 if debug else 3
+    num_debug_show = len(all_results) if debug else 3
     print(f"\n{'='*60}")
     print(f"First {num_debug_show} LLM outputs:")
     for idx, res in enumerate(all_results[:num_debug_show]):
@@ -1223,6 +1369,17 @@ def main():
         print(f"      LLM raw output: {res.get('llm_output', 'N/A')[:200]}")
         print(f"      Parsed words:   {res.get('summary_words', [])}")
     print(f"\n{'='*60}")
+
+    if debug:
+        # Debug mode: just print stats, don't write any files
+        success = sum(1 for r in all_results if r.get('llm_output'))
+        failed = sum(1 for r in all_results if not r.get('llm_output'))
+        valid_7 = sum(1 for r in all_results
+                      if len([w for w in r.get('summary_words', []) if w]) == 7)
+        print(f"\n[DEBUG] Summary (no files written):")
+        print(f"  Total: {len(all_results)}, Success: {success}, "
+              f"Failed: {failed}, Valid 7-word: {valid_7}")
+        return
 
     # ---- Save all output files ----
     stats = save_all_outputs(all_results, args.output_dir,

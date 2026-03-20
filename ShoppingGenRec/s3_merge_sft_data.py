@@ -196,32 +196,32 @@ def parse_args():
     # Input files
     parser.add_argument(
         "--meta2tid_file", type=str,
-        default="./sft_data/meta2tid_sft.json",
-        help="Path to meta2tid SFT data (default: ./sft_data/meta2tid_sft.json)",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/meta2tid_sft.json",
+        help="Path to meta2tid SFT data",
     )
     parser.add_argument(
         "--rec_full_file", type=str,
-        default="./sft_data/rec_sft_full.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/rec_sft_full.json",
         help="Path to rec full SFT data (with metadata)",
     )
     parser.add_argument(
         "--event2product_full_file", type=str,
-        default="./sft_data/event2product_sft_full.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/event2product_sft_full.json",
         help="Path to event2product full SFT data (with metadata)",
     )
     parser.add_argument(
         "--event2journey_full_file", type=str,
-        default="./sft_data/event2journey_sft_full.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/event2journey_sft_full.json",
         help="Path to event2journey full SFT data (with metadata)",
     )
     parser.add_argument(
         "--profile2journey_full_file", type=str,
-        default="./sft_data/profile2journey_sft_full.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/profile2journey_sft_full.json",
         help="Path to profile2journey full SFT data (with metadata)",
     )
     # Sampling probabilities
     parser.add_argument(
-        "--meta2tid_prob", type=float, default=0.5,
+        "--meta2tid_prob", type=float, default=0.05,
         help="Sampling probability for meta2tid data",
     )
     parser.add_argument(
@@ -243,8 +243,8 @@ def parse_args():
     # Output
     parser.add_argument(
         "--output_file", type=str,
-        default="./sft_data/combined_sft.json",
-        help="Output path for merged SFT data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/combined_sft.jsonl",
+        help="Output path for merged SFT data (JSONL format)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -340,7 +340,8 @@ def main():
 
     os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
     with open(args.output_file, "w", encoding="utf-8") as f:
-        json.dump(all_data, f, ensure_ascii=False, indent=2)
+        for item in all_data:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     file_size_mb = os.path.getsize(args.output_file) / (1024 * 1024)
     print(f"  Output: {args.output_file}")
@@ -364,6 +365,49 @@ def main():
     total_orig = sum(v[0] for v in stats.values())
     print(f"  {'-'*25} {'-'*10} {'-'*10} {'-'*8}")
     print(f"  {'TOTAL':<25s} {total_orig:>10,} {len(all_data):>10,}")
+
+    # =========================================================================
+    # Length Statistics
+    # =========================================================================
+    print()
+    print("=" * 70)
+    print("Length Statistics (character count)")
+    print("=" * 70)
+
+    if all_data:
+        input_lens = [len(d.get("instruction", "") + d.get("input", "")) for d in all_data]
+        output_lens = [len(d.get("output", "")) for d in all_data]
+
+        input_lens_sorted = sorted(input_lens)
+        output_lens_sorted = sorted(output_lens)
+        n = len(input_lens)
+
+        def percentile(sorted_list, p):
+            idx = int(len(sorted_list) * p / 100)
+            return sorted_list[min(idx, len(sorted_list) - 1)]
+
+        print(f"\n  instruction + input:")
+        print(f"    Count:  {n:>10,}")
+        print(f"    Min:    {input_lens_sorted[0]:>10,}")
+        print(f"    Max:    {input_lens_sorted[-1]:>10,}")
+        print(f"    Mean:   {sum(input_lens) / n:>10,.1f}")
+        print(f"    Median: {percentile(input_lens_sorted, 50):>10,}")
+        print(f"    P25:    {percentile(input_lens_sorted, 25):>10,}")
+        print(f"    P75:    {percentile(input_lens_sorted, 75):>10,}")
+        print(f"    P95:    {percentile(input_lens_sorted, 95):>10,}")
+        print(f"    P99:    {percentile(input_lens_sorted, 99):>10,}")
+
+        print(f"\n  output:")
+        print(f"    Count:  {n:>10,}")
+        print(f"    Min:    {output_lens_sorted[0]:>10,}")
+        print(f"    Max:    {output_lens_sorted[-1]:>10,}")
+        print(f"    Mean:   {sum(output_lens) / n:>10,.1f}")
+        print(f"    Median: {percentile(output_lens_sorted, 50):>10,}")
+        print(f"    P25:    {percentile(output_lens_sorted, 25):>10,}")
+        print(f"    P75:    {percentile(output_lens_sorted, 75):>10,}")
+        print(f"    P95:    {percentile(output_lens_sorted, 95):>10,}")
+        print(f"    P99:    {percentile(output_lens_sorted, 99):>10,}")
+
     print()
     print("Done!")
 

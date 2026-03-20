@@ -240,6 +240,9 @@ def create_event2journey_sft_data(
     event_counts = []
     journey_counts = []
     product_counts = []
+    original_products_per_journey = []
+    resolved_products_per_journey = []
+    skipped_journeys_no_tid = 0
 
     for user_id, entry in tqdm(
         shopping_journey_data.items(), desc="Building event2journey SFT data"
@@ -255,12 +258,17 @@ def create_event2journey_sft_data(
         # Resolve journeys' product IDs to TIDs (may be empty)
         resolved_journeys = []
         for journey in journeys:
+            orig_count = len(journey.get("product_ids", []))
             resolved = resolve_journey_tids(journey, id2meta, max_products)
             if resolved is not None:
+                resolved_count = len(resolved["product_tids"])
+                original_products_per_journey.append(orig_count)
+                resolved_products_per_journey.append(resolved_count)
                 resolved_journeys.append(resolved)
+            else:
+                skipped_journeys_no_tid += 1
 
-        is_empty_journey = (len(resolved_journeys) == 0)
-        if is_empty_journey:
+        if len(resolved_journeys) == 0:
             skip_reasons["empty_journeys"] += 1
 
         # Create the SFT sample
@@ -305,9 +313,25 @@ def create_event2journey_sft_data(
 
     if product_counts:
         arr = np.array(product_counts)
-        print(f"\n  Products per journey:")
+        print(f"\n  Products per journey (resolved TIDs):")
         print(f"    Min: {arr.min()}, Max: {arr.max()}, "
               f"Mean: {arr.mean():.1f}, Median: {np.median(arr):.1f}")
+
+    # Product resolution statistics
+    if original_products_per_journey:
+        orig_arr = np.array(original_products_per_journey)
+        res_arr = np.array(resolved_products_per_journey)
+        rates = res_arr / np.maximum(orig_arr, 1)
+        print(f"\n  Product TID resolution (per kept journey):")
+        print(f"    Total journeys in data:     {len(original_products_per_journey) + skipped_journeys_no_tid:>10,}")
+        print(f"    Kept journeys (>=1 TID):    {len(original_products_per_journey):>10,}")
+        print(f"    Dropped journeys (0 TID):   {skipped_journeys_no_tid:>10,}")
+        print(f"    Original products/journey:  "
+              f"Mean={orig_arr.mean():.1f}, Median={np.median(orig_arr):.1f}")
+        print(f"    Resolved products/journey:  "
+              f"Mean={res_arr.mean():.1f}, Median={np.median(res_arr):.1f}")
+        print(f"    Resolution rate:            "
+              f"Mean={rates.mean():.1%}, Median={np.median(rates):.1%}")
 
     return sft_data
 
@@ -355,21 +379,20 @@ def parse_args():
     parser.add_argument(
         "--shopping_journey_file",
         type=str,
-        default="./raw_data/shopping_journeys.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/shopping_journeys.json",
         help="Path to shopping_journeys.json from pre_s3_construct_shopping_journey "
              "(default: ./raw_data/shopping_journeys.json)",
     )
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="./processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
         help="Path to id2meta JSON from s1_generate_tid "
-             "(default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./sft_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data",
         help="Output directory (default: ./sft_data)",
     )
     parser.add_argument(
@@ -460,7 +483,7 @@ def main():
     for idx, sample in enumerate(sft_data[:3]):
         meta = sample["metadata"]
         print(f"\n--- Example {idx + 1} ---")
-        print(f"  UUID:           {meta['uuid']}")
+        print(f"  User ID:        {meta['user_id']}")
         print(f"  Num events:     {meta['num_events']}")
         print(f"  Num journeys:   {meta['num_journeys']}")
         print(f"  Products/j:     {meta['num_products_per_journey']}")

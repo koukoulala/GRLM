@@ -417,29 +417,26 @@ def parse_args():
     parser.add_argument(
         "--shopping_journey_file",
         type=str,
-        default="./raw_data/shopping_journeys.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/shopping_journeys.json",
         help="Path to shopping_journeys.json from pre_s3_construct_shopping_journey "
-             "(default: ./raw_data/shopping_journeys.json)",
     )
     parser.add_argument(
         "--shopping_profile_file",
         type=str,
-        default="./raw_data/shopping_profiles.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/shopping_profiles.tsv",
         help="Path to shopping_profiles.tsv from pre_s3_construct_shopping_profile "
-             "(default: ./raw_data/shopping_profiles.tsv)",
     )
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="./processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
         help="Path to id2meta JSON from s1_generate_tid "
-             "(default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./sft_data",
-        help="Output directory (default: ./sft_data)",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/",
+        help="Output directory ",
     )
     parser.add_argument(
         "--max_recent_events",

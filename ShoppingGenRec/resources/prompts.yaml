@@ -670,11 +670,11 @@ prompts:
           - Searched "I hate leather accessories" → "leather accessories"
           
       - **Contextual Shopping Interests**:
-        - Definition: Shopping-related tasks, interests, and goals from memory that present shopping recommendation opportunities
+        - Definition: Shopping-related tasks, interests, and goals from events that present shopping recommendation opportunities
         - Rules:
           - Include ONLY: shopping behaviors, decision-making patterns, purchase priorities, active shopping projects, product research activities
           - **Exclude**: Non-shopping content (life events without shopping connection, hobbies, work, general lifestyle)
-          - **Format with source prefix**: Prefix each item with its source field from memory
+          - **Format with source prefix**: Prefix each item with its source field from events
             - Use: "interest:", "recentTasks:", "shortTermGoals:", "sharedContext:"
           - Must be directly relevant to shopping recommendations
           - If no clear signal support inference, return an empty list.
@@ -864,7 +864,7 @@ prompts:
         If brand and seller are the same or nearly the same, do NOT repeat — use this slot for the next available aspect instead.
 
       7. Target audience, style, occasion, use scenario, or distinctive selling point
-        - Target audience: include ONLY if explicitly stated and specific (e.g., kids, women, professional, cat). Exclude generic values like unisex or adult.
+        - Target audience: include ONLY if explicitly stated and specific (e.g., kids, women, professional, cat). Exclude generic values like unisex, or adult.
         - Style/occasion: e.g., holiday, outdoor, waterproof, budget-friendly
         - If no specific audience or style applies, use this slot for any remaining informative attribute from the product.
 

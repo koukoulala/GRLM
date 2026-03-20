@@ -98,13 +98,15 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="./processed/id2meta.json",
+        #default="./processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
         help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_file",
         type=str,
-        default="./sft_data/meta2tid_sft.json",
+        #default="./sft_data/meta2tid_sft.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
     )
     parser.add_argument(

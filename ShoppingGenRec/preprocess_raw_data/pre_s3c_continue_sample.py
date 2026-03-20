@@ -47,10 +47,10 @@ def parse_args():
     parser.add_argument(
         "--min_covered_items",
         type=int,
-        default=1,
+        default=2,
         help="Minimum number of covered GlobalOfferIds in a sequence for "
              "a user to be considered 'rich' (users with > this value are "
-             "always kept) (default: 1)",
+             "always kept)",
     )
     parser.add_argument(
         "--seed",
@@ -123,7 +123,8 @@ def main():
     print("Step 1: Loading covered GlobalOfferIds from summaries file")
     print("=" * 70)
 
-    covered_gids = set()
+    covered_gids = set()       # all IDs that appear in summaries file
+    valid_summary_gids = set()  # IDs with valid 7-word summary_words
     with open(args.summaries_file, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -132,8 +133,15 @@ def main():
                 item_id = record.get("id", "")
                 if item_id:
                     covered_gids.add(item_id)
+                    words = record.get("summary_words", [])
+                    non_empty = [w for w in words if w]
+                    if len(non_empty) == 7:
+                        valid_summary_gids.add(item_id)
 
-    print(f"  Covered GlobalOfferIds: {len(covered_gids):>12,}")
+    print(f"  Covered GlobalOfferIds (in file):     {len(covered_gids):>12,}")
+    print(f"  With valid 7-word summary:            {len(valid_summary_gids):>12,}")
+    print(f"  Processed but no valid summary:        "
+          f"{len(covered_gids) - len(valid_summary_gids):>12,}")
 
     # =========================================================================
     # Step 2: Read item_sequential_data and classify users as rich/poor
@@ -346,11 +354,22 @@ def main():
     # How many distinct GIDs in kept sequences are already covered?
     covered_in_sampled = sampled_gids & covered_gids
     uncovered_in_sampled = sampled_gids - covered_gids
+    valid_in_sampled = sampled_gids & valid_summary_gids
+    need_processing = sampled_gids - valid_summary_gids
     print(f"\n  GlobalOfferId coverage in sampled data:")
     print(f"    Already covered by s1: {len(covered_in_sampled):>12,}")
     print(f"    Not yet covered:       {len(uncovered_in_sampled):>12,}")
     print(f"    Coverage rate:         "
           f"{len(covered_in_sampled) / len(sampled_gids) * 100:>11.2f}%"
+          if sampled_gids else "")
+    print(f"\n  GlobalOfferIds still needing processing (no valid summary_words):")
+    print(f"    With valid 7-word summary: {len(valid_in_sampled):>12,}")
+    print(f"    Still need processing:     {len(need_processing):>12,}")
+    print(f"      - Never processed:       {len(uncovered_in_sampled):>12,}")
+    print(f"      - Processed but failed:  "
+          f"{len(need_processing) - len(uncovered_in_sampled):>12,}")
+    print(f"    Valid summary rate:         "
+          f"{len(valid_in_sampled) / len(sampled_gids) * 100:>11.2f}%"
           if sampled_gids else "")
 
     print(f"\n  Total item entries:")

@@ -664,14 +664,14 @@ def parse_args():
     parser.add_argument(
         "--full_sequential_file",
         type=str,
-        default="./raw_data/full_sequential_data_sample.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/full_sequential_data_sample2.json",
         help="Path to full_sequential_data.json from s2_construct_sequential_data "
              "(default: ./raw_data/full_sequential_data.json)",
     )
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="./processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
         help="Path to id2meta JSON from s1_generate_tid "
              "(default: ./processed/id2meta.json)",
     )
@@ -686,16 +686,15 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/merged_clean_item2.json",
         help="Path to full item metadata JSON for description fallback "
              "(default: ./raw_data/merged_clean_item.json)",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./sft_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/",
         help="Output directory. SFT data saved to <output_dir>/event2product_sft.json "
-             "(default: ./sft_data)",
     )
     parser.add_argument(
         "--max_events",
