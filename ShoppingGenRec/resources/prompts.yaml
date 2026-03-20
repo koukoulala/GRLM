@@ -548,7 +548,7 @@ prompts:
         - Only return "men" or "women" when there is clear evidence of user's own explicit preference, else return "general".
         - Examples:
           - Multiple "Men's T-Shirt", "Men's Jeans" events → "men"
-          - Search "Buying for my son"  → ignore, no explicit signal
+          - Searched "boys school backpack" → ignore, could be buying for others
         - Example output value:
           - "men"
           - "women"
@@ -569,7 +569,7 @@ prompts:
             - Mentioned at least 2 times OR  strong intent to research/compare options.
           4. **Exclusions**:
             - Adhere to the **Strict Safety & Category Filter**—exclude all categories listed there.
-            - Any category from user's task related conversation like translation, summary, creating images.
+            - Exclude categories from events that are clearly homepage/landing page visits without specific product intent.
             - Exclude one-off, trivial, or replenishment purchases. Examples of exclusions:
               - Toilet paper
               - Tape
@@ -599,9 +599,7 @@ prompts:
           1. **Third-Party Intent**: Exclude brands associated solely with gifts or other people (e.g., "My mom likes...").
           2. **Hypotheticals/Negatives**: Exclude brands used in theoretical scenarios or explicitly rejected (e.g., "If I were rich...", "I hate...").
           3. **Non-Retail Assets**: Exclude brands that are not typically sold via standard consumer e-commerce like Amazon (e.g., Automobiles brands like Tesla, Real Estate, B2B industrial machinery) unless referring to specific accessories (e.g., "Tesla charger").
-          4. **Task-Only Mentions**: Exclude brands mentioned solely for one-off tasks like translation, summarization, image creation and etc.
-            - Example: searched "Create an image for Adidas Shoes."
-            - Example: searched "Translate to Chinese: I love Nike"
+          4. **Non-Product Pages**: Exclude brands that only appear in non-product event pages (e.g., brand homepage visits, editorial content, or promotional landing pages without specific product engagement).
         - **Target**: Return a distinct list of brand names that meet the inclusion criteria.
         - Example: Browsed "Nike Air Max" + Browsed "Nike Running Shoes" → "Nike"
 
@@ -612,9 +610,9 @@ prompts:
           - Ignore retailers mentioned only when buying gifts.
           - If no clear signal support inference, return an empty list.
         - Example output: Amazon, Best Buy, REI, Nordstrom
-        - Example conversation to value:
-          - Often browse Amazon for price. → "Amazon"
-          - Searched "buy xx at Target for my sister" → ignore
+        - Examples:
+          - Multiple Browsed/Clicked events on Amazon product pages → "Amazon"
+          - Browsed "Gift for Mom" on Target → ignore (gift purchase)
 
       - **Price Sensitivity**:
         - Definition: The user's typical personal spending tier across categories.
@@ -634,54 +632,58 @@ prompts:
       - **Fashion Style**
         - Definition: The user's own consistently expressed fashion aesthetics.
         - Rules:
-          - Must be explicit or repeated.
-          - Ignore styles discussed for someone else.
+          - Infer from product titles containing style descriptors (e.g., "minimalist", "vintage", "sporty").
+          - Require 2+ events with consistent style terms to confirm a preference.
           - If no clear signal support inference, return an empty list.
         - Example output: "minimal", "sporty", "classic", "luxury", "monochrome"
-        - Example: Often search " minimal styles" → minimal
+        - Example: Browsed "Minimalist leather wallet" + Clicked "Minimalist watch" → "minimal"
 
       - **Fashion Fit**
         - Definition: The user's fit/silhouette preferences for their own clothing.
         - Rules:
-          - Must be explicitly stated or consistently repeated.
+          - Infer from product titles containing fit descriptors (e.g., "slim-fit", "oversized", "relaxed").
+          - Require 2+ events with consistent fit terms to confirm a preference.
           - Avoid extracting from vague or ambiguous fit-related terms.
           - If no clear signal support inference, return an empty list.
         - Example output: "slim fit", "oversized", "tailored", "relaxed"
-        - Example: "Looking for slim-fit tees" → slim fit
+        - Example: Searched "slim fit jeans" + Browsed "Slim Fit Oxford Shirt" → "slim fit"
 
       - **Shopping Values**:
         - Definition: Ethical or lifestyle-based preferences that guide the user's own purchasing decisions.
         - Rules:
-          - Must be explicitly stated; Do not infer from context or product type alone.
-          - Ignore values applied only to gift purchases.
+          - Infer only if product titles or search queries repeatedly contain value-related keywords (e.g., "organic", "sustainable", "eco-friendly", "cruelty-free").
+          - Require 2+ events with consistent value-related terms.
+          - Ignore values appearing only in gift-related events.
           - If no clear signal support inference, return an empty list.
         - Example output: "eco-friendly", "organic", "cruelty-free", "sustainable"
         - Examples:
-          - Browsed "eco-friendly products" → eco-friendly
-          - Clicked "cruelty-free skincare" → cruelty-free
+          - Searched "eco-friendly water bottle" + Browsed "Eco-Friendly Bamboo Utensils" → "eco-friendly"
+          - Clicked "Organic Cotton T-Shirt" + Browsed "Organic Skincare Set" → "organic"
 
       - **Negative Preferences**:
         - Definition: Things the user explicitly wants to avoid in shopping (categories, brands, styles, materials, features)
-        - Cannot be reliably inferred from browsing events alone
-        - Must be explicitly stated as dislikes, avoidances, or negative preferences (for user's own shopping, not for others)
-          - If no clear signal support inference, return an empty list.
-        - Example output: "leather accessories", "Chelsea boots for styled outfits", "synthetic materials"
+        - Cannot be reliably inferred from browsing/clicking events alone.
+        - Only extract if a search query explicitly contains negative language (e.g., "without", "no", "non-", "free from").
+        - In most cases, return an empty list since event data rarely contains explicit negative preferences.
+        - If no clear signal support inference, return an empty list.
         - Examples:
-          - Searched "I hate leather accessories" → "leather accessories"
+          - Searched "laptop without touchscreen" → "touchscreen"
+          - Searched "non-leather handbag" → "leather"
           
       - **Contextual Shopping Interests**:
-        - Definition: Shopping-related tasks, interests, and goals from events that present shopping recommendation opportunities
+        - Definition: Active shopping patterns and product research activities inferred from event clusters
         - Rules:
-          - Include ONLY: shopping behaviors, decision-making patterns, purchase priorities, active shopping projects, product research activities
-          - **Exclude**: Non-shopping content (life events without shopping connection, hobbies, work, general lifestyle)
-          - **Format with source prefix**: Prefix each item with its source field from events
-            - Use: "interest:", "recentTasks:", "shortTermGoals:", "sharedContext:"
-          - Must be directly relevant to shopping recommendations
+          - Identify concentrated browsing/searching patterns that indicate an active shopping project or research activity.
+          - Include ONLY: observable shopping behaviors, active product research, cross-brand comparison patterns.
+          - **Exclude**: Non-shopping content, single isolated events, generic homepage visits.
+          - **Format with behavior prefix**: Describe each as an observable pattern from events.
+            - Use: "active research:", "comparison shopping:", "recurring interest:"
+          - Must be directly relevant to shopping recommendations.
           - If no clear signal support inference, return an empty list.
         - Example output:
-          - "interest: comparison shopping for appliances and furniture, prioritizing reliability and value"
-          - "shortTermGoals: curating treat rotation for young cats"
-          - "recentTasks: compared Bosch and Miele dishwashers, chose Bosch 800 Series"
+          - "active research: browsing and comparing multiple noise-canceling headphones across Sony, Bose, and Apple"
+          - "comparison shopping: repeatedly viewing mid-range running shoes from Nike and Adidas"
+          - "recurring interest: frequently browsing smart home devices and accessories"
 
       - **Suggested Related Brands**:
         - Definition: Suggest direct competitors to brands the user prefers.
@@ -725,10 +727,10 @@ prompts:
       - All attributes strictly reflect the user's own medium–long-term preferences.
       - No attribute originates from gifts or purchases for others.
       - No attribute is derived from one-time or short-lived shopping needs.
-      - Everything is backed by explicit evidence from user events.
+      - Everything is backed by explicit evidence from user events (repeated patterns or strong behavioral signals).
       - All attributes correspond to online-shoppable product categories.
-      - Negative preferences are extracted from conversation or memory (confidence 4-5).
-      - Contextual shopping interests have proper source prefixes and are shopping-related only.
+      - Negative preferences are only extracted when search queries contain explicit negative language; otherwise return empty list.
+      - Contextual shopping interests describe observable event patterns with proper behavior prefixes.
       - Items in negativePreferences are filtered out from all positive preference fields.
 
       ## Input
