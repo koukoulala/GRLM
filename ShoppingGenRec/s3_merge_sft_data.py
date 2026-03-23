@@ -1,4 +1,4 @@
-"""Step 3: Merge and Shuffle All SFT Datasets
+"""Step 3: Merge and Shuffle All SFT Datasets + Build Test Sets
 
 Reads SFT JSON files from multiple tasks (meta2tid, rec, event2product,
 event2journey, profile2journey), applies per-task sampling, merges them
@@ -10,8 +10,14 @@ versions (which contain metadata.user_id), randomly splits shared user
 IDs into two disjoint halves, assigns one half to each task, then
 extracts only the SFT fields before sampling.
 
-Each input file should be a JSON list of dicts with at least
-{instruction, input, output} keys.
+Additionally, samples N user_ids from the intersection of event2journey
+and profile2journey to build two test JSONL files (one per journey task).
+Test users are excluded from the training data.
+
+Outputs (in --output_dir):
+  1. combined_sft.jsonl          - Merged training data (no test users).
+  2. event2journey_test.jsonl    - Test set for event2journey task.
+  3. profile2journey_test.jsonl  - Test set for profile2journey task.
 
 Usage:
     python s3_merge_sft_data.py \\
@@ -20,7 +26,8 @@ Usage:
         --event2product_full_file ./sft_data/event2product_sft_full.json \\
         --event2journey_full_file ./sft_data/event2journey_sft_full.json \\
         --profile2journey_full_file ./sft_data/profile2journey_sft_full.json \\
-        --output_file ./sft_data/combined_sft.json
+        --output_dir ./sft_data \\
+        --test_sample_n 5000
 """
 
 import argparse
@@ -242,9 +249,15 @@ def parse_args():
     )
     # Output
     parser.add_argument(
-        "--output_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/combined_sft.jsonl",
-        help="Output path for merged SFT data (JSONL format)",
+        "--output_dir", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data",
+        help="Output directory for merged training data and test sets",
+    )
+    # Test set
+    parser.add_argument(
+        "--test_sample_n", type=int, default=5000,
+        help="Number of user_ids to sample as test set from the intersection "
+             "of event2journey and profile2journey (default: 5000)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -298,26 +311,106 @@ def main():
     all_data.extend(e2p_samples)
 
     # =========================================================================
-    # Step 1c: Load, deduplicate, and sample journey tasks
+    # Step 1c: Load journey task data, extract test set, then dedup & sample
     # =========================================================================
     print()
-    print("  --- event2journey / profile2journey deduplication ---")
-    e2j_samples, p2j_samples, e2j_stats, p2j_stats = load_and_split_paired_tasks(
-        args.event2journey_full_file,
-        args.profile2journey_full_file,
-        args.event2journey_prob,
-        args.profile2journey_prob,
-        "event2journey",
-        "profile2journey",
-        rng,
-    )
-    stats["event2journey"] = e2j_stats
-    stats["profile2journey"] = p2j_stats
-    all_data.extend(e2j_samples)
-    all_data.extend(p2j_samples)
+    print("  --- event2journey / profile2journey: test set + deduplication ---")
+
+    # Load both full files first to find shared users for test set
+    e2j_by_user = {}
+    if args.event2journey_full_file and os.path.exists(args.event2journey_full_file):
+        with open(args.event2journey_full_file, "r", encoding="utf-8") as f:
+            e2j_data = json.load(f)
+        for sample in e2j_data:
+            uid = sample.get("metadata", {}).get("user_id", "")
+            if uid:
+                e2j_by_user[uid] = sample
+        print(f"  [event2journey] Loaded full data: {len(e2j_data):,} samples, "
+              f"{len(e2j_by_user):,} unique users")
+    else:
+        print(f"  [event2journey] File not found: {args.event2journey_full_file}")
+
+    p2j_by_user = {}
+    if args.profile2journey_full_file and os.path.exists(args.profile2journey_full_file):
+        with open(args.profile2journey_full_file, "r", encoding="utf-8") as f:
+            p2j_data = json.load(f)
+        for sample in p2j_data:
+            uid = sample.get("metadata", {}).get("user_id", "")
+            if uid:
+                p2j_by_user[uid] = sample
+        print(f"  [profile2journey] Loaded full data: {len(p2j_data):,} samples, "
+              f"{len(p2j_by_user):,} unique users")
+    else:
+        print(f"  [profile2journey] File not found: {args.profile2journey_full_file}")
+
+    # Find users present in BOTH journey tasks for test set sampling
+    both_journey_uids = set(e2j_by_user.keys()) & set(p2j_by_user.keys())
+    print(f"  Users in both journey tasks: {len(both_journey_uids):,}")
+
+    # Sample test user_ids
+    test_n = min(args.test_sample_n, len(both_journey_uids))
+    both_sorted = sorted(both_journey_uids)
+    rng.shuffle(both_sorted)
+    test_uids = set(both_sorted[:test_n])
+    print(f"  Sampled {len(test_uids):,} test user_ids from {len(both_journey_uids):,} shared users")
+
+    # Build test sets (full metadata preserved)
+    e2j_test = [e2j_by_user[uid] for uid in sorted(test_uids) if uid in e2j_by_user]
+    p2j_test = [p2j_by_user[uid] for uid in sorted(test_uids) if uid in p2j_by_user]
+    print(f"  Test set: {len(e2j_test):,} event2journey, {len(p2j_test):,} profile2journey")
+
+    # Remove test users from journey data before dedup/training split
+    e2j_by_user_train = {uid: s for uid, s in e2j_by_user.items() if uid not in test_uids}
+    p2j_by_user_train = {uid: s for uid, s in p2j_by_user.items() if uid not in test_uids}
+    print(f"  After removing test users: {len(e2j_by_user_train):,} event2journey, "
+          f"{len(p2j_by_user_train):,} profile2journey")
+
+    # Dedup shared training users between the two journey tasks
+    shared_train = set(e2j_by_user_train.keys()) & set(p2j_by_user_train.keys())
+    e2j_only = set(e2j_by_user_train.keys()) - shared_train
+    p2j_only = set(p2j_by_user_train.keys()) - shared_train
+
+    shared_train_list = sorted(shared_train)
+    rng.shuffle(shared_train_list)
+    mid = len(shared_train_list) // 2
+    e2j_shared = set(shared_train_list[:mid])
+    p2j_shared = set(shared_train_list[mid:])
+
+    print(f"  [dedup] Shared train users: {len(shared_train):,}, "
+          f"split {len(e2j_shared):,} -> event2journey, "
+          f"{len(p2j_shared):,} -> profile2journey")
+
+    e2j_final_uids = e2j_only | e2j_shared
+    p2j_final_uids = p2j_only | p2j_shared
+
+    e2j_assigned = [
+        extract_sft_fields(e2j_by_user_train[uid])
+        for uid in e2j_final_uids if uid in e2j_by_user_train
+    ]
+    p2j_assigned = [
+        extract_sft_fields(p2j_by_user_train[uid])
+        for uid in p2j_final_uids if uid in p2j_by_user_train
+    ]
+
+    e2j_orig = len(e2j_assigned)
+    if args.event2journey_prob < 1.0:
+        e2j_assigned = [d for d in e2j_assigned if rng.random() < args.event2journey_prob]
+    p2j_orig = len(p2j_assigned)
+    if args.profile2journey_prob < 1.0:
+        p2j_assigned = [d for d in p2j_assigned if rng.random() < args.profile2journey_prob]
+
+    print(f"  [event2journey] After dedup: {e2j_orig:>10,} -> "
+          f"Sampled {len(e2j_assigned):>10,} (prob={args.event2journey_prob})")
+    print(f"  [profile2journey] After dedup: {p2j_orig:>10,} -> "
+          f"Sampled {len(p2j_assigned):>10,} (prob={args.profile2journey_prob})")
+
+    stats["event2journey"] = (e2j_orig, len(e2j_assigned))
+    stats["profile2journey"] = (p2j_orig, len(p2j_assigned))
+    all_data.extend(e2j_assigned)
+    all_data.extend(p2j_assigned)
 
     total_before_merge = sum(v[1] for v in stats.values())
-    print(f"\n  Total samples after sampling: {total_before_merge:,}")
+    print(f"\n  Total training samples after sampling: {total_before_merge:,}")
 
     # =========================================================================
     # Step 2: Shuffle
@@ -331,22 +424,39 @@ def main():
     print(f"  Shuffled {len(all_data):,} samples (seed={args.seed})")
 
     # =========================================================================
-    # Step 3: Save
+    # Step 3: Save training data + test sets
     # =========================================================================
     print()
     print("=" * 70)
-    print("Step 3: Saving merged dataset")
+    print("Step 3: Saving training data and test sets")
     print("=" * 70)
 
-    os.makedirs(os.path.dirname(args.output_file) or ".", exist_ok=True)
-    with open(args.output_file, "w", encoding="utf-8") as f:
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # --- Training data ---
+    train_file = os.path.join(args.output_dir, "combined_sft.jsonl")
+    with open(train_file, "w", encoding="utf-8") as f:
         for item in all_data:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    train_size_mb = os.path.getsize(train_file) / (1024 * 1024)
+    print(f"  Training data: {train_file}")
+    print(f"    Size:   {train_size_mb:.2f} MB")
+    print(f"    Total:  {len(all_data):,} samples")
 
-    file_size_mb = os.path.getsize(args.output_file) / (1024 * 1024)
-    print(f"  Output: {args.output_file}")
-    print(f"  Size:   {file_size_mb:.2f} MB")
-    print(f"  Total:  {len(all_data):,} samples")
+    # --- Test sets (full metadata preserved) ---
+    e2j_test_file = os.path.join(args.output_dir, "event2journey_test.jsonl")
+    with open(e2j_test_file, "w", encoding="utf-8") as f:
+        for item in e2j_test:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    print(f"  event2journey test: {e2j_test_file}")
+    print(f"    Samples: {len(e2j_test):,}")
+
+    p2j_test_file = os.path.join(args.output_dir, "profile2journey_test.jsonl")
+    with open(p2j_test_file, "w", encoding="utf-8") as f:
+        for item in p2j_test:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    print(f"  profile2journey test: {p2j_test_file}")
+    print(f"    Samples: {len(p2j_test):,}")
 
     # =========================================================================
     # Summary
@@ -365,6 +475,12 @@ def main():
     total_orig = sum(v[0] for v in stats.values())
     print(f"  {'-'*25} {'-'*10} {'-'*10} {'-'*8}")
     print(f"  {'TOTAL':<25s} {total_orig:>10,} {len(all_data):>10,}")
+
+    # Test set summary
+    print(f"\n  Test Set:")
+    print(f"    Test user_ids sampled:    {len(test_uids):>10,}")
+    print(f"    event2journey test:       {len(e2j_test):>10,}")
+    print(f"    profile2journey test:     {len(p2j_test):>10,}")
 
     # =========================================================================
     # Length Statistics
