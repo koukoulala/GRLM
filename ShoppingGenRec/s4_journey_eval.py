@@ -1580,4 +1580,70 @@ def main():
     print("Summary")
     print("=" * 70)
 
-    if args.llm_output_file and os.path.isfile(args.llm_output_fil
+    if args.llm_output_file and os.path.isfile(args.llm_output_file):
+        print(f"  Loaded from previous llm_output: {args.llm_output_file}")
+    else:
+        print(f"  Total users in test file:       {len(test_rows):>10,}")
+        print(f"  Sampled users:                  {len(sampled_rows):>10,}")
+        print(f"  Valid profiles generated:       {profile_valid:>10,}")
+        print(f"  Invalid/empty profiles:         {profile_invalid + profile_empty:>10,}")
+    print(f"  Users evaluated (with profile): {len(users_with_profile):>10,}")
+
+    print(f"\n  {'Metric':<40s} {'GT':>10s} {'SLM':>10s} {'SLM+Prof':>10s}")
+    print(f"  {'-'*40} {'-'*10} {'-'*10} {'-'*10}")
+    for label, st in [
+        ("JSON parse success", "json_parse_success"),
+        ("JSON parse fail", "json_parse_fail"),
+        ("Total products", "total_products"),
+        ("Exact matches", "exact_matches"),
+        ("Fuzzy matches", "fuzzy_matches"),
+        ("No matches", "no_matches"),
+        ("Users with all fields", "users_with_all_fields"),
+    ]:
+        print(f"  {label:<40s} {llm_stats[st]:>10,} "
+              f"{slm_stats[st]:>10,} {slm_profile_stats[st]:>10,}")
+
+    for name, stats in [
+        ("GT", llm_stats), ("SLM", slm_stats), ("SLM+Profile", slm_profile_stats),
+    ]:
+        ratios = stats.get("per_user_exact_ratios", [])
+        if ratios:
+            arr = np.array(ratios)
+            print(f"  {name} per-user exact rate: "
+                  f"mean={arr.mean():.2%}, median={np.median(arr):.2%}")
+
+    # Save summary JSON
+    summary = {
+        "model_path": args.model_path,
+        "seed": args.seed,
+        "evaluated_users": len(users_with_profile),
+        "llm_stats": {k: v for k, v in llm_stats.items()
+                      if k not in ("per_user_exact_ratios", "fuzzy_matched_words", "fuzzy_best_scores")},
+        "slm_stats": {k: v for k, v in slm_stats.items()
+                      if k not in ("per_user_exact_ratios", "fuzzy_matched_words", "fuzzy_best_scores")},
+        "slm_profile_stats": {k: v for k, v in slm_profile_stats.items()
+                              if k not in ("per_user_exact_ratios", "fuzzy_matched_words", "fuzzy_best_scores")},
+        "llm_diversity": llm_diversity or {},
+        "slm_diversity": slm_diversity or {},
+        "slm_profile_diversity": slm_profile_diversity or {},
+    }
+    if not (args.llm_output_file and os.path.isfile(args.llm_output_file)):
+        summary.update({
+            "test_file": args.test_file,
+            "total_test_users": len(test_rows),
+            "sample_n": len(sampled_rows),
+            "valid_profiles": profile_valid,
+            "invalid_profiles": profile_invalid,
+            "empty_profiles": profile_empty,
+        })
+    summary_file = os.path.join(args.output_dir, "eval_summary.json")
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    print(f"\n  Summary saved to: {summary_file}")
+
+    print(f"\nDone! Evaluated {len(users_with_profile)} users on 2 tasks, "
+          f"saved 3 output files to {args.output_dir}")
+
+
+if __name__ == "__main__":
+    main()
