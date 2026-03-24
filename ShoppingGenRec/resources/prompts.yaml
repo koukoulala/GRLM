@@ -526,7 +526,6 @@ prompts:
       - Fashion Style
       - Fashion Fit
       - Shopping Values
-      - Negative Preferences
       - Contextual Shopping Interests
       - Suggested Related Brands
 
@@ -577,8 +576,6 @@ prompts:
               - Generic cables
               - Cleaning supplies
           6. If no clear signal support inference, return an empty list for Category Preferences
-        - Valid Examples:
-          - Smartphones, headphones, jewelry, running shoes
         - Invalid Examples:
           - Bar (not purchasable)
           - Restaurant (non-purchasable online)
@@ -590,7 +587,7 @@ prompts:
           - ChatGPT Plus (development tools)
         - Examples:
           - Searched: "a new phone." -- Category: Phones
-          - Browsed "Sony WH-1000XM5 Headphones" + Searched "noise canceling headphones" → Category: "Headphones"
+          - Browsed "Wireless Noise Canceling Over-Ear Headphones" + Searched "noise canceling headphones" → Category: "Headphones"
         
       - **Brand Preferences**:
         - Extract brand names from product titles in Browsed/Clicked/Searched events
@@ -601,7 +598,7 @@ prompts:
           3. **Non-Retail Assets**: Exclude brands that are not typically sold via standard consumer e-commerce like Amazon (e.g., Automobiles brands like Tesla, Real Estate, B2B industrial machinery) unless referring to specific accessories (e.g., "Tesla charger").
           4. **Non-Product Pages**: Exclude brands that only appear in non-product event pages (e.g., brand homepage visits, editorial content, or promotional landing pages without specific product engagement).
         - **Target**: Return a distinct list of brand names that meet the inclusion criteria.
-        - Example: Browsed "Nike Air Max" + Browsed "Nike Running Shoes" → "Nike"
+        - Example: If a brand name appears in 2+ Browsed/Clicked events (e.g., two products from the same sportswear brand) → include that brand
 
       - **Retailer Preferences**:
         - Definition: Stores user prefers or repeatedly buys from
@@ -609,9 +606,8 @@ prompts:
           - Must originate from the user's own shopping patterns.
           - Ignore retailers mentioned only when buying gifts.
           - If no clear signal support inference, return an empty list.
-        - Example output: Amazon, Best Buy, REI, Nordstrom
         - Examples:
-          - Multiple Browsed/Clicked events on Amazon product pages → "Amazon"
+          - Multiple Browsed/Clicked events with products from the same retailer → include that retailer
           - Browsed "Gift for Mom" on Target → ignore (gift purchase)
 
       - **Price Sensitivity**:
@@ -625,9 +621,9 @@ prompts:
           - If mixed or unclear → return "general"
         - Example output: "low-tier shopper", "mid-tier shopper", "high-tier shopper"
         - Infer from product types and brands:
-          - Luxury brands (Cartier, Gucci, etc.) → "high-tier shopper"
-          - Mid-range brands (Nike, Samsung, etc.) → "mid-tier shopper"
-          - Budget/discount products → "low-tier shopper"
+          - Products from well-known luxury fashion houses and fine jewelry brands → "high-tier shopper"
+          - Products from mainstream consumer brands with moderate pricing → "mid-tier shopper"  
+          - Products with "budget", "affordable", "deal" in titles, or from discount retailers → "low-tier shopper"
         
       - **Fashion Style**
         - Definition: The user's own consistently expressed fashion aesthetics.
@@ -659,16 +655,6 @@ prompts:
         - Examples:
           - Searched "eco-friendly water bottle" + Browsed "Eco-Friendly Bamboo Utensils" → "eco-friendly"
           - Clicked "Organic Cotton T-Shirt" + Browsed "Organic Skincare Set" → "organic"
-
-      - **Negative Preferences**:
-        - Definition: Things the user explicitly wants to avoid in shopping (categories, brands, styles, materials, features)
-        - Cannot be reliably inferred from browsing/clicking events alone.
-        - Only extract if a search query explicitly contains negative language (e.g., "without", "no", "non-", "free from").
-        - In most cases, return an empty list since event data rarely contains explicit negative preferences.
-        - If no clear signal support inference, return an empty list.
-        - Examples:
-          - Searched "laptop without touchscreen" → "touchscreen"
-          - Searched "non-leather handbag" → "leather"
           
       - **Contextual Shopping Interests**:
         - Definition: Active shopping patterns and product research activities inferred from event clusters
@@ -681,9 +667,9 @@ prompts:
           - Must be directly relevant to shopping recommendations.
           - If no clear signal support inference, return an empty list.
         - Example output:
-          - "active research: browsing and comparing multiple noise-canceling headphones across Sony, Bose, and Apple"
-          - "comparison shopping: repeatedly viewing mid-range running shoes from Nike and Adidas"
-          - "recurring interest: frequently browsing smart home devices and accessories"
+          - "active research: browsing and comparing multiple products in the same category across different brands and retailers"
+          - "comparison shopping: repeatedly viewing similar products from competing brands within the same price range"
+          - "recurring interest: frequently browsing a specific product category and related accessories over multiple sessions"
 
       - **Suggested Related Brands**:
         - Definition: Suggest direct competitors to brands the user prefers.
@@ -694,10 +680,13 @@ prompts:
               - Same tier (e.g., Luxury-to-Luxury, Mass Market-to-Mass Market)
           3. Only suggest if highly confident—otherwise return empty list.
           4. No guessing or inventing brands.
+          5. Never reuse brand names from these instructions as suggestions.
+          6. **When in doubt, return an empty list.** An empty list is always preferred over a wrong suggestion.
         - Output: Unique list of suggested brands (or empty list if no confident matches).
         - Examples:
-          - If user has brandPreference on Cartier, suggest related brand: Tiffany & Co.
-          - If user has brandPreference on Sony, suggest related brand: Bose.
+        - If user prefers a luxury jewelry brand → suggest its most well-known direct competitor in luxury jewelry
+        - If user prefers a consumer electronics brand → suggest its primary competitor in the same product line
+        - If user prefers a niche/specialty brand with no obvious competitor → return empty list
 
 
       ## Output Format
@@ -713,10 +702,9 @@ prompts:
         "fashionStyle": ["string"],
         "fashionFit":["string"],
         "shoppingValues": ["string"],
-        "negativePreferences": ["string"],
         "contextualShoppingInterests": ["string"],
         "suggestedRelatedBrands": ["string"]
-       }}
+      }}
       }}
 
       - No explanation outside the JSON.
@@ -729,9 +717,7 @@ prompts:
       - No attribute is derived from one-time or short-lived shopping needs.
       - Everything is backed by explicit evidence from user events (repeated patterns or strong behavioral signals).
       - All attributes correspond to online-shoppable product categories.
-      - Negative preferences are only extracted when search queries contain explicit negative language; otherwise return empty list.
       - Contextual shopping interests describe observable event patterns with proper behavior prefixes.
-      - Items in negativePreferences are filtered out from all positive preference fields.
 
       ## Input
 
@@ -743,61 +729,6 @@ prompts:
 
       Output:
 
-  product_summary:
-    system: ""
-    user: |
-      You are an expert product summarizer. Your task has TWO steps:
-
-      STEP 1 - PRODUCT VALIDATION:
-      First, carefully analyze the PRODUCT INFORMATION below. Determine whether it describes a REAL, SPECIFIC product (e.g., a physical item, a digital product, a tool, a food item, etc.).
-      If the information is just a general marketing slogan, a brand tagline, a vague browsing/search phrase, or does NOT describe a concrete product, output ONLY an empty list: []
-
-      STEP 2 - SUMMARIZATION (only if Step 1 confirms a real product):
-      Generate exactly SEVEN words to summarize this product. The 7 words should cover as many of the following aspects as possible, ordered by priority. Not every product has all aspects — include only what is available and informative:
-
-      PRIORITY ORDER
-         1. Main product category or type (e.g., "headphone", "sneaker", "cream")
-         2. Key function or primary capability (e.g., "noise-canceling", "dimmable", "anti-aging")
-         3. Distinctive feature, form factor, or sub-type (e.g., "over-ear", "sphere", "spf-15")
-         4. Brand or platform ecosystem (e.g., "sony", "nike", "apple-compatible", "joss & main") — MUST include if provided
-         5. Seller or retailer (e.g., "amazon", "walmart", "home depot") — MUST include if provided
-         6. Target audience — include ONLY if specific (e.g., "kids", "women", "professional", "cat"); skip generic values like "unisex" or "adult"
-         7. Style, occasion, or unique selling point (e.g., "holiday", "outdoor", "waterproof", "budget-friendly")
-
-      RULES:
-      1. WORD FORM: All words must be in their base form (nouns or adjectives, no -ed, -ing, -s endings). Use hyphens to combine closely related concepts into a single word (e.g., "anti-aging", "spf-15", "noise-canceling").
-      2. DO NOT SPLIT PROPER NOUNS: Brand names and seller names are each ONE comma-separated entry, even if they contain multiple English words. Keep them intact — do NOT split them across entries.
-         - Brand "Home Depot" → one entry "home depot", NOT two entries "home", "depot"
-         - Brand "Joss & Main" → one entry "joss & main", NOT two entries "joss", "main"
-         - Seller "楽天市場" → one entry "楽天市場"
-      3. NO DUPLICATES: Every entry in the output list must be distinct. If brand and seller are the same or very similar (e.g., Brand="Hammitt", Seller="Hammitt"), output it only ONCE and use the freed slot for another informative aspect.
-         - Example: Brand="Hammitt", Seller="Hammitt" → include "hammitt" once, NOT twice.
-      4. COVERAGE: MUST cover as many available aspects as possible within 7 words. If brand is present, it MUST appear. If seller is present and different from brand, it MUST appear. If a specific audience (not "unisex" or "adult") is present, it MUST appear. Only omit an aspect if the product genuinely lacks that information.
-      5. PRODUCT-FIRST: The first 2-3 words should describe the product itself (category, function, distinctive feature). A reader should be able to picture what the product is from these words alone.
-      6. CONSISTENCY WITH SIMILAR ITEMS: Consider the similar items provided. If they share common characteristics, use consistent terminology for those aspects.
-      7. UNIQUENESS: Include at least 1-2 words that distinguish this product from the similar items.
-      8. LANGUAGE: Use the same language as the product information. If the product is in Japanese, Chinese, etc., the output words should also be in that language. Do NOT translate to English.
-
-      OUTPUT FORMAT:
-      - If NOT a real product: <Output>[]</Output>
-      - If a real product: <Output>[word1, word2, word3, word4, word5, word6, word7]</Output>
-      - Wrap your final answer in <Output></Output> tags. No text outside these tags except thinking.
-
-      PRODUCT INFORMATION:
-      {product_info_text}
-
-      TOP 5 SIMILAR PRODUCTS (for reference):
-      {similar_items_text}
-
-      ANALYSIS GUIDANCE:
-      1. Validate: is this a real product? If not, output []
-      2. Pick category + function + feature (first 3 words)
-      3. Add brand (keep intact, no splitting). If brand = seller, include once only
-      4. Add seller if different from brand (keep intact, no splitting)
-      5. Add audience / style / unique trait to fill remaining slots
-      6. Verify: no duplicates, exactly 7 entries, same language as input
-
-      Output:
 
   term_generation:
     system: ""
@@ -960,3 +891,296 @@ prompts:
       {similar_items_text}
 
       Output:
+
+  JourneyGeneration:
+    system: ""
+    user: |
+      You are a Shopping Journey Planner — an expert personal-shopping system that curates high-value, personalized shopping journeys for online physical products based on user's shopping events provided in <USER-EVENTS>.
+
+      Your task is to generate **continued shopping journeys** the user may want to explore next
+
+      Each journey represents a curated shopping decision for a **physical product category that can be purchased online**.
+
+      ---
+
+      ## Output Format
+
+      - Output must be wrapped in `<OUTPUT>` tags and contain valid JSON including `ContinuedJourneys`, with the following format:
+
+      <OUTPUT>
+      {{
+        "ContinuedJourneys": [
+          {{
+            "Title": "string",
+            "Queries": [
+              {{ "Query": "string" }},
+              {{ "Query": "string" }},
+              {{ "Query": "string" }}],
+            "Reason": "string",
+            "SourceEventIds": [],
+            "ConfidenceLevel": integer
+          }}
+        ]
+      }}
+      </OUTPUT>
+
+      ### Rules
+
+      - Stop generating journeys once additional journeys would become repetitive or low quality.
+      - Ensure that the output is clean, correctly formatted, and can be parsed as valid JSON.
+      - Do **NOT** include markdown or explanations.
+      - Maximum number of journeys: **10**.
+
+      ---
+
+      ## Input Section
+
+      - `<USER-EVENTS>`: Contains users' recent events, formatted with: `eventid | event_time | event_content`.
+
+      ---
+
+      ## Guidelines
+
+      ### 1. Strict Safety & Category Filter (Hard Exclusion)
+
+      #### 1.1 Non-Product or Digital Categories
+
+      - Apps, software, online services, subscriptions, IT support
+      - Digital goods or platforms
+      - Development tools (IDEs, SDKs, frameworks, APIs)
+      - Stocks, finance, investments, trading tools
+      - Local/offline-only services (mechanics, tailors, plumbers)
+      - Experiences (restaurants, concerts, classes, attractions)
+      - Physical venues or "nearby" requests (hotel, bar...)
+
+      #### 1.2 Health-Restricted Categories
+
+      - Medical treatments, diagnoses, prescriptions, medical equipment
+      - Medicines and health supplements
+      - Vitamin supplements, wellness supplements, nootropics
+      - Controlled substances, tobacco, vaping
+
+      #### 1.3 Harmful or Sensitive Content
+
+      - Weapons or firearms (e.g., knives, guns, ammunition, accessories)
+      - Suicide or self-harm
+      - Violence or domestic violence
+      - Eating disorders
+      - Adult or racy content
+      - Offensive, racial, or discriminatory topics
+      - Religion, politics, or gender identity
+      - Drugs or controlled substances
+      - Alcohol, alcoholic beverages and related products
+      - Medical treatments, surgeries, or prescriptions
+      - Age-restricted products (e.g., tobacco, vaping)
+      - Military or union status related content
+      - Funeral and memorial products (caskets, urns, memorial stones)
+      - Content derogatory toward disability status (mental or physical)
+      - Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+
+      #### 1.4 Non-Purchasable from Mainstream Ecosystem
+
+      - Items that cannot be purchased as normal physical retail products online
+        - Car dealerships, real estate, raw seafood markets, artisan meat vendors
+      - Real-world service providers
+        - Handymen, stylists, chefs, local food shops
+      - Products only available through specialty B2B channels
+        - Industrial chemicals, construction materials, lab-grade substances
+
+      #### 1.5 Categories Not Suitable for Personal Shopper-Style Curation
+
+      > These items lack personal-shopping value, have minimal variation, or are everyday consumables.
+
+      - Fruits, vegetables, raw meat, fresh ingredients
+      - Everyday replenishment items
+        - Examples: toilet paper, trash bags, paper towels, cleaning spray, dish soap, AA batteries
+      - Ultra-commodity items with no style/quality tradeoffs
+        - Examples: HDMI cables, USB sticks, packing tape
+      - One-off repair items or materials
+        - Examples: glue, caulk, pipe cleaner, screws, basic tools
+
+      > **You MUST NOT generate any shopping journeys for ALL above categories.**
+
+      ---
+
+      ### 2. Journey Identification Strategies
+
+      Identify continued journeys with the following strategies:
+
+      - Identify opportunities to expand the user's interests into new but related areas based on their browsing history.
+      - Suggest complementary products or accessories that enhance items the user has already shown interest in or purchased.
+      - Recommend products that complete a collection or set with items the user has viewed or purchased.
+      - Suggest upgrades or alternatives to products the user has previously viewed or purchased.
+      - Identify adjacent product categories that naturally pair with the user's established shopping patterns.
+      - Look for broader category interests that could be refined into specific shopping tasks.
+      - Extend recent behaviors rather than simply repeating old interests.
+      - Consider seasonal or timely recommendations that complement the user's established interests.
+      - Two journeys are considered duplicates if they belong to the same base product category,
+      even if they differ by subtype, feature, or use case.
+
+      #### Event Intent Filtering
+      Before generating journeys, analyze each event in <USER-EVENTS> to determine whether it indicates shopping intent.
+
+      Events that do NOT indicate shopping intent include:
+      - General information or news
+      - Tutorials or how-to content unrelated to buying
+      - Entertainment or social media content
+      - Weather, travel planning, or unrelated lifestyle topics
+
+      Events without shopping intent MUST be ignored.
+      Journeys must only be generated from events that clearly indicate product exploration or purchase intent.
+
+      #### Examples of Valid Shopping Journeys
+
+      - "Find the perfect running shoes for your marathon"
+      - "Pick out a stylish leather jacket for your fall wardrobe"
+      - "Upgrade your home office with ergonomic furniture"
+      - "Get the best skincare products for sensitive skin"
+      - "Choose the ideal travel backpack for your upcoming trip"
+
+      #### Examples of Excluded Content
+
+      - "Sign up for a fitness app"
+      - "Find me an online course on digital marketing"
+      - "I'm looking for a bar in New York"
+      - "Where can I buy tickets for a concert?"
+
+      ---
+
+      ### 3. Diversity & Quality
+
+      #### Diversity
+
+      - Each journey must represent a **different product category**.
+      - No duplicate or near-duplicate categories.
+      - Avoid multiple journeys within the same theme.
+      - At most ONE journey is allowed per base product category.
+      - If multiple journeys fall into the same category, keep the one with the strongest signal and discard the rest.
+
+      #### Quality
+
+      - Each journey should represent a meaningful shopping decision.
+      - Avoid trivial, disposable, or commodity items.
+      - Journeys should align with the user's browsing interests.
+
+      The number of generated journeys should reflect the diversity of the user's interests.
+      - If events focus on ONE category → generate 1 journeys
+      - If events span TWO categories → generate 2–3 journeys
+      - If events span THREE or more categories → generate up to 10 journeys
+
+      Do NOT force additional journeys if the user's interests are highly concentrated.Quality and relevance are more important than quantity.
+
+
+      ---
+
+      ## Field Definitions
+
+      **Title**
+      - 5-10 words
+      - Sentence case
+      - Written in second person or conversational tone
+      - Must feel like something you'd tap on Instagram or a magazine cover
+
+      Titles should:
+      - Sound like a friend texting you about something amazing they found
+      - Spark emotion, urgency, curiosity, or delight.
+      - Use wit, rhythm, wordplay, metaphors, or cultural references
+      - Feel alive — playful, bold, confident, or cheeky
+      - Make the reader WANT to click without knowing exactly what's inside
+
+      Avoid:
+      - Generic catalog titles
+      - Search query style titles
+      - Repetitive sentence structures
+      - Starting with: Explore, Discover, Find, Shop, Browse, Check out
+      - Are generic enough to apply to any user ("Great deals on electronics")
+      - Use "signature", "premium", "luxury", "top-rated", "best" as filler adjectives
+
+      Bad titles (NEVER generate these patterns):
+      - "Explore Cartier's signature luxury watches" ← catalog entry, zero personality
+      - "Discover Nike's latest running shoes" ← boring verb + brand + product
+      - "Find the perfect gift for her" ← generic, could be anyone
+      - "Shop premium wireless headphones" ← reads like an ad banner
+
+      Good titles (these show the ENERGY — never copy, just match the vibe):
+      - "Cartier on your wrist? You've earned that flex"
+      - "These kicks will make your morning run addictive"
+      - "Your couch deserves a serious upgrade this winter"
+      - "One dress, three compliments before noon"
+
+      Across all journeys:
+      - Each title must use a different sentence structure.
+      - Avoid repeating the same grammar pattern.
+      - Use a variety of tones such as: question, statement, metaphor, moment, or bold hook.
+
+      **Query**
+      - Generate 2-3 distinct search queries per shopping journey.
+      - Queries must stay grounded in attributes explicitly supported by <USER-EVENTS>, such as product type, brand, color, size, feature, or compatibility.
+      - Every query must directly support the shopping goal described in the Journey title.
+      - Prefer realistic product search patterns used in online shopping: product type + brand / attribute / compatibility.
+      - Be concise (3-6 words), actionable, and specific
+      - Be diverse within each journey — different angles, features, or use cases
+      - Be concrete and searchable (product categories, brands, attributes)
+      - All queries must remain within the same product intent space and avoid drifting into unrelated categories.
+      - Do NOT copy product titles from events. Instead, convert them into natural shopping search queries.
+
+      Query attribute priority:
+      1. Product type from event
+      2. Brand from event (if present)
+      3. Core product attribute (feature, compatibility, category)
+      4. Shopping refinement (kit, controller, compatible, upgrade)
+      5. Optional minor refinement
+
+      Gender handling (Critical — treat as a hard requirement):
+      - Gender-sensitive categories: ALWAYS include the correct gender keyword. Determine gender in this priority order: 
+        - (1) include a gender term if it is explicitly supported by <USER-EVENTS> or clearly implied by the journey;
+        - (2) "unisex" only if truly general. 
+      - Gender-neutral categories: never include gender terms.
+      - Gender mismatch renders an entire query irrelevant — a women's handbag query for a male user is a failure.
+
+      Queries should resemble real product searches typed by shoppers on e-commerce or search platforms.
+
+      **Reason**
+      - Explains "why you're seeing this" implicitly (because you looked at X) without exposing sensitive details
+      - Brief explanation referencing the user's browsing history
+      - Prefer user-centric cues: "You browsed...", "Still comparing..." — avoid "we noticed/saw"
+
+      Reason and Queries must be consistent.
+      - The Reason should explain the shopping signal that led to the journey.
+      - The Queries must directly reflect that same signal.
+      - Do NOT let the Reason reference one interest while the Queries drift into a broader or different category.
+
+      **SourceEventIds**
+      - Array of eventid strings
+      - Every element must exactly match an eventid from <USER-EVENTS>
+      - Do NOT arbitrarily limit the number of EventIds.
+
+      **ConfidenceLevel**
+      - Integer 1–3
+      - `3` = strong signal
+      - `2` = moderate signal
+      - `1` = weak but reasonable
+      ---
+
+      Before writing each journey:
+
+      1. Identify events with clear shopping intent.
+      2. Ignore events that do not indicate product exploration or purchase intent.
+      3. Identify the strongest product or category signal from <USER-EVENTS>.
+      4. Extract explicit attributes supported by that signal.
+      5. Create a shopping journey based on that signal and its natural upgrade, comparison, or accessory paths.
+      6. Generate queries that preserve the core product category and key supported attributes.
+      7. Determine the core product category represented by the signal.
+      8. Skip the journey if the resulting queries would be weak, generic, or unsupported, or not clearly tied to the signal.
+      9. Deduplicate journeys. If two journeys represent the same product category or shopping goal, keep the one with the strongest signal.
+      10. Rank journey by intent recency, intent strength and evidence support
+
+      ## Input Data
+
+      <USER-EVENTS>
+      {ReadableUserEvents}
+      </USER-EVENTS>
+
+      <SYSTEM-TIME>
+      Current system time (UTC): {RequestTime}
+      </SYSTEM-TIME>

@@ -91,9 +91,12 @@ class WorkerClass:
                 except Exception as ex:
                     last_error = ex
                     if attempt < retry_max:
-                        # Longer backoff for 429 rate limiting
                         is_429 = "429" in str(ex)
-                        wait = (10 + attempt * 5) if is_429 else (2 * attempt)
+                        if is_429:
+                            # Exponential backoff for rate limiting
+                            wait = min(15 * (2 ** (attempt - 1)), 120)
+                        else:
+                            wait = 2 * attempt
                         await asyncio.sleep(wait)
 
             return item_id, last_error, -1

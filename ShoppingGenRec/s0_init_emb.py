@@ -321,13 +321,13 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="./raw_data/merged_clean_item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
@@ -374,7 +374,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="./processed",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()

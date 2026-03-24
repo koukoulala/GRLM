@@ -1,8 +1,13 @@
 """
-Build enriched item JSON from JourneyProduct TSV file.
+Combine item data from two TSV files into a single enriched JSON file.
 
-Input TSV file:
-  JourneyProduct: columns are:
+Input TSV files:
+  1. ProductsData (high priority): columns are:
+     OfferId, GlobalOfferId, Title, Price, Brand, Model, Color, Size,
+     Material, Condition, Gender, AgeGroup, Description, LLMCatId,
+     BingCategory, GoogleCategory, MerchantCategory, Seller, Market,
+     MerchantId, MerchantProductId, CdmProperties, OfferURL, OriginalImageURL
+  2. JourneyProduct (lower priority): columns are:
      GlobalOfferId, Title, Embedding, Seller, Gender, OriginalPrice,
      LLMCatId, CategoryName, AgeGroup, Brand, Description, OfferUrl, ImageUrl
 
@@ -10,14 +15,16 @@ Output:
   A JSON file keyed by GlobalOfferId, each item containing:
     - title (str)
     - description (str)
-    - categories (str) - from CategoryName
+    - categories (str) - from BingCategory (ProductsData) or CategoryName (JourneyProduct)
     - attributes (dict): Brand, Seller, Gender, AgeGroup, Price, Model,
       Color, Size, Material. Only non-empty fields are included.
 
-Rules:
+Priority rules:
+  - ProductsData is high priority for title, description, categories, attributes.
+  - JourneyProduct fills in missing fields.
+  - If a GlobalOfferId has conflicting titles across sources, it is removed.
   - Items without a title are removed.
-  - Items with conflicting titles (same GlobalOfferId, different titles) are removed.
-  - Fields exceeding max_field_length are truncated.
+  - Fields exceeding max_field_length are removed.
 """
 
 import argparse
@@ -156,7 +163,13 @@ def build_attributes(row):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build enriched item.json from JourneyProduct TSV file"
+        description="Combine item data from two TSV files into enriched item.json"
+    )
+    parser.add_argument(
+        "--products_data_file",
+        type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ProductsData.tsv",
+        help="Path to ProductsData TSV file (auto-detected columns from header)",
     )
     parser.add_argument(
         "--journey_product_file",
@@ -167,7 +180,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data",
+        default="./raw_data",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -184,11 +197,23 @@ def main():
     args = parse_args()
 
     # =========================================================================
-    # Step 1: Read input TSV file
+    # Step 1: Read input TSV files
     # =========================================================================
     print("=" * 70)
-    print("Step 1: Reading input TSV file")
+    print("Step 1: Reading input TSV files")
     print("=" * 70)
+
+    # ProductsData: explicit columns
+    prod_columns = [
+        "OfferId", "GlobalOfferId", "Title", "Price", "Brand", "Model",
+        "Color", "Size", "Material", "Condition", "Gender", "AgeGroup",
+        "Description", "LLMCatId", "BingCategory", "GoogleCategory",
+        "MerchantCategory", "Seller", "Market", "MerchantId",
+        "MerchantProductId", "CdmProperties", "OfferURL", "OriginalImageURL",
+    ]
+    print(f"\n  Reading ProductsData: {args.products_data_file}")
+    prod_rows = read_tsv(args.products_data_file, expected_columns=prod_columns)
+    print(f"    Rows: {len(prod_rows):,}")
 
     # JourneyProduct: specific columns
     journey_columns = [
@@ -208,10 +233,19 @@ def main():
     print("Step 2: Grouping data by GlobalOfferId")
     print("=" * 70)
 
+    # ProductsData uses BingCategory for categories
+    prod_data = collect_from_rows(prod_rows, category_key="BingCategory")
     journey_data = collect_from_rows(journey_rows, category_key="CategoryName")
-    all_gids = set(journey_data.keys())
 
-    print(f"  Unique GlobalOfferIds in JourneyProduct:   {len(all_gids):>10,}")
+    prod_gids = set(prod_data.keys())
+    journey_gids = set(journey_data.keys())
+    all_gids = prod_gids | journey_gids
+    overlap_gids = prod_gids & journey_gids
+
+    print(f"  Unique GlobalOfferIds in ProductsData:     {len(prod_gids):>10,}")
+    print(f"  Unique GlobalOfferIds in JourneyProduct:   {len(journey_gids):>10,}")
+    print(f"  Total unique GlobalOfferIds (union):       {len(all_gids):>10,}")
+    print(f"  Overlap (in both files):                   {len(overlap_gids):>10,}")
 
     # =========================================================================
     # Step 3: Identify conflicting titles
@@ -221,9 +255,15 @@ def main():
     print("Step 3: Identifying items with conflicting titles")
     print("=" * 70)
 
+    # Merge title sets across sources
     conflicting_gids = set()
     for gid in all_gids:
-        if len(journey_data[gid]["titles"]) > 1:
+        merged_titles = set()
+        if gid in prod_data:
+            merged_titles.update(prod_data[gid]["titles"])
+        if gid in journey_data:
+            merged_titles.update(journey_data[gid]["titles"])
+        if len(merged_titles) > 1:
             conflicting_gids.add(gid)
 
     print(f"  GlobalOfferIds with conflicting titles:     {len(conflicting_gids):>10,}")
@@ -253,20 +293,30 @@ def main():
             stats["conflict_removed"] += 1
             continue
 
-        # Get title
+        # Determine title (prefer ProductsData, then JourneyProduct)
         title = ""
-        if journey_data[gid]["titles"]:
-            title = next(iter(journey_data[gid]["titles"]))
+        for source in [prod_data, journey_data]:
+            if gid in source and source[gid]["titles"]:
+                title = next(iter(source[gid]["titles"]))
+                break
 
         if not title:
             stats["no_title"] += 1
             continue
 
-        # Get description
-        description = journey_data[gid]["description"]
+        # Get description (prefer ProductsData, then JourneyProduct)
+        description = ""
+        for source in [prod_data, journey_data]:
+            if gid in source and source[gid]["description"]:
+                description = source[gid]["description"]
+                break
 
-        # Get category from CategoryName
-        categories = journey_data[gid]["category"]
+        # Get category (prefer ProductsData BingCategory, then JourneyProduct CategoryName)
+        categories = ""
+        for source in [prod_data, journey_data]:
+            if gid in source and source[gid]["category"]:
+                categories = source[gid]["category"]
+                break
 
         # Truncate overly long fields
         if len(title) > max_field_len:
@@ -279,10 +329,15 @@ def main():
             stats["field_truncated"] += 1
             categories = categories[:max_field_len]
 
-        # Build attributes from JourneyProduct
+        # Build attributes (ProductsData high priority, JourneyProduct as base)
         attrs = {}
-        if journey_data[gid]["row"]:
+        # Start with JourneyProduct attributes as base
+        if gid in journey_data and journey_data[gid]["row"]:
             attrs = build_attributes(journey_data[gid]["row"])
+        # Overlay with ProductsData attributes (higher priority)
+        if gid in prod_data and prod_data[gid]["row"]:
+            prod_attrs = build_attributes(prod_data[gid]["row"])
+            attrs.update(prod_attrs)
 
         # Track attribute coverage
         for field in attr_counts:
@@ -328,9 +383,12 @@ def main():
         pct = count / total * 100 if total > 0 else 0
         print(f"  {field:<20s} {count:>10,} {pct:>9.1f}%")
 
-    # Source stats
+    # Per-source stats
     print()
-    print(f"  JourneyProduct:  {len(all_gids):>10,} total -> {len(items):>10,} kept")
+    prod_kept = sum(1 for gid in prod_gids if gid in items)
+    journey_kept = sum(1 for gid in journey_gids if gid in items)
+    print(f"  ProductsData:    {len(prod_gids):>10,} total -> {prod_kept:>10,} kept")
+    print(f"  JourneyProduct:  {len(journey_gids):>10,} total -> {journey_kept:>10,} kept")
 
     # =========================================================================
     # Step 6: Write output
