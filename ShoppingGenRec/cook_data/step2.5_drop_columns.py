@@ -1,31 +1,58 @@
 """
-Drop columns 5 (ShoppingJourney) and 6 (JourneyWithAllProducts),
-keeping columns 1-4 (UserId, ReadableUserEvents, RequestTime, UserHistory)
-and column 7 (JourneyWithProducts).
+Step 2.5: Drop ShoppingJourney and JourneyWithAllProducts columns,
+keeping UserId, ReadableUserEvents, RequestTime, UserHistory,
+and JourneyWithProducts.
+
+Uses `cut` for fast column extraction (step2 output is fixed 7 columns).
+
+Usage:
+    python step2.5_drop_columns.py --input_file /path/to/with_products.tsv
 """
-import csv
+import argparse
+import os
+import subprocess
 import sys
 
-csv.field_size_limit(sys.maxsize)
 
-# INPUT = "/cosmos//projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_200K_Output_KeepHis50Results_withProducts_2.tsv"
-# INPUT = "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K_minus_150K_His50_Results_withProducts.tsv"
-INPUT = "/vc_data/users/wangying/OneRec/ShoppingJourney/CookData/data/testdata/50K_journey_with_products.tsv"
-# OUTPUT = "/cosmos//projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K_minus_105K_His50_JWP.tsv"
-OUTPUT = "/vc_data/users/wangying/OneRec/ShoppingJourney/CookData/data/testdata/50K_journey_with_products_dropped.tsv"
+def main():
+    parser = argparse.ArgumentParser(
+        description="Step 2.5: Drop unnecessary columns from step2 output")
+    parser.add_argument(
+        "--input_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_7_results_with_products.tsv",
+        help="Path to step2 output TSV (with_products.tsv)")
+    args = parser.parse_args()
 
-DROP_COLS = {"ShoppingJourney", "JourneyWithAllProducts"}
+    if not os.path.exists(args.input_file):
+        print(f"Error: Input file not found: {args.input_file}", file=sys.stderr)
+        sys.exit(1)
 
-with open(INPUT, "r", encoding="utf-8") as fin, \
-     open(OUTPUT, "w", encoding="utf-8", newline="") as fout:
-    reader = csv.DictReader(fin, delimiter="\t")
-    keep = [c for c in reader.fieldnames if c not in DROP_COLS]
-    writer = csv.DictWriter(fout, fieldnames=keep, delimiter="\t",
-                            lineterminator="\n", extrasaction="ignore")
-    writer.writeheader()
-    for i, row in enumerate(reader):
-        writer.writerow({k: row[k] for k in keep})
-        if (i + 1) % 50000 == 0:
-            print(f"  {i+1} rows written...")
+    # Derive output path: replace _with_products with _JWP
+    base = os.path.splitext(args.input_file)[0]
+    output_file = base.replace("_with_products", "") + "_JWP.tsv"
 
-print(f"Done. Kept columns: {keep}")
+    # step2 output columns (fixed):
+    #   1:UserId  2:ReadableUserEvents  3:RequestTime  4:UserHistory
+    #   5:ShoppingJourney  6:JourneyWithAllProducts  7:JourneyWithProducts
+    # Keep columns 1,2,3,4,7 (drop 5,6)
+    print(f"  Input:  {args.input_file}")
+    print(f"  Output: {output_file}")
+    print(f"  Keeping: columns 1,2,3,4,7 (dropping 5:ShoppingJourney, 6:JourneyWithAllProducts)")
+
+    result = subprocess.run(
+        ["cut", "-f1,2,3,4,7", args.input_file],
+        stdout=open(output_file, "w"),
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        print(f"Error: cut failed: {result.stderr.decode()}", file=sys.stderr)
+        sys.exit(1)
+
+    # Count lines for summary
+    wc = subprocess.run(["wc", "-l", output_file], capture_output=True, text=True)
+    line_count = wc.stdout.strip().split()[0] if wc.returncode == 0 else "?"
+    print(f"Done. {line_count} lines (including header) written to {output_file}")
+
+
+if __name__ == "__main__":
+    main()

@@ -88,15 +88,32 @@ class WorkerClass:
                     result = response.json()
                     content = result["choices"][0]["message"]["content"] or ""
                     return item_id, content, duration
+                except httpx.HTTPStatusError as ex:
+                    last_error = ex
+                    if attempt < retry_max:
+                        if ex.response.status_code == 429:
+                            # Respect Retry-After header if present
+                            retry_after = ex.response.headers.get("Retry-After")
+                            if retry_after:
+                                try:
+                                    wait = min(float(retry_after), 300)
+                                except ValueError:
+                                    wait = min(15 * (2 ** (attempt - 1)), 120)
+                                print(f"    [429] idx={item_id} attempt {attempt}/{retry_max}, "
+                                      f"Retry-After={retry_after}, waiting {wait:.0f}s")
+                            else:
+                                wait = min(15 * (2 ** (attempt - 1)), 120)
+                                print(f"    [429] idx={item_id} attempt {attempt}/{retry_max}, "
+                                      f"no Retry-After header, waiting {wait:.0f}s")
+                        else:
+                            wait = 2 * attempt
+                            print(f"    [HTTP {ex.response.status_code}] idx={item_id} "
+                                  f"attempt {attempt}/{retry_max}, waiting {wait}s")
+                        await asyncio.sleep(wait)
                 except Exception as ex:
                     last_error = ex
                     if attempt < retry_max:
-                        is_429 = "429" in str(ex)
-                        if is_429:
-                            # Exponential backoff for rate limiting
-                            wait = min(15 * (2 ** (attempt - 1)), 120)
-                        else:
-                            wait = 2 * attempt
+                        wait = 2 * attempt
                         await asyncio.sleep(wait)
 
             return item_id, last_error, -1
@@ -341,7 +358,10 @@ if __name__ == "__main__":
     import json
 
     ENDPOINT = "https://westus2batch.papyrus.binginternal.com"
+    #ENDPOINT = "https://eastus2batch.papyrus.binginternal.com"
     MODEL = "gpt-5-chat-shortco-2025-08-07-Bing"
+    #MODEL = "gpt-54-2026-03-05-Eval"
+    #MODEL = "gpt-52-2025-12-11-Eval"
     QUOTA_ID = ""
     TIMEOUT_MS = 120000
 
@@ -349,6 +369,9 @@ if __name__ == "__main__":
         ("test_1", "What is 2+3? Answer with just the number."),
         ("test_2", "Name 3 colors. Answer as a comma-separated list."),
         ("test_3", "What is the capital of France? One word answer."),
+        ("test_4", "Write a haiku about the ocean."),
+        ("test_5", "Summarize the plot of Romeo and Juliet in one sentence."),
+        ("test_6", "What are the main ingredients in a Margherita pizza? List them."),
     ]
 
     print("=" * 60)

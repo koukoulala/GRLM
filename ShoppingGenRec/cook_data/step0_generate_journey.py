@@ -178,7 +178,8 @@ def read_raw_input(filepath, exclude_ids=None, max_events=100, max_rows=0):
         events_idx = col_map[COL_READABLE_EVENTS]
         time_idx = col_map.get(COL_REQUEST_TIME)  # may be None
 
-        for row in tqdm(reader, desc="Reading input"):
+        for row in tqdm(reader, desc="Reading input",
+                        mininterval=60, maxinterval=90):
             total_read += 1
 
             if len(row) <= max(uid_idx, events_idx):
@@ -239,8 +240,8 @@ def build_journey_prompt(events_text, request_time, prompt_template):
         Formatted prompt string.
     """
     return prompt_template.format(
-        user_events=events_text,
-        request_time=request_time,
+        ReadableUserEvents=events_text,
+        RequestTime=request_time,
     )
 
 
@@ -422,13 +423,12 @@ def parse_args():
     # --- I/O ---
     parser.add_argument(
         "--input_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/0128_0301/ShoppingJourney_Input.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input.tsv",
         help="Path to raw input TSV (must have UserId, ReadableUserEvents)",
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
         help="Directory to save output files",
     )
     parser.add_argument(
@@ -437,7 +437,9 @@ def parse_args():
     )
     parser.add_argument(
         "--exclude_files", type=str, nargs="*", 
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K.tsv",],
+        default=None,
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K.tsv",
+        #        "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/TestData/ShoppingJourney_Input_TestData_50K.tsv"],
         help="List of TSV file paths whose UserId values will be excluded",
     )
 
@@ -448,7 +450,7 @@ def parse_args():
         help="Path to prompts.yaml file",
     )
     parser.add_argument(
-        "--prompt_key", type=str, default="journey_generation",
+        "--prompt_key", type=str, default="JourneyGeneration",
         help="Key in prompts.yaml for the journey generation prompt",
     )
 
@@ -508,8 +510,15 @@ def parse_args():
         help="Users per processing chunk for checkpoint saving",
     )
     parser.add_argument(
-        "--max_events", type=int, default=80,
+        "--max_events", type=int, default=50,
         help="Maximum number of events to keep per user",
+    )
+
+    parser.add_argument(
+        "--max_users", type=int, default=0,
+        help="If >0, split the filtered input into chunks of this size, "
+             "save each chunk as a separate TSV file, and stop (no LLM "
+             "inference). If <=0, read all data and run normally.",
     )
 
     # --- Debug ---
@@ -539,6 +548,10 @@ def main():
     print(f"  Output dir:    {args.output_dir}")
     print(f"  Backend:       {args.inference_backend}")
     print(f"  Max events:    {args.max_events}")
+    if args.max_users > 0:
+        print(f"  Max users:     {args.max_users} (split mode, no inference)")
+    else:
+        print(f"  Max users:     unlimited")
     if args.exclude_files:
         print(f"  Exclude files: {len(args.exclude_files)} file(s)")
     print()
@@ -555,7 +568,7 @@ def main():
 
     # ---- Step 0b: Read raw input ----
     print("Reading raw input ...")
-    max_rows = args.debug_rows if args.debug else 0
+    max_rows = args.debug_rows if args.debug else 0  # 0 = read all
     rows, header = read_raw_input(
         args.input_file,
         exclude_ids=exclude_ids,
@@ -565,6 +578,38 @@ def main():
 
     if not rows:
         print("No users to process after filtering!")
+        return
+
+    # ---- If max_users > 0, split into chunks and save, then stop ----
+    if args.max_users > 0 and not args.debug:
+        os.makedirs(args.output_dir, exist_ok=True)
+        base_name = os.path.splitext(os.path.basename(args.input_file))[0]
+        chunk_size = args.max_users
+        num_chunks = (len(rows) + chunk_size - 1) // chunk_size
+        print(f"\nSplitting {len(rows):,} rows into {num_chunks} chunk(s) "
+              f"of up to {chunk_size:,} each ...")
+
+        for ci in range(num_chunks):
+            chunk = rows[ci * chunk_size : (ci + 1) * chunk_size]
+            chunk_k = len(chunk) // 1000
+            if num_chunks > 1:
+                suffix = f"_{chunk_k}K_{ci + 1}"
+            else:
+                suffix = f"_{chunk_k}K"
+            chunk_file = os.path.join(
+                args.output_dir, f"{base_name}{suffix}.tsv")
+            with open(chunk_file, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+                writer.writerow(header)
+                for row_data in chunk:
+                    writer.writerow(row_data["raw_parts"])
+            chunk_mb = os.path.getsize(chunk_file) / (1024 * 1024)
+            print(f"  Chunk {ci + 1}/{num_chunks}: {len(chunk):,} rows "
+                  f"({chunk_mb:.1f} MB) -> {chunk_file}")
+
+        print(f"\nDone! Split into {num_chunks} file(s).")
+        print(f"Run step0 with --max_users 0 --input_file <chunk_file> "
+              f"to generate journeys for each chunk.")
         return
 
     # Show sample
@@ -699,4 +744,9 @@ def main():
     cleanup_checkpoint(checkpoint_dir)
 
     print(f"\nStep 0 Done!")
-    print(f"  Output file: {
+    print(f"  Output file: {output_file}")
+    print(f"  Valid journeys: {json_valid_count}/{len(rows)}")
+
+
+if __name__ == "__main__":
+    main()

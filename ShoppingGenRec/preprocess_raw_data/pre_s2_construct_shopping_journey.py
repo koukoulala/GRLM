@@ -200,6 +200,79 @@ def parse_final_journey(journey_text, valid_offer_ids):
 # Argument Parsing
 # =============================================================================
 
+def _load_journey_rows_from_dir(prompt_results_dir):
+    """Load and merge step3 _cleaned.tsv files from a directory.
+
+    Auto-detects two formats:
+      - 5-col: UserId, ReadableUserEvents, UserHistory, JourneyWithProducts, FinalJourney
+      - 7-col: UserId, ReadableUserEvents, UserHistory, ShoppingJourney,
+               JourneyWithProducts, Output, FinalJourney
+
+    Returns list of dicts with keys matching the 5 required columns.
+    """
+    required_cols = {"UserId", "ReadableUserEvents", "UserHistory",
+                     "JourneyWithProducts", "FinalJourney"}
+
+    # Find all _cleaned.tsv files in the directory (step3 output)
+    tsv_files = sorted(
+        f for f in os.listdir(prompt_results_dir)
+        if f.endswith("_cleaned.tsv")
+    )
+    if not tsv_files:
+        print(f"  ERROR: No *_cleaned.tsv files found in {prompt_results_dir}")
+        sys.exit(1)
+
+    print(f"  Found {len(tsv_files)} TSV file(s) in: {prompt_results_dir}")
+    all_rows = []
+
+    for fname in tsv_files:
+        fpath = os.path.join(prompt_results_dir, fname)
+        with open(fpath, "r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter="\t")
+            header = next(reader, None)
+            if header is None:
+                print(f"    SKIP (empty): {fname}")
+                continue
+
+            # Check if header contains required columns
+            header_set = set(header)
+            if required_cols.issubset(header_set):
+                # Has a header row with the right column names
+                col_indices = {c: header.index(c) for c in required_cols}
+            else:
+                # No recognized header — assume 5-col positional format
+                # and treat this first line as data
+                col_indices = None
+
+            file_rows = 0
+            if col_indices is None:
+                # Positional: assume 5-col order
+                pos_cols = ["UserId", "ReadableUserEvents", "UserHistory",
+                            "JourneyWithProducts", "FinalJourney"]
+                # The "header" line is actually a data row
+                if len(header) >= 5:
+                    all_rows.append(dict(zip(pos_cols, header[:5])))
+                    file_rows += 1
+                for row in reader:
+                    if len(row) >= 5:
+                        all_rows.append(dict(zip(pos_cols, row[:5])))
+                        file_rows += 1
+            else:
+                max_idx = max(col_indices.values())
+                for row in reader:
+                    if len(row) <= max_idx:
+                        continue
+                    all_rows.append({
+                        c: row[col_indices[c]] for c in required_cols
+                    })
+                    file_rows += 1
+
+            print(f"    Loaded {file_rows:>10,} rows from: {fname}")
+
+    print(f"  Total merged rows: {len(all_rows):,}")
+    return all_rows
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Construct shopping journey data from journey prediction "
@@ -211,6 +284,14 @@ def parse_args():
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
                 "Data/0128_0301/ShoppingJourney_Input_500K_His50_Final_Training_clean.tsv",
         help="Path to the shopping journey TSV file",
+    )
+    parser.add_argument(
+        "--prompt_results_dir",
+        type=str,
+        default=None,
+        help="Directory containing step3 *_cleaned.tsv files to merge. "
+             "Only files ending with '_cleaned.tsv' are loaded. "
+             "When set, overrides --journey_file.",
     )
     parser.add_argument(
         "--item_file",
@@ -257,11 +338,14 @@ def main():
     print("Step 2: Reading journey prediction file")
     print("=" * 70)
 
-    tsv_columns = [
-        "UserId", "ReadableUserEvents", "UserHistory",
-        "JourneyWithProducts", "FinalJourney"
-    ]
-    rows = read_tsv(args.journey_file, expected_columns=tsv_columns)
+    if args.prompt_results_dir:
+        rows = _load_journey_rows_from_dir(args.prompt_results_dir)
+    else:
+        tsv_columns = [
+            "UserId", "ReadableUserEvents", "UserHistory",
+            "JourneyWithProducts", "FinalJourney"
+        ]
+        rows = read_tsv(args.journey_file, expected_columns=tsv_columns)
     print(f"  Total rows: {len(rows):,}")
 
     # =========================================================================
@@ -510,6 +594,10 @@ def main():
     print("=" * 70)
 
     print(f"  Input:")
+    if args.prompt_results_dir:
+        print(f"    Journey dir:                      {args.prompt_results_dir}")
+    else:
+        print(f"    Journey file:                     {args.journey_file}")
     print(f"    Journey TSV rows:                 {len(rows):>12,}")
     print(f"    Items in item.json:               {len(valid_offer_ids):>12,}")
     print(f"  Processing:")

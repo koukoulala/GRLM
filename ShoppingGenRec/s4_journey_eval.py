@@ -270,6 +270,10 @@ def map_journey_products(journey_data, tid2item_id, reverse_mapping, word_to_key
             "Products": [],
         }
 
+        # Track GIDs already used in this journey so duplicate TIDs
+        # map to different GlobalOfferIds when possible
+        used_gids_in_journey = set()
+
         for tid_words in journey.get("ProductTIDs", []):
             stats["total_products"] += 1
 
@@ -295,11 +299,26 @@ def map_journey_products(journey_data, tid2item_id, reverse_mapping, word_to_key
                 stats["no_matches"] += 1
                 continue
 
+            # Pick the first unused GID from the candidate list so that
+            # duplicate TIDs map to different GlobalOfferIds
+            chosen_gid = None
+            for candidate_gid in (iids or []):
+                if candidate_gid not in used_gids_in_journey:
+                    chosen_gid = candidate_gid
+                    break
+            # If all GIDs are already used, fall back to the first one
+            # (will be deduped later)
+            if chosen_gid is None and iids:
+                chosen_gid = iids[0]
+
+            if chosen_gid is not None:
+                used_gids_in_journey.add(chosen_gid)
+
             mapped_journey["Products"].append({
                 "TID": tid_words,
-                "GlobalOfferIds": iids[:1] if iids else [],
+                "GlobalOfferIds": [chosen_gid] if chosen_gid else [],
                 "match_type": match_type,
-                "title": id2title.get(str(iids[0]), "") if (iids and id2title) else "",
+                "title": id2title.get(str(chosen_gid), "") if (chosen_gid and id2title) else "",
             })
 
         # Dedup products within journey by GlobalOfferId
@@ -383,11 +402,11 @@ def load_llm_output_tsv(filepath):
     }
 
     for row in rows:
-        uid = row.get("user_id", "")
-        user_events = row.get("user_events", "")
-        user_events_readable = row.get("user_events_readable", "")
-        user_profile = row.get("user_profile", "")
-        gt_json = row.get("journey_model_output", "")
+        uid = row.get("UserId", "")
+        user_events = row.get("UserSignals", "")
+        user_events_readable = row.get("ReadableUserSignals", "")
+        user_profile = row.get("UserProfile", "")
+        gt_json = row.get("RawShoppingJourneys", "")
 
         # Reconstruct events_list from user_events_readable
         events_list = []
@@ -429,11 +448,11 @@ def load_llm_output_tsv(filepath):
             llm_stats["users_with_all_fields"] += 1
 
         ud = {
-            "user_id": uid,
-            "user_events": user_events,
-            "user_events_readable": user_events_readable,
+            "UserId": uid,
+            "UserSignals": user_events,
+            "ReadableUserSignals": user_events_readable,
             "events_list": events_list,
-            "user_profile": user_profile,
+            "UserProfile": user_profile,
             "ground_truth_json": gt_json,
             "ground_truth_journeys": gt_journeys,
             "num_journeys": num_journeys,
@@ -443,12 +462,12 @@ def load_llm_output_tsv(filepath):
             users_with_profile.append(ud)
 
         llm_rows.append({
-            "user_id": uid,
-            "user_events": user_events,
-            "user_events_readable": user_events_readable,
-            "user_profile": user_profile,
-            "journey_model_output": gt_json,
-            "journey_joined_products": row.get("journey_joined_products", gt_json),
+            "UserId": uid,
+            "UserSignals": user_events,
+            "ReadableUserSignals": user_events_readable,
+            "UserProfile": user_profile,
+            "RawShoppingJourneys": gt_json,
+            "ShoppingJourneys": row.get("ShoppingJourneys", gt_json),
         })
 
     print(f"  Users with valid profile: {len(users_with_profile):,}")
@@ -699,10 +718,10 @@ def build_output_rows(
     }
 
     for idx, ud in enumerate(user_data_list):
-        uid = ud["user_id"]
-        user_events = ud["user_events"]
-        user_events_readable = ud["user_events_readable"]
-        user_profile = ud.get("user_profile", "")
+        uid = ud["UserId"]
+        user_events = ud["UserSignals"]
+        user_events_readable = ud["ReadableUserSignals"]
+        user_profile = ud.get("UserProfile", "")
 
         if is_ground_truth:
             raw_output = ud.get("ground_truth_json", "")
@@ -713,14 +732,11 @@ def build_output_rows(
             else:
                 agg_stats["json_parse_fail"] += 1
 
-            # Build set of valid GIDs from tid2item_id values
-            if not hasattr(build_output_rows, "_valid_gids"):
-                build_output_rows._valid_gids = set(str(v) for v in tid2item_id.values())
-            valid_gids = build_output_rows._valid_gids
-
+            # Ground truth already has GlobalOfferIds directly — no TID
+            # matching needed.  Just count all products as exact matches.
             mapped = {"ContinuedJourneys": []}
             user_total = 0
-            user_exact = 0
+            user_has_title = 0
             for j in gt_journeys:
                 mapped_j = {
                     "Title": j.get("title", ""),
@@ -730,27 +746,24 @@ def build_output_rows(
                 for gid in j.get("product_ids", []):
                     gid_str = str(gid)
                     user_total += 1
-                    if gid_str in valid_gids:
-                        user_exact += 1
-                        agg_stats["exact_matches"] += 1
-                        title = id2title.get(gid_str, "") if id2title else ""
-                        mapped_j["Products"].append({
-                            "GlobalOfferIds": [gid_str],
-                            "match_type": "exact",
-                            "title": title,
-                        })
-                    else:
-                        agg_stats["no_matches"] += 1
-                        mapped_j["Products"].append({
-                            "GlobalOfferIds": [gid_str],
-                            "match_type": "none",
-                            "title": "",
-                        })
+                    title = id2title.get(gid_str, "") if id2title else ""
+                    if title:
+                        user_has_title += 1
+                    mapped_j["Products"].append({
+                        "GlobalOfferIds": [gid_str],
+                        "match_type": "exact",
+                        "title": title,
+                    })
                 if mapped_j["Products"]:
                     mapped["ContinuedJourneys"].append(mapped_j)
 
+            agg_stats["exact_matches"] += user_total
+            agg_stats.setdefault("gt_has_title", 0)
+            agg_stats["gt_has_title"] += user_has_title
+            agg_stats.setdefault("gt_no_title", 0)
+            agg_stats["gt_no_title"] += (user_total - user_has_title)
             if user_total > 0:
-                agg_stats["per_user_exact_ratios"].append(user_exact / user_total)
+                agg_stats["per_user_exact_ratios"].append(1.0)
             agg_stats["total_products"] += user_total
 
             journey_joined = (
@@ -804,12 +817,12 @@ def build_output_rows(
             )
 
         rows.append({
-            "user_id": uid,
-            "user_events": user_events,
-            "user_events_readable": user_events_readable,
-            "user_profile": user_profile,
-            "journey_model_output": raw_output,
-            "journey_joined_products": journey_joined,
+            "UserId": uid,
+            "UserSignals": user_events,
+            "ReadableUserSignals": user_events_readable,
+            "UserProfile": user_profile,
+            "RawShoppingJourneys": raw_output,
+            "ShoppingJourneys": journey_joined,
         })
 
     return rows, agg_stats
@@ -827,7 +840,7 @@ def compute_diversity_stats(rows, label):
     total_users_with_data = 0
 
     for row in rows:
-        joined = row.get("journey_joined_products", "")
+        joined = row.get("ShoppingJourneys", "")
         if not joined:
             continue
 
@@ -968,6 +981,14 @@ def print_stats(label, stats):
           f"({stats['fuzzy_matches'] / max(stats['total_products'], 1) * 100:.1f}%)")
     print(f"    No matches:               {stats['no_matches']:>10,} "
           f"({stats['no_matches'] / max(stats['total_products'], 1) * 100:.1f}%)")
+    gt_has_title = stats.get('gt_has_title', 0)
+    gt_no_title = stats.get('gt_no_title', 0)
+    if gt_has_title or gt_no_title:
+        gt_total = gt_has_title + gt_no_title
+        print(f"    GT products w/ title:     {gt_has_title:>10,} "
+              f"({gt_has_title / max(gt_total, 1) * 100:.1f}%)")
+        print(f"    GT products w/o title:    {gt_no_title:>10,} "
+              f"({gt_no_title / max(gt_total, 1) * 100:.1f}%)")
     fuzzy_filtered = stats.get('fuzzy_filtered', 0)
     journeys_dropped = stats.get('journeys_dropped', 0)
     users_no_valid = stats.get('users_no_valid_result', 0)
@@ -1035,7 +1056,7 @@ def parse_args():
     )
     parser.add_argument(
         "--test_file", type=str, 
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K_His50_Final_Training_clean.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/TestData/ranker_results_5000_cleaned.tsv",
         help="Path to test TSV file (same format as pre_s3 journey_file: "
              "UserId, ReadableUserEvents, UserHistory, JourneyWithProducts, "
              "FinalJourney)",
@@ -1130,8 +1151,7 @@ def parse_args():
     parser.add_argument(
         "--llm_output_file", type=str, 
         #default=None,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/eval_results/llm_output.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/ying_checkpoint_14932/llm_output.tsv",
         help="Path to a previous llm_output.tsv. If provided, skip data reading, "
              "sampling, and profile generation; reuse this file directly.",
     )
@@ -1271,9 +1291,9 @@ def main():
                     no_final_journey += 1
 
             user_data.append({
-                "user_id": uid,
-                "user_events": user_events_raw,
-                "user_events_readable": user_events_readable,
+                "UserId": uid,
+                "UserSignals": user_events_raw,
+                "ReadableUserSignals": user_events_readable,
                 "events_list": events_list,
                 "ground_truth_json": gt_json,
                 "ground_truth_journeys": gt_journeys,
@@ -1302,7 +1322,7 @@ def main():
         # newline-separated event strings
         profile_inputs = []
         for ud in user_data:
-            uid = ud["user_id"]
+            uid = ud["UserId"]
             events_text = "\n".join(ud["events_list"])
             profile_inputs.append((uid, events_text))
 
@@ -1349,12 +1369,12 @@ def main():
 
         # Attach profiles to user_data
         for ud in user_data:
-            ud["user_profile"] = profile_map.get(ud["user_id"], "")
+            ud["UserProfile"] = profile_map.get(ud["UserId"], "")
 
         cleanup_checkpoint(profile_checkpoint_dir)
 
         # Filter to users with valid profiles
-        users_with_profile = [ud for ud in user_data if ud["user_profile"]]
+        users_with_profile = [ud for ud in user_data if ud["UserProfile"]]
         users_without_profile = len(user_data) - len(users_with_profile)
         print(f"\n  Users with valid profile: {len(users_with_profile):,}")
         print(f"  Users without valid profile: {users_without_profile:,}")
@@ -1440,7 +1460,7 @@ def main():
     p2j_instr_inputs = []
     for ud in users_with_profile:
         input_text = build_profile2journey_input(
-            ud["user_profile"], ud["events_list"],
+            ud["UserProfile"], ud["events_list"],
             max_recent_events=args.max_recent_events,
         )
         instruction = make_profile2journey_instruction(ud["num_journeys"])
@@ -1526,8 +1546,8 @@ def main():
     print("=" * 70)
 
     columns = [
-        "user_id", "user_events", "user_events_readable", "user_profile",
-        "journey_model_output", "journey_joined_products",
+        "UserId", "UserSignals", "ReadableUserSignals", "UserProfile",
+        "RawShoppingJourneys", "ShoppingJourneys",
     ]
 
     llm_file = os.path.join(args.output_dir, "llm_output.tsv")
@@ -1553,11 +1573,11 @@ def main():
     print("=" * 70)
 
     for idx in range(min(2, len(users_with_profile))):
-        uid = users_with_profile[idx]["user_id"]
+        uid = users_with_profile[idx]["UserId"]
         print(f"\n--- User {idx + 1}: {uid} ---")
 
         gt_row = llm_rows[idx]
-        gt_journey = parse_journey_json(gt_row["journey_model_output"])
+        gt_journey = parse_journey_json(gt_row["RawShoppingJourneys"])
         print(f"  [Ground Truth]")
         if gt_journey:
             for ji, j in enumerate(gt_journey.get("ContinuedJourneys", [])[:2]):
@@ -1566,11 +1586,11 @@ def main():
 
         slm_row = slm_rows[idx]
         print(f"  [SLM event2journey]")
-        print(f"    Raw (first 200): {slm_row['journey_model_output'][:200]}")
+        print(f"    Raw (first 200): {slm_row['RawShoppingJourneys'][:200]}")
 
         sp_row = slm_profile_rows[idx]
         print(f"  [SLM profile2journey]")
-        print(f"    Raw (first 200): {sp_row['journey_model_output'][:200]}")
+        print(f"    Raw (first 200): {sp_row['RawShoppingJourneys'][:200]}")
 
     # =========================================================================
     # Summary

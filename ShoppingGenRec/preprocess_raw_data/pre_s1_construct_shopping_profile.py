@@ -412,13 +412,13 @@ def parse_args():
     parser.add_argument(
         "--max_events",
         type=int,
-        default=100,
-        help="Maximum number of events to keep per user (default: 100)",
+        default=50,
+        help="Maximum number of events to keep per user",
     )
     parser.add_argument(
         "--inference_backend",
         type=str,
-        default="papyrus",
+        default="copilot",
         choices=["copilot", "papyrus"],
         help="Inference backend: 'copilot' or 'papyrus'",
     )
@@ -469,7 +469,7 @@ def parse_args():
     parser.add_argument(
         "--papyrus_workers",
         type=int,
-        default=20,
+        default=3,
         help="Number of parallel async workers for Papyrus API",
     )
     parser.add_argument(
@@ -498,7 +498,156 @@ def parse_args():
         default=False,
         help="Debug mode: only process first 50 users",
     )
+    parser.add_argument(
+        "--prompt_results_dir",
+        type=str,
+        default=None,
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/"
+        help="Directory containing *_profiles_results.tsv files from previous "
+             "runs. If provided, merges all results, validates JSON, filters "
+             "by users in --input_file, and writes merged output to "
+             "--output_dir. No LLM inference is run.",
+    )
     return parser.parse_args()
+
+
+# =============================================================================
+# Merge Results Mode
+# =============================================================================
+
+def _merge_results(args):
+    """Merge profiles from multiple result files, validate JSON, filter by
+    users present in input_file, and write a single output TSV.
+
+    Supports two file formats:
+      - Format A: 2-column TSV (UserId, ShoppingProfile) — may use CSV
+        double-quote escaping for the JSON column.
+      - Format B: multi-column TSV with UserId and OUTPUT columns
+        (raw JSON, possibly with whitespace/newlines).
+    """
+    import glob
+
+    results_dir = args.prompt_results_dir
+    print("=" * 60)
+    print("Merge Results Mode (--prompt_results_dir)")
+    print(f"  Results dir:  {results_dir}")
+    print(f"  Input file:   {args.input_file}")
+    print(f"  Output dir:   {args.output_dir}")
+    print("=" * 60)
+
+    if not os.path.isdir(results_dir):
+        print(f"Error: results dir not found: {results_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # ---- Collect valid users from input_file ----
+    print(f"\nLoading valid user IDs from: {args.input_file}")
+    valid_uids = set()
+    with open(args.input_file, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader, None)
+        col_map = {name.strip(): idx for idx, name in enumerate(header)}
+        uid_idx = col_map["UserId"]
+        for row in reader:
+            if len(row) > uid_idx:
+                uid = row[uid_idx].strip()
+                if uid:
+                    valid_uids.add(uid)
+    print(f"  Valid users: {len(valid_uids):,}")
+
+    # ---- Find and load all results files ----
+    pattern = os.path.join(results_dir, "*_profiles_results*.tsv")
+    result_files = sorted(glob.glob(pattern))
+    if not result_files:
+        pattern = os.path.join(results_dir, "*_results*.tsv")
+        result_files = sorted(glob.glob(pattern))
+    print(f"\nFound {len(result_files)} result files:")
+    for rf in result_files:
+        print(f"  {os.path.basename(rf)}")
+
+    # ---- Read and merge (later files overwrite earlier for duplicate UIDs) ----
+    merged = {}  # uid -> raw_profile_text
+    total_rows = 0
+    for rf in result_files:
+        file_count = 0
+        with open(rf, "r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter="\t")
+            header = next(reader, None)
+            if not header:
+                continue
+            col_map = {name.strip(): idx for idx, name in enumerate(header)}
+
+            # Detect format: look for OUTPUT or ShoppingProfile column
+            if "ShoppingProfile" in col_map:
+                uid_col = col_map["UserId"]
+                profile_col = col_map["ShoppingProfile"]
+            elif "OUTPUT" in col_map:
+                uid_col = col_map["UserId"]
+                profile_col = col_map["OUTPUT"]
+            else:
+                print(f"  WARNING: Skipping {os.path.basename(rf)} — "
+                      f"no OUTPUT or ShoppingProfile column found. "
+                      f"Header: {header}")
+                continue
+
+            for row in reader:
+                if len(row) <= max(uid_col, profile_col):
+                    continue
+                uid = row[uid_col].strip()
+                profile = row[profile_col].strip()
+                if uid and profile:
+                    merged[uid] = profile
+                    file_count += 1
+
+        total_rows += file_count
+        print(f"  {os.path.basename(rf)}: {file_count:,} rows with profiles")
+
+    print(f"\nTotal merged: {len(merged):,} unique users "
+          f"(from {total_rows:,} total rows)")
+
+    # ---- Filter to valid users and validate JSON ----
+    os.makedirs(args.output_dir, exist_ok=True)
+    output_file = os.path.join(args.output_dir, "shopping_profiles_merged.tsv")
+
+    json_valid = 0
+    json_invalid = 0
+    json_invalid_ids = []
+    not_in_input = 0
+    written = 0
+
+    with open(output_file, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(["UserId", "ShoppingProfile"])
+
+        for uid, raw_profile in merged.items():
+            if uid not in valid_uids:
+                not_in_input += 1
+                continue
+
+            clean_json = extract_and_validate_json(raw_profile)
+            if clean_json:
+                json_valid += 1
+                writer.writerow([uid, clean_json])
+                written += 1
+            else:
+                json_invalid += 1
+                json_invalid_ids.append(uid)
+
+    file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+    missing = len(valid_uids) - written
+    print(f"\n{'='*60}")
+    print(f"Merge Results Summary")
+    print(f"{'='*60}")
+    print(f"  Input users:          {len(valid_uids):,}")
+    print(f"  Users with profiles:  {len(merged):,}")
+    print(f"  Not in input (skip):  {not_in_input:,}")
+    print(f"  Valid JSON written:   {json_valid:,}")
+    print(f"  Invalid JSON (drop):  {json_invalid:,}")
+    print(f"  Missing (no profile): {missing:,}")
+    print(f"  Output: {output_file} ({file_size_mb:.1f} MB)")
+    if json_invalid_ids:
+        print(f"  Invalid JSON UIDs:    {json_invalid_ids[:10]}"
+              f"{'...' if len(json_invalid_ids) > 10 else ''}")
+    print(f"{'='*60}")
 
 
 # =============================================================================
@@ -527,6 +676,11 @@ def main():
         print(f"  Quota ID:      {args.papyrus_quota_id or '(default)'}")
         print(f"  Chunk size:    {args.papyrus_chunk_size}")
     print("=" * 60)
+
+    # ---- Merge results mode (--prompt_results_dir) ----
+    if args.prompt_results_dir:
+        _merge_results(args)
+        return
 
     if args.debug:
         print("\n*** DEBUG MODE: processing only 50 users ***\n")
@@ -609,7 +763,8 @@ def main():
     for uid, _ in empty_event_users:
         all_results.append((uid, ""))
 
-    output_file = os.path.join(args.output_dir, "shopping_profiles.tsv")
+    input_basename = os.path.splitext(os.path.basename(args.input_file))[0]
+    output_file = os.path.join(args.output_dir, f"{input_basename}_profiles_results.tsv")
     print(f"\nSaving results to: {output_file}")
 
     success_count = 0

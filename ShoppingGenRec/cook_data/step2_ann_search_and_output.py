@@ -2,20 +2,20 @@
 Step 2: ANN Search and OUTPUT Generation.
 
 Input:
-- Query embeddings from Step 1 (200K_query_embeddings.tsv)
-- Original journey data (ShoppingJourney_Input_200K_Output_KeepHis50Results.tsv)
+- Journey Results TSV from step0 (with OUTPUT column)
+- Query embeddings from Step 1 ({base}_query_embeddings.tsv)
 - Product ANN index
 
 Output:
-- TSV with columns: UserId, ReadableUserEvents, RequestTime, UserHistory, ShoppingJourney, JourneyWithProducts
-  - ShoppingJourney: original OUTPUT (raw LLM output with journeys and queries)
-  - JourneyWithProducts: filtered OUTPUT with products (score >= threshold, OfferId/Title/Seller/Price)
+- TSV with columns: UserId, ReadableUserEvents, RequestTime, UserHistory,
+  ShoppingJourney, JourneyWithAllProducts, JourneyWithProducts
 
 Usage:
-    python step2_ann_search_and_output.py [--debug]
+    python step2_ann_search_and_output.py --input_file /path/to/Journey_Results.tsv [--debug]
 """
 
 import argparse
+import csv
 import json
 import os
 import time
@@ -25,28 +25,14 @@ import numpy as np
 import faiss
 from tqdm import tqdm
 
-# ========== Paths ==========
-INPUT_FILE = "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/TestData/ShoppingJourney_TestData_50K_Journey_Results.tsv"
-WORK_DIR = "/vc_data/users/wangying/OneRec/ShoppingJourney/CookData/data/testdata/"
-EMBEDDING_FILE = os.path.join(WORK_DIR, "50K_query_embeddings.tsv")
-ANN_OUTPUT = os.path.join(WORK_DIR, "50K_query_ann_results.tsv")
-FINAL_OUTPUT = os.path.join(WORK_DIR,  "50K_journey_with_products.tsv")
+csv.field_size_limit(1 << 31 - 1)
 
-# ANN index paths
-INDEX_PATH = os.path.join(WORK_DIR + "../", "0307_EnUs_Product_ann_hnsw.index")
-ID_MAP_PATH = os.path.join(WORK_DIR + "../", "0307_EnUs_Product_ann_ids.txt")
+# ANN index paths (fixed infrastructure)
+DEFAULT_WORK_DIR = "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/"
+DEFAULT_INDEX_DIR = "/vc_data/users/wangying/OneRec/ShoppingJourney/CookData/data/"
+INDEX_PATH = os.path.join(DEFAULT_INDEX_DIR, "0307_EnUs_Product_ann_hnsw.index")
+ID_MAP_PATH = os.path.join(DEFAULT_INDEX_DIR, "0307_EnUs_Product_ann_ids.txt")
 PRODUCT_PATH = "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/0307_EnUs_Product.tsv"
-
-# Column indices (0-based) for the input file
-COL_USER_ID = 7
-COL_READABLE_EVENTS = 8
-COL_REQUEST_TIME = 9
-COL_USER_HISTORY = 10
-COL_OUTPUT = 12
-
-# ANN settings
-TOP_K = 10
-SCORE_THRESHOLD = 0.90
 
 PRODUCT_COLUMNS = ["GlobalOfferId", "Title", "Embedding", "Seller", "Gender",
                    "OriginalPrice", "LLMCatId", "CategoryName", "AgeGroup",
@@ -75,7 +61,8 @@ def load_embeddings(emb_path: str) -> Dict[str, np.ndarray]:
 
 
 # ========== ANN Search ==========
-def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
+def run_ann_search(query_embs: Dict[str, np.ndarray],
+                   ann_output: str, top_k: int = 20) -> Dict[str, List[dict]]:
     """Run ANN search and return query -> products mapping."""
     # Load index
     print(f"Loading FAISS index from {INDEX_PATH}...")
@@ -92,7 +79,7 @@ def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
     print(f"Loading product metadata from {PRODUCT_PATH}...")
     product_meta = {}
     with open(PRODUCT_PATH, "r", encoding="utf-8") as f:
-        for line in tqdm(f, desc="Loading products"):
+        for line in tqdm(f, desc="Loading products", mininterval=30, maxinterval=60):
             parts = line.rstrip("\n").split("\t")
             if len(parts) >= len(PRODUCT_COLUMNS):
                 meta = {}
@@ -107,10 +94,10 @@ def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
     query_matrix = np.array([query_embs[q] for q in queries], dtype=np.float32)
 
     # Search
-    print(f"Searching {len(queries):,} queries...")
+    print(f"Searching {len(queries):,} queries (top_k={top_k})...")
     index.hnsw.efSearch = 128
     t0 = time.time()
-    distances, indices = index.search(query_matrix, TOP_K)
+    distances, indices = index.search(query_matrix, top_k)
     elapsed = time.time() - t0
     qps = len(queries) / elapsed if elapsed > 0 else 0
     print(f"Search done in {elapsed:.1f}s ({qps:.0f} QPS)")
@@ -119,7 +106,7 @@ def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
     query_to_products = {}
     for i, query in enumerate(queries):
         products = []
-        for j in range(TOP_K):
+        for j in range(top_k):
             idx = indices[i][j]
             if idx < 0:
                 continue
@@ -134,8 +121,8 @@ def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
         query_to_products[query] = products
 
     # Save ANN results
-    print(f"Saving ANN results to {ANN_OUTPUT}...")
-    with open(ANN_OUTPUT, "w", encoding="utf-8") as f:
+    print(f"Saving ANN results to {ann_output}...")
+    with open(ann_output, "w", encoding="utf-8") as f:
         for query, products in query_to_products.items():
             f.write(f"{query}\t{json.dumps(products, ensure_ascii=False)}\n")
     print(f"Saved {len(query_to_products):,} query results")
@@ -145,8 +132,10 @@ def run_ann_search(query_embs: Dict[str, np.ndarray]) -> Dict[str, List[dict]]:
 
 # ========== Generate Output ==========
 def generate_output(query_to_products: Dict[str, List[dict]],
-                    score_threshold: float = SCORE_THRESHOLD,
-                    max_rows: int = 0):
+                    input_file: str, final_output: str,
+                    score_threshold: float = 0.90,
+                    max_rows: int = 0,
+                    jwp_output: str = None):
     """
     Read original journey file and generate output with product columns.
 
@@ -159,7 +148,7 @@ def generate_output(query_to_products: Dict[str, List[dict]],
     - JourneyWithAllProducts: original journey + ALL products info (no score filter)
     - JourneyWithProducts: filtered journeys with products (score >= threshold, simplified fields)
     """
-    print(f"\nGenerating output from {INPUT_FILE}...")
+    print(f"\nGenerating output from {input_file}...")
     if max_rows > 0:
         print(f"  [DEBUG] Limiting to first {max_rows} valid rows")
 
@@ -173,21 +162,36 @@ def generate_output(query_to_products: Dict[str, List[dict]],
     total_queries = 0
     queries_with_products = 0
     total_products = 0
+    journey_product_counts = []   # products per journey (kept)
+    selected_scores = []          # scores of kept products (score >= threshold)
 
-    with open(INPUT_FILE, "r", encoding="utf-8") as f_in, \
-         open(FINAL_OUTPUT, "w", encoding="utf-8") as f_out:
+    with open(input_file, "r", encoding="utf-8") as f_in, \
+         open(final_output, "w", encoding="utf-8") as f_out, \
+         (open(jwp_output, "w", encoding="utf-8") if jwp_output else open(os.devnull, "w")) as f_jwp:
 
-        f_in.readline()  # skip header
+        reader = csv.reader(f_in, delimiter="\t")
+        raw_header = next(reader)
+        col_map = {name.strip(): idx for idx, name in enumerate(raw_header)}
+        idx_uid = col_map["UserId"]
+        idx_events = col_map["ReadableUserEvents"]
+        idx_time = col_map.get("RequestTime")
+        idx_history = col_map.get("UserHistory")
+        idx_output = col_map["OUTPUT"]
+
         f_out.write("\t".join(output_header) + "\n")
+        if jwp_output:
+            jwp_header = ["UserId", "ReadableUserEvents", "RequestTime",
+                          "UserHistory", "JourneyWithProducts"]
+            f_jwp.write("\t".join(jwp_header) + "\n")
 
         line_count = 0
-        for line in tqdm(f_in, desc="Generating output"):
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) <= COL_OUTPUT:
+        for parts in tqdm(reader, desc="Generating output",
+                          mininterval=60, maxinterval=90):
+            if len(parts) <= idx_output:
                 continue
 
             try:
-                output_json = json.loads(parts[COL_OUTPUT])
+                output_json = json.loads(parts[idx_output])
             except json.JSONDecodeError:
                 continue
 
@@ -236,13 +240,15 @@ def generate_output(query_to_products: Dict[str, List[dict]],
                     # Filtered products
                     fp = []
                     for p in products:
-                        if p.get("score", 0) >= score_threshold:
+                        s = p.get("score", 0)
+                        if s >= score_threshold:
                             fp.append({
                                 "OfferId": p.get("product_id", ""),
                                 "Title": p.get("Title", ""),
                                 "Seller": p.get("Seller", ""),
                                 "Price": p.get("OriginalPrice", "")
                             })
+                            selected_scores.append(s)
 
                     total_products += len(fp)
                     if fp:
@@ -253,25 +259,34 @@ def generate_output(query_to_products: Dict[str, List[dict]],
 
                 if fj["Queries"]:
                     journeys_with_products += 1
+                    # Count total products in this filtered journey
+                    j_prod_count = sum(len(q["Products"]) for q in fj["Queries"])
+                    journey_product_counts.append(j_prod_count)
                     filtered["ContinuedJourneys"].append(fj)
 
             # Write row
             row = [
-                parts[COL_USER_ID],
-                parts[COL_READABLE_EVENTS],
-                parts[COL_REQUEST_TIME],
-                parts[COL_USER_HISTORY],
+                parts[idx_uid],
+                parts[idx_events],
+                parts[idx_time] if idx_time is not None and len(parts) > idx_time else "",
+                parts[idx_history] if idx_history is not None and len(parts) > idx_history else "",
                 json.dumps(output_json, ensure_ascii=False),     # ShoppingJourney (original)
                 json.dumps(enriched, ensure_ascii=False),         # JourneyWithAllProducts (all products)
                 json.dumps(filtered, ensure_ascii=False)          # JourneyWithProducts (filtered)
             ]
             f_out.write("\t".join(row) + "\n")
+            if jwp_output:
+                # Write JWP row: cols 0,1,2,3,6 (UserId, ReadableUserEvents,
+                # RequestTime, UserHistory, JourneyWithProducts)
+                f_jwp.write("\t".join([row[0], row[1], row[2], row[3], row[6]]) + "\n")
 
             line_count += 1
             if max_rows > 0 and line_count >= max_rows:
                 break
 
-    print(f"\nOutput saved to: {FINAL_OUTPUT}")
+    print(f"\nOutput saved to: {final_output}")
+    if jwp_output:
+        print(f"JWP output saved to: {jwp_output}")
     print(f"\n{'='*80}")
     print(f"Statistics (Score Threshold: {score_threshold})")
     print(f"{'='*80}")
@@ -282,17 +297,59 @@ def generate_output(query_to_products: Dict[str, List[dict]],
           f"{queries_with_products/max(total_queries,1)*100:.1f}%)")
     print(f"  Products (after filter): {total_products:,}")
     print(f"  Avg products/query: {total_products/max(queries_with_products,1):.2f}")
+
+    # Per-journey product count stats
+    if journey_product_counts:
+        arr = np.array(journey_product_counts)
+        print(f"\n  --- Products per Journey (filtered) ---")
+        print(f"    Min: {arr.min():>6}  P25: {int(np.percentile(arr, 25)):>6}  "
+              f"P50: {int(np.percentile(arr, 50)):>6}  P75: {int(np.percentile(arr, 75)):>6}  "
+              f"P90: {int(np.percentile(arr, 90)):>6}  Max: {arr.max():>6}  "
+              f"Mean: {arr.mean():.1f}")
+
+    # Selected product score stats
+    if selected_scores:
+        arr = np.array(selected_scores)
+        print(f"\n  --- Selected Product Scores (score >= {score_threshold}) ---")
+        print(f"    Min: {arr.min():.4f}  P10: {np.percentile(arr, 10):.4f}  "
+              f"P25: {np.percentile(arr, 25):.4f}  P50: {np.percentile(arr, 50):.4f}  "
+              f"P75: {np.percentile(arr, 75):.4f}  P90: {np.percentile(arr, 90):.4f}  "
+              f"Max: {arr.max():.4f}")
+        print(f"    Mean: {arr.mean():.4f}  Std: {arr.std():.4f}")
+
     print(f"{'='*80}")
 
 
 # ========== Main ==========
 def main():
     parser = argparse.ArgumentParser(description="Step 2: ANN search and OUTPUT generation")
+    parser.add_argument("--input_file", type=str,
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results.tsv",
+                        help="Path to Journey_Results TSV from step0")
+    parser.add_argument("--work_dir", type=str, default=None,
+                        help="Working directory (default: same dir as input_file)")
     parser.add_argument("--debug", action="store_true", help="Debug mode: process only first N rows")
     parser.add_argument("--debug_rows", type=int, default=5, help="Number of rows in debug mode (default: 5)")
     parser.add_argument("--skip_ann", action="store_true", help="Skip ANN search, load existing results")
-    parser.add_argument("--score_threshold", type=float, default=0.90, help="Score threshold (default: 0.90)")
+    parser.add_argument("--top_k", type=int, default=20, help="Number of nearest neighbors per query")
+    parser.add_argument("--score_threshold", type=float, default=0.85, help="Score threshold (default: 0.85)")
     args = parser.parse_args()
+
+    # Derive paths from input file name
+    work_dir = args.work_dir or os.path.dirname(args.input_file)
+    os.makedirs(work_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(args.input_file))[0]
+    embedding_file = os.path.join(work_dir, f"{base}_query_embeddings.tsv")
+    ann_output = os.path.join(work_dir, f"{base}_ann_results.tsv")
+    final_output = os.path.join(work_dir, f"{base}_with_products.tsv")
+    jwp_output = os.path.join(work_dir, f"{base}_JWP.tsv")
+
+    print(f"  Input file:     {args.input_file}")
+    print(f"  Work dir:       {work_dir}")
+    print(f"  Embedding file: {embedding_file}")
+    print(f"  ANN output:     {ann_output}")
+    print(f"  Final output:   {final_output}")
+    print(f"  JWP output:     {jwp_output}")
 
     max_rows = args.debug_rows if args.debug else 0
 
@@ -301,9 +358,9 @@ def main():
         print("=" * 80)
         print("Loading existing ANN results")
         print("=" * 80)
-        print(f"Loading from {ANN_OUTPUT}...")
+        print(f"Loading from {ann_output}...")
         query_to_products = {}
-        with open(ANN_OUTPUT, "r", encoding="utf-8") as f:
+        with open(ann_output, "r", encoding="utf-8") as f:
             for line in f:
                 p = line.rstrip("\n").split("\t")
                 if len(p) >= 2:
@@ -314,7 +371,7 @@ def main():
         print("=" * 80)
         print("Step 1: Load query embeddings")
         print("=" * 80)
-        query_embs = load_embeddings(EMBEDDING_FILE)
+        query_embs = load_embeddings(embedding_file)
 
         if not query_embs:
             print("No embeddings found! Run step1 first.")
@@ -324,13 +381,14 @@ def main():
         print("\n" + "=" * 80)
         print("Step 2: ANN search")
         print("=" * 80)
-        query_to_products = run_ann_search(query_embs)
+        query_to_products = run_ann_search(query_embs, ann_output, top_k=args.top_k)
 
     # Step 3: Generate output
     print("\n" + "=" * 80)
     print("Step 3: Generate output with JourneyWithProducts")
     print("=" * 80)
-    generate_output(query_to_products, args.score_threshold, max_rows)
+    generate_output(query_to_products, args.input_file, final_output,
+                    args.score_threshold, max_rows, jwp_output=jwp_output)
 
     print("\nStep 2 Done!")
 

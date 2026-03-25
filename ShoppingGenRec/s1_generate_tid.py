@@ -592,20 +592,20 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/raw_data/merged_clean_item2.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         #default="./processed/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
@@ -619,10 +619,10 @@ def parse_args():
     parser.add_argument(
         "--inference_backend",
         type=str,
-        default="auto",
+        default="copilot",
         choices=["auto", "vllm", "copilot", "papyrus"],
         help="Inference backend: 'auto' selects vLLM if summary_model "
-             "exists, else Copilot. (default: auto)",
+             "exists, else Copilot.",
     )
     parser.add_argument(
         "--prompts_file",
@@ -763,8 +763,34 @@ def parse_args():
         action="store_true",
         default=False,
         help="Build prompts for all remaining items (after resume/checkpoint), "
-             "save to <output_dir>/prompts/<item_file_stem>_prompts.tsv, "
+             "split into multiple files by --prompts_chunk_size, "
+             "save to <output_dir>/prompts/<stem>_prompts_1.tsv, etc., "
              "then exit without running inference.",
+    )
+    parser.add_argument(
+        "--prompts_chunk_size",
+        type=int,
+        default=80000,
+        help="Number of prompts per file when using --export_prompts_only "
+             "(default: 80000)",
+    )
+    parser.add_argument(
+        "--prompts_input_file",
+        type=str,
+        default=None,
+        help="Path to a pre-built prompts TSV file (GlobalOfferId<tab>Prompt). "
+             "If provided, runs LLM inference and saves a simple 2-column "
+             "results TSV (GlobalOfferId<tab>Output) as <prefix>_results.tsv "
+             "in the same directory, then exits.",
+    )
+    parser.add_argument(
+        "--prompt_results_dir",
+        type=str,
+        default=None,
+        help="Directory containing *_results.tsv files from --prompts_input_file "
+             "runs. If set to a valid directory, merges all results files, "
+             "loads item metadata from --item_file, and produces final output "
+             "files (summaries, id2meta, statistics, etc.) to --output_dir.",
     )
     parser.add_argument(
         "--save_intermediate_only",
@@ -786,7 +812,8 @@ def parse_args():
         type=str,
         nargs="*",
         #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl"],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl files from previous runs to resume "
              "from. Each file should be a summaries_with_similarity.jsonl. "
              "Results are merged (later files overwrite earlier ones for "
@@ -796,7 +823,8 @@ def parse_args():
         "--checkpoint_dirs",
         type=str,
         nargs="*",
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/_s1_checkpoint"],
+        default=[],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/_s1_checkpoint"],
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",
@@ -808,7 +836,8 @@ def parse_args():
 # Output Saving
 # =============================================================================
 
-def save_all_outputs(all_results, output_dir, id2meta_file=None):
+def save_all_outputs(all_results, output_dir, id2meta_file=None,
+                     output_prefix=None):
     """Save all output files from a list of result dicts.
 
     Saves: summaries_with_similarity.jsonl, id2meta.json, id2words.tsv,
@@ -818,11 +847,16 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
         all_results: List of result dicts (each has 'id', 'summary_words', etc.)
         output_dir: Directory for output files.
         id2meta_file: Optional custom path for id2meta.json.
+        output_prefix: Optional prefix for output filenames. If provided,
+                       files are named <prefix>_summaries.jsonl, etc.
     """
     os.makedirs(output_dir, exist_ok=True)
 
     # ---- summaries_with_similarity.jsonl ----
-    output_file = os.path.join(output_dir, "summaries_with_similarity.jsonl")
+    if output_prefix:
+        output_file = os.path.join(output_dir, f"{output_prefix}_summaries.jsonl")
+    else:
+        output_file = os.path.join(output_dir, "summaries_with_similarity.jsonl")
     print(f"\nSaving results to: {output_file}")
     with open(output_file, "w", encoding="utf-8") as f:
         for item in all_results:
@@ -831,7 +865,10 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
     # ---- Statistics ----
     stats, failed_items, non_product_items = analyze_statistics(all_results)
 
-    stats_file = os.path.join(output_dir, "statistics.json")
+    if output_prefix:
+        stats_file = os.path.join(output_dir, f"{output_prefix}_statistics.json")
+    else:
+        stats_file = os.path.join(output_dir, "statistics.json")
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     print(f"Statistics saved to: {stats_file}")
@@ -854,7 +891,10 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
             "llm_output": item.get("llm_output", ""),
         })
 
-    failed_file = os.path.join(output_dir, "failed_items.json")
+    if output_prefix:
+        failed_file = os.path.join(output_dir, f"{output_prefix}_failed_items.json")
+    else:
+        failed_file = os.path.join(output_dir, "failed_items.json")
     with open(failed_file, "w", encoding="utf-8") as f:
         json.dump(all_problematic, f, ensure_ascii=False, indent=2)
     print(f"Failed/non-product items saved to: {failed_file} "
@@ -874,7 +914,12 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
         if item_id:
             id2meta[item_id] = item
 
-    id2meta_path = id2meta_file or os.path.join(output_dir, "id2meta.json")
+    if id2meta_file:
+        id2meta_path = id2meta_file
+    elif output_prefix:
+        id2meta_path = os.path.join(output_dir, f"{output_prefix}_id2meta.json")
+    else:
+        id2meta_path = os.path.join(output_dir, "id2meta.json")
     with open(id2meta_path, "w", encoding="utf-8") as f:
         json.dump(id2meta, f, ensure_ascii=False, indent=2)
     print(f"id2meta saved to: {id2meta_path}")
@@ -882,7 +927,10 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None):
           f"(skipped {skipped_count:,} without valid 7-word summary)")
 
     # ---- Build id2words mapping ----
-    id2words_file = os.path.join(output_dir, "id2words.tsv")
+    if output_prefix:
+        id2words_file = os.path.join(output_dir, f"{output_prefix}_id2words.tsv")
+    else:
+        id2words_file = os.path.join(output_dir, "id2words.tsv")
     with open(id2words_file, "w", encoding="utf-8") as f:
         for item_id, meta in id2meta.items():
             f.write(json.dumps({item_id: meta["summary_words"]},
@@ -916,23 +964,228 @@ def main():
         print(f"  Quota ID: {args.papyrus_quota_id or '(default)'}")
         print("=" * 60)
     else:  # vllm
-        import torch
-        available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-        num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
-        print("=" * 60)
-        print("Inference mode: vLLM (local model)")
-        print(f"  PyTorch: {torch.__version__}, "
-              f"CUDA: {torch.cuda.is_available()}, "
-              f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
-        if torch.cuda.is_available():
-            for i in range(torch.cuda.device_count()):
-                print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
-        print(f"  Using {num_gpus} GPU(s) for tensor parallelism")
-        print("=" * 60)
+        # Skip GPU initialization for non-inference modes
+        if args.export_prompts_only or args.save_intermediate_only:
+            num_gpus = args.num_gpus or 1
+            print("=" * 60)
+            print("Inference mode: vLLM (local model) — skipped GPU init "
+                  "(export/save-only mode)")
+            print("=" * 60)
+        else:
+            import torch
+            available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+            num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
+            print("=" * 60)
+            print("Inference mode: vLLM (local model)")
+            print(f"  PyTorch: {torch.__version__}, "
+                  f"CUDA: {torch.cuda.is_available()}, "
+                  f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"  Using {num_gpus} GPU(s) for tensor parallelism")
+            print("=" * 60)
 
     debug = args.debug
     if debug:
         print("\n*** DEBUG MODE: processing only sampled items, NO files written ***\n")
+
+    # ---- Merge prompt results mode (--prompt_results_dir) ----
+    if args.prompt_results_dir and os.path.isdir(args.prompt_results_dir):
+        print("=" * 60)
+        print("Mode: Merge prompt results from directory")
+        print(f"  Results dir: {args.prompt_results_dir}")
+        print(f"  Output dir:  {args.output_dir}")
+        print("=" * 60)
+
+        # Load item metadata
+        print(f"\nLoading data: {args.item_file}")
+        full_data = load_data(args.item_file)
+        print(f"Loaded {len(full_data)} items")
+        all_items_dict = {item["id"]: item for item in full_data}
+
+        if args.global_offer_only:
+            full_data = [item for item in full_data if not item["id"].startswith("P")]
+            print(f"Filtered to GlobalOfferID items: {len(full_data)} items")
+
+        print(f"Loading similarities: {args.similarity_file}")
+        similarities_dict = load_similarities(args.similarity_file)
+        print(f"Loaded similarities for {len(similarities_dict)} items")
+
+        # Find and merge all *_results.tsv files
+        import csv as csv_mod
+        results_files = sorted([
+            os.path.join(args.prompt_results_dir, f)
+            for f in os.listdir(args.prompt_results_dir)
+            if f.endswith("_results.tsv") and os.path.isfile(
+                os.path.join(args.prompt_results_dir, f))
+        ])
+        print(f"\nFound {len(results_files)} results files:")
+        merged_outputs = {}  # item_id -> llm_output
+        for rf in results_files:
+            count = 0
+            with open(rf, "r", encoding="utf-8") as f:
+                reader = csv_mod.reader(f, delimiter="\t")
+                header = next(reader, None)  # skip header
+                for row in reader:
+                    if len(row) >= 2:
+                        item_id = row[0].strip()
+                        gen_text = row[1].replace("\\n", "\n")
+                        merged_outputs[item_id] = gen_text
+                        count += 1
+            print(f"  {os.path.basename(rf)}: {count:,} items")
+        print(f"Total merged: {len(merged_outputs):,} unique items")
+
+        # Also load resume files if specified
+        previous_results = {}
+        resume_paths = args.resume_from_multi_path or []
+        valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
+        if valid_resume_files:
+            for prev_file in valid_resume_files:
+                print(f"  Loading resume file: {prev_file}")
+                with open(prev_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                            rid = record.get("id")
+                            if rid:
+                                previous_results[rid] = record
+                        except json.JSONDecodeError:
+                            continue
+            print(f"  Loaded {len(previous_results):,} items from resume files")
+
+        # Build full result dicts
+        all_results = []
+        data_by_id = {item["id"]: item for item in full_data}
+        matched = 0
+        from_resume = 0
+        for item in full_data:
+            item_id = item["id"]
+            if item_id in merged_outputs:
+                gen_text = merged_outputs[item_id]
+                words = parse_summary_words(gen_text)
+                similar_item_ids = [
+                    sim["item_id"]
+                    for sim in similarities_dict.get(item_id, [])[:5]
+                ]
+                result = item.copy()
+                result["llm_output"] = gen_text
+                result["summary_words"] = words
+                result["similar_item_ids"] = similar_item_ids
+                all_results.append(result)
+                matched += 1
+            elif item_id in previous_results:
+                all_results.append(previous_results[item_id])
+                from_resume += 1
+
+        print(f"\nBuilt {len(all_results):,} results "
+              f"(from results dir: {matched:,}, from resume: {from_resume:,}, "
+              f"missing: {len(full_data) - matched - from_resume:,})")
+
+        # Save all output files
+        stats = save_all_outputs(all_results, args.output_dir,
+                                 id2meta_file=args.id2meta_file)
+        print(f"\nCompleted! Total: {len(all_results)}, "
+              f"Products: {stats['valid_product_count']}, "
+              f"Non-products: {stats['non_product_count']}, "
+              f"Failed: {stats['failed_count']}")
+        return
+
+    # ---- Prompts input file mode (--prompts_input_file) ----
+    # Early exit: load prompts, run LLM, save 2-column _results.tsv, done.
+    # No need to load item.json, similarities, resume, etc.
+    if args.prompts_input_file:
+        prompts_input_file = args.prompts_input_file
+        print(f"\n[PROMPTS-INPUT] Loading prompts from: {prompts_input_file}")
+        if not os.path.exists(prompts_input_file):
+            raise FileNotFoundError(
+                f"Prompts input file not found: {prompts_input_file}"
+            )
+        import csv as csv_mod
+        prompts_from_file = []
+        with open(prompts_input_file, "r", encoding="utf-8") as f:
+            reader = csv_mod.reader(f, delimiter="\t")
+            header = next(reader, None)  # skip header
+            for row in reader:
+                if len(row) >= 2:
+                    item_id = row[0].strip()
+                    prompt_text = row[1].replace("\\n", "\n")
+                    prompts_from_file.append((item_id, prompt_text))
+        print(f"  Loaded {len(prompts_from_file):,} prompts")
+
+        # Derive output paths
+        output_prefix = os.path.splitext(
+            os.path.basename(prompts_input_file)
+        )[0]
+        results_output_dir = os.path.dirname(os.path.abspath(prompts_input_file))
+        results_output_file = os.path.join(
+            results_output_dir, f"{output_prefix}_results.tsv"
+        )
+        checkpoint_dir = os.path.join(results_output_dir, f"_{output_prefix}_checkpoint")
+        print(f"  Output prefix: {output_prefix}")
+        print(f"  Results file:  {results_output_file}")
+
+        # Run LLM inference
+        print(f"\nRunning {backend} inference on {len(prompts_from_file):,} "
+              f"pre-built prompts ...")
+        start_time = time.time()
+
+        if backend == "papyrus":
+            if debug:
+                api_results = run_papyrus_parallel(
+                    inputs=prompts_from_file,
+                    papyrus_endpoint=args.papyrus_endpoint,
+                    model_name=args.papyrus_model,
+                    quota_id=args.papyrus_quota_id,
+                    timeout_ms=args.papyrus_timeout_ms,
+                    num_workers=args.papyrus_workers,
+                    max_tokens=args.max_tokens,
+                    max_retries=3,
+                )
+            else:
+                api_results = run_papyrus_parallel_with_checkpoint(
+                    inputs=prompts_from_file,
+                    checkpoint_dir=checkpoint_dir,
+                    papyrus_endpoint=args.papyrus_endpoint,
+                    model_name=args.papyrus_model,
+                    quota_id=args.papyrus_quota_id,
+                    timeout_ms=args.papyrus_timeout_ms,
+                    num_workers=args.papyrus_workers,
+                    max_tokens=args.max_tokens,
+                    max_retries=3,
+                    chunk_size=args.papyrus_chunk_size,
+                )
+        else:  # copilot
+            api_results = run_llm_parallel_with_checkpoint(
+                inputs=prompts_from_file,
+                token_file=args.token_file,
+                checkpoint_dir=checkpoint_dir,
+                num_workers=args.copilot_workers,
+                model=args.copilot_model,
+                temperature=0,
+                max_tokens=args.max_tokens,
+                chunk_size=args.copilot_chunk_size,
+            )
+
+        # Save simple 2-column results TSV and exit
+        result_map = {item_id: gen_text for item_id, gen_text in api_results}
+        inference_time = time.time() - start_time
+        print(f"\nInference time: {inference_time:.1f}s")
+
+        with open(results_output_file, "w", encoding="utf-8") as f:
+            f.write("GlobalOfferId\tOutput\n")
+            for item_id, _ in prompts_from_file:
+                gen_text = result_map.get(item_id, "")
+                safe_text = gen_text.replace("\n", "\\n").replace("\t", " ")
+                f.write(f"{item_id}\t{safe_text}\n")
+        print(f"Results saved to: {results_output_file} "
+              f"({len(prompts_from_file):,} items)")
+
+        cleanup_checkpoint(checkpoint_dir)
+        return
 
     # ---- Load prompt template from prompts.yaml ----
     print(f"\nLoading prompt template from: {args.prompts_file}")
@@ -1154,22 +1407,46 @@ def main():
         item_stem = os.path.splitext(os.path.basename(args.item_file))[0]
         prompts_dir = os.path.join(args.output_dir, "prompts")
         os.makedirs(prompts_dir, exist_ok=True)
-        prompts_file = os.path.join(prompts_dir, f"{item_stem}_prompts.tsv")
 
-        with open(prompts_file, "w", encoding="utf-8") as f:
-            f.write("GlobalOfferId\tPrompt\n")
-            for item in tqdm(data, desc="Building prompts"):
-                item_id = item["id"]
-                top_similar_items = similarities_dict.get(item_id, [])[:5]
-                raw_prompt = prepare_prompt(
-                    item, top_similar_items, all_items_dict, prompt_template
-                )
-                escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
-                f.write(f"{item_id}\t{escaped_prompt}\n")
+        # Build all prompts in memory
+        all_prompt_rows = []  # list of (item_id, escaped_prompt)
+        for item in tqdm(data, desc="Building prompts"):
+            item_id = item["id"]
+            top_similar_items = similarities_dict.get(item_id, [])[:5]
+            raw_prompt = prepare_prompt(
+                item, top_similar_items, all_items_dict, prompt_template
+            )
+            escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
+            all_prompt_rows.append((item_id, escaped_prompt))
 
-        file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
-        print(f"  Saved {len(data):,} prompts to: {prompts_file} "
-              f"({file_size_mb:.1f} MB)")
+        # Split into chunks and write multiple files
+        chunk_size = args.prompts_chunk_size
+        total = len(all_prompt_rows)
+        num_chunks = (total + chunk_size - 1) // chunk_size
+
+        saved_files = []
+        for chunk_idx in range(num_chunks):
+            start = chunk_idx * chunk_size
+            end = min(start + chunk_size, total)
+            chunk_rows = all_prompt_rows[start:end]
+
+            file_num = chunk_idx + 1
+            prompts_file = os.path.join(
+                prompts_dir, f"{item_stem}_prompts_{file_num}.tsv"
+            )
+            with open(prompts_file, "w", encoding="utf-8") as f:
+                f.write("GlobalOfferId\tPrompt\n")
+                for item_id, escaped_prompt in chunk_rows:
+                    f.write(f"{item_id}\t{escaped_prompt}\n")
+
+            file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
+            saved_files.append(prompts_file)
+            print(f"  Chunk {file_num}/{num_chunks}: {prompts_file} "
+                  f"({len(chunk_rows):,} prompts, {file_size_mb:.1f} MB)")
+
+        print(f"\n  Total: {total:,} prompts split into {num_chunks} files")
+        for f in saved_files:
+            print(f"    {f}")
         print(f"\nDone! (--export_prompts_only mode, inference skipped)")
         return
 
@@ -1383,7 +1660,8 @@ def main():
 
     # ---- Save all output files ----
     stats = save_all_outputs(all_results, args.output_dir,
-                             id2meta_file=args.id2meta_file)
+                             id2meta_file=args.id2meta_file,
+                             output_prefix=output_prefix)
 
     # ---- Clean up checkpoint ----
     cleanup_checkpoint(checkpoint_dir)

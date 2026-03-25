@@ -15,10 +15,10 @@ Prompt template (journey_ranker.md) has placeholders:
   ##JourneyWithProducts## → JSON of journeys with candidate products
 
 Output:
-  TSV with columns: UserId, ReadableUserEvents, RequestTime, JourneyWithProducts, RankerResult
+  TSV with columns: UserId, ReadableUserEvents, RequestTime, JourneyWithProducts, OUTPUT
 
 Usage:
-    python step2.8_call_LLM_ranker.py [--debug]
+    python step2.8_call_LLM_ranker.py --input_file /path/to/JWP.tsv [--debug]
 """
 
 import argparse
@@ -37,7 +37,7 @@ csv.field_size_limit(sys.maxsize)
 # Add llm_utils directory to path
 LLM_UTILS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "ProfileGenerate"
+    "..", "resources"
 )
 sys.path.insert(0, LLM_UTILS_DIR)
 from llm_utils import run_llm_parallel_with_checkpoint, cleanup_checkpoint
@@ -46,21 +46,14 @@ from llm_utils import run_llm_parallel_with_checkpoint, cleanup_checkpoint
 # =============================================================================
 # Paths
 # =============================================================================
-INPUT_FILE = (
-    "/vc_data/users/wangying/OneRec/ShoppingJourney/CookData/data/testdata/50K_journey_with_products.tsv"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+
+DEFAULT_INPUT_FILE = (
+    "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results_JWP.tsv"
 )
-PROMPT_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "Prompt", "journey_ranker.md"
-)
-TOKEN_FILE = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "ProfileGenerate", "resources", "github.txt"
-)
-OUTPUT_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "data/testdata", "ranker_results"
-)
+PROMPT_FILE = os.path.join(PROJECT_DIR, "resources", "journey_ranker.md")
+TOKEN_FILE = os.path.join(PROJECT_DIR, "resources", "tokens.txt")
 
 
 # =============================================================================
@@ -207,7 +200,7 @@ def parse_args():
         description="Step 2.8: Call LLM to rank products in shopping journeys"
     )
     parser.add_argument(
-        "--input_file", type=str, default=INPUT_FILE,
+        "--input_file", type=str, default=DEFAULT_INPUT_FILE,
         help="Path to JWP TSV file",
     )
     parser.add_argument(
@@ -219,8 +212,8 @@ def parse_args():
         help="Path to GitHub tokens file",
     )
     parser.add_argument(
-        "--output_dir", type=str, default=OUTPUT_DIR,
-        help="Output directory for ranked results",
+        "--output_dir", type=str, default=None,
+        help="Output directory (default: same dir as input_file)",
     )
     parser.add_argument(
         "--copilot_model", type=str, default="gpt-5.2",
@@ -318,8 +311,9 @@ def main():
           f"max={max(prompt_lens):,}, avg={sum(prompt_lens)/len(prompt_lens):,.0f}")
 
     # ---- Call LLM ----
-    os.makedirs(args.output_dir, exist_ok=True)
-    checkpoint_dir = os.path.join(args.output_dir, "_ranker_checkpoint")
+    output_dir = args.output_dir or os.path.dirname(args.input_file)
+    os.makedirs(output_dir, exist_ok=True)
+    checkpoint_dir = os.path.join(output_dir, "_ranker_checkpoint")
 
     print(f"\nCalling LLM ranker ({args.copilot_model}) ...")
     start_time = time.time()
@@ -340,7 +334,11 @@ def main():
     print(f"\nLLM calls done: {elapsed:.1f}s ({throughput:.1f} users/s)")
 
     # ---- Save results ----
-    output_file = os.path.join(args.output_dir, "ranker_results.tsv")
+    # Derive output file name from input file base
+    base = os.path.splitext(os.path.basename(args.input_file))[0]
+    output_dir = args.output_dir or os.path.dirname(args.input_file)
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, f"{base}_Ranker.tsv")
     print(f"\nSaving results to: {output_file}")
 
     # Build user_id -> user_data map for quick lookup
@@ -355,7 +353,7 @@ def main():
                             escapechar="\\")
         writer.writerow([
             "UserId", "ReadableUserEvents", "RequestTime",
-            "JourneyWithProducts", "RankerResult"
+            "JourneyWithProducts", "OUTPUT"
         ])
 
         for user_id, raw_result in results:
