@@ -99,14 +99,14 @@ def parse_args():
         "--id2meta_file",
         type=str,
         #default="./processed/id2meta.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/id2meta.json",
         help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_file",
         type=str,
         #default="./sft_data/meta2tid_sft.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/sft_data/meta2tid_sft.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/sft_data/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
     )
     parser.add_argument(
@@ -135,6 +135,7 @@ def main():
     print(f"Loaded {len(parent_asin2meta)} product mappings")
 
     sft_data = []
+    sft_data_full = []
     num_gid = 0
     num_ptid = 0
     num_ptid_total = 0
@@ -152,13 +153,26 @@ def main():
         else:
             num_gid += 1
 
-        sft_data.append(prepare_data(value))
+        sample = prepare_data(value)
+        sft_data.append(sample)
+        # Full version preserves GlobalOfferId for downstream test-set building
+        full_sample = dict(sample)
+        full_sample["metadata"] = {"GlobalOfferId": key}
+        sft_data_full.append(full_sample)
 
     os.makedirs(os.path.dirname(args.output_file), exist_ok=True)
+
+    # Save training-only version (instruction/input/output)
     with open(args.output_file, "w", encoding="utf-8") as f:
         json.dump(sft_data, f, ensure_ascii=False, indent=2)
 
+    # Save full version with metadata
+    full_output_file = args.output_file.replace(".json", "_full.json")
+    with open(full_output_file, "w", encoding="utf-8") as f:
+        json.dump(sft_data_full, f, ensure_ascii=False, indent=2)
+
     print(f"\nSFT data saved to: {args.output_file}")
+    print(f"Full data saved to: {full_output_file}")
     print(f"Generated {len(sft_data)} training samples")
     print(f"  GlobalOfferId items:  {num_gid:>10,}")
     print(f"  PageTitle items:      {num_ptid:>10,} "

@@ -684,7 +684,7 @@ def parse_args():
     parser.add_argument(
         "--copilot_workers",
         type=int,
-        default=80,
+        default=40,
         help="Number of parallel workers for Copilot API calls",
     )
     parser.add_argument(
@@ -812,7 +812,7 @@ def parse_args():
         type=str,
         nargs="*",
         #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl files from previous runs to resume "
              "from. Each file should be a summaries_with_similarity.jsonl. "
@@ -1022,18 +1022,41 @@ def main():
         ])
         print(f"\nFound {len(results_files)} results files:")
         merged_outputs = {}  # item_id -> llm_output
+        # Column name candidates for item ID and LLM output
+        id_col_names = {"GlobalOfferId", "globalofferid", "item_id", "ItemId", "ID", "id"}
+        output_col_names = {"Output", "output", "OUTPUT", "LLMOutput", "llm_output"}
         for rf in results_files:
             count = 0
             with open(rf, "r", encoding="utf-8") as f:
                 reader = csv_mod.reader(f, delimiter="\t")
-                header = next(reader, None)  # skip header
+                header = next(reader, None)  # read header
+                if header is None:
+                    print(f"  {os.path.basename(rf)}: SKIP (empty)")
+                    continue
+                # Find column indices by name
+                id_idx = None
+                output_idx = None
+                for i, col in enumerate(header):
+                    col_stripped = col.strip()
+                    if col_stripped in id_col_names:
+                        id_idx = i
+                    elif col_stripped in output_col_names:
+                        output_idx = i
+                if id_idx is None or output_idx is None:
+                    print(f"  {os.path.basename(rf)}: SKIP (missing columns: "
+                          f"id={'FOUND' if id_idx is not None else 'MISSING'}, "
+                          f"output={'FOUND' if output_idx is not None else 'MISSING'}) "
+                          f"header={header}")
+                    continue
+                min_cols = max(id_idx, output_idx) + 1
                 for row in reader:
-                    if len(row) >= 2:
-                        item_id = row[0].strip()
-                        gen_text = row[1].replace("\\n", "\n")
+                    if len(row) >= min_cols:
+                        item_id = row[id_idx].strip()
+                        gen_text = row[output_idx].replace("\\n", "\n")
                         merged_outputs[item_id] = gen_text
                         count += 1
-            print(f"  {os.path.basename(rf)}: {count:,} items")
+            print(f"  {os.path.basename(rf)}: {count:,} items "
+                  f"(id_col={header[id_idx].strip()}, output_col={header[output_idx].strip()})")
         print(f"Total merged: {len(merged_outputs):,} unique items")
 
         # Also load resume files if specified

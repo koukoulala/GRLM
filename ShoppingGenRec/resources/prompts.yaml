@@ -788,13 +788,15 @@ prompts:
         Use this slot to add information that helps differentiate this product from similar items.
 
       5. Brand or platform ecosystem
-        MUST include if explicitly provided.
+        MUST include if explicitly provided AND it is a real brand name.
         Keep the original brand form. Do not translate, split, normalize, or rewrite it.
+        **Skip placeholder or generic brand values**: If the brand field contains a placeholder like "Other", "Generic", "Unbranded", "N/A", "Unknown", "No Brand", or any similarly non-informative value, do NOT include it. Use this slot for another informative product attribute instead.
 
       6. Seller or retailer
         MUST include if explicitly provided and meaningfully different from the brand.
         Keep the original seller form. Do not translate, split, normalize, or rewrite it.
         If brand and seller are the same or nearly the same, do NOT repeat — use this slot for the next available aspect instead.
+        **Skip placeholder seller values**: Same rule as brand — skip "Other", "Generic", "N/A", etc.
 
       7. Target audience, style, occasion, use scenario, or distinctive selling point
         - Target audience: include ONLY if explicitly stated and specific (e.g., kids, women, professional, cat). Exclude generic values like unisex, or adult.
@@ -850,20 +852,25 @@ prompts:
         Do not invent missing facts.
         Do not guess audience, seller, style, or feature unless supported by the product information.
 
-      9. SIMILAR ITEMS
+      9. NO LOW-INFORMATION WORDS
+        Never use generic placeholder words that carry no product-specific meaning.
+        Banned words include: "Other", "Generic", "Unbranded", "N/A", "Unknown", "general", "standard", "default", "basic", "regular", "normal", "various".
+        If a metadata field contains one of these values, skip it and use the slot for a more informative product attribute instead.
+
+      10. SIMILAR ITEMS
           Use the TOP 5 SIMILAR PRODUCTS only as reference for terminology consistency.
           Prefer accurate description of the current product over forced consistency.
           If similar items share a common category or naming pattern, use consistent terminology when it remains accurate.
 
-      10. UNIQUENESS
+      11. UNIQUENESS
           Use the 4 product-description slots to include distinguishing traits that separate this product from similar items.
 
-      11. NO REDUNDANCY
+      12. NO REDUNDANCY
           Do not use a hypernym and a hyponym that convey the same meaning.
           For example, do NOT output both "coat" and "outwear", or both "shoes" and "footwear".
           Choose the more specific or informative term.
 
-      12. OUTPUT FORMAT
+      13. OUTPUT FORMAT
           Output ONLY the result.
           If NOT a product:
           <Output>[]</Output>
@@ -876,12 +883,13 @@ prompts:
       1. Is this a real, specific product? If not, output []
       2. Are there exactly 7 slots?
       3. Are slots 1–4 ALL product-descriptive?
-      4. If brand exists, is it included in the slots?
-      5. If seller exists and differs from brand, is it included in the slots?
+      4. If brand exists and is a real brand name (not "Other"/"Generic"/"N/A"), is it included?
+      5. If seller exists and differs from brand, is it included?
       6. If a specific audience is explicitly provided, is it included?
       7. Are all 7 slots distinct (no duplicates, no hypernym+hyponym pairs)?
       8. Are proper nouns kept intact and untranslated?
       9. Are descriptive entries in the product's primary language?
+      10. Do any slots contain banned placeholder words ("Other", "Generic", "N/A", etc.)? If so, replace with a real product attribute.
       11. Is there no extra text outside <Output></Output>?
 
       PRODUCT INFORMATION:

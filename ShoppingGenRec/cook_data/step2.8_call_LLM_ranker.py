@@ -220,16 +220,16 @@ def parse_args():
         help="Copilot model name (default: gpt-5.2)",
     )
     parser.add_argument(
-        "--num_workers", type=int, default=30,
-        help="Number of parallel workers (default: 30)",
+        "--num_workers", type=int, default=40,
+        help="Number of parallel workers",
     )
     parser.add_argument(
-        "--max_tokens", type=int, default=8000,
-        help="Maximum output tokens per API call (default: 8000)",
+        "--max_tokens", type=int, default=10000,
+        help="Maximum output tokens per API call ",
     )
     parser.add_argument(
-        "--chunk_size", type=int, default=5000,
-        help="Users per checkpoint chunk (default: 5000)",
+        "--chunk_size", type=int, default=10000,
+        help="Users per checkpoint chunk",
     )
     parser.add_argument(
         "--debug", action="store_true", default=False,

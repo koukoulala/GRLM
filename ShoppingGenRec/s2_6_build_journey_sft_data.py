@@ -59,12 +59,12 @@ csv.field_size_limit(sys.maxsize)
 # =============================================================================
 
 DEFAULT_MAX_EVENTS = 50
-DEFAULT_MAX_RECENT_EVENTS = 10
+DEFAULT_MAX_RECENT_EVENTS = 30
 DEFAULT_MAX_PRODUCTS = 20
-DEFAULT_MIN_PRODUCTS = 8
+DEFAULT_MIN_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 10
-DEFAULT_KEEP_EMPTY_RATIO = 0.5
+DEFAULT_KEEP_EMPTY_RATIO = 0.8
 DEFAULT_HALF_FILTERED_DROP = True
 
 
@@ -539,13 +539,20 @@ def create_sft_data(
                 skip_reasons["half_journeys_filtered"] += 1
                 continue
 
-        # Handle empty journeys: keep a controlled fraction
+        # Handle empty journeys: only keep users who originally had NO journeys
+        # (not users whose journeys were all filtered out)
         if not resolved_journeys:
-            empty_journey_total += 1
-            if random.random() >= keep_empty_ratio:
-                skip_reasons["empty_journeys_sampled_out"] += 1
+            if not journeys:
+                # Originally had no journeys — candidate for empty sample
+                empty_journey_total += 1
+                if random.random() >= keep_empty_ratio:
+                    skip_reasons["empty_journeys_sampled_out"] += 1
+                    continue
+                empty_journey_kept += 1
+            else:
+                # Had journeys but all were filtered out — skip entirely
+                skip_reasons["all_journeys_filtered"] += 1
                 continue
-            empty_journey_kept += 1
 
         # Journey subsampling if exceeding max_journeys
         if max_journeys is not None and len(resolved_journeys) > max_journeys:
@@ -788,27 +795,28 @@ def parse_args():
         "--shopping_journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/raw_data/shopping_journeys.json",
+                "Data/LLMTrainingData/20260324/raw_data/shopping_journeys.json",
         help="Path to shopping_journeys.json",
     )
     parser.add_argument(
         "--shopping_profile_file",
         type=str,
-        default=None,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
+                "Data/LLMTrainingData/20260324/raw_data/shopping_profiles_merged.tsv",
         help="Path to shopping_profiles.tsv (required for profile2journey)",
     )
     parser.add_argument(
         "--id2meta_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/processed/id2meta.json",
+                "Data/LLMTrainingData/20260324/processed/id2meta.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/sft_data",
+                "Data/LLMTrainingData/20260324/sft_data",
         help="Output directory",
     )
 
@@ -986,12 +994,14 @@ def main():
         print(f"  Num events:     {meta['num_events']}")
         print(f"  Num journeys:   {meta['num_journeys']}")
         print(f"  Products/j:     {meta['num_products_per_journey']}")
-        print(f"  Instruction:    {sample['instruction'][:120]}...")
+        print(f"  Instruction:    {sample['instruction'][:200]}...")
         input_lines = sample["input"].split("\n")
-        max_show = 8 if task == "profile2journey" else 5
+        max_show = 12 if task == "profile2journey" else 12
         print(f"  Input (first {max_show} lines):")
         for line in input_lines[:max_show]:
-            print(f"    {line[:120]}")
+            print(f"    {line[:150]}")
+        if len(input_lines) > max_show:
+            print(f"    ... ({len(input_lines) - max_show} more lines)")
         # Pretty-print the output JSON
         try:
             out_obj = json.loads(sample["output"])
@@ -999,12 +1009,12 @@ def main():
             if not cj:
                 print(f"  Output: (empty - no journeys)")
             else:
-                for ji, j in enumerate(cj[:2]):
+                for ji, j in enumerate(cj[:3]):
                     print(f"  Journey {ji+1}: {j['Title']}")
-                    print(f"    Reason: {j['Reason'][:80]}")
+                    print(f"    Reason: {j['Reason'][:120]}")
                     print(f"    Products: {len(j['ProductTIDs'])} TIDs")
-                    if j["ProductTIDs"]:
-                        print(f"      [0]: {j['ProductTIDs'][0]}")
+                    for pi, tid in enumerate(j["ProductTIDs"]):
+                        print(f"      [{pi}]: {tid}")
         except (json.JSONDecodeError, KeyError):
             print(f"  Output: {sample['output'][:200]}...")
     print(f"\n{'=' * 70}")
