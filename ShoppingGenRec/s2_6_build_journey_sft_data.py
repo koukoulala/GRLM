@@ -58,8 +58,8 @@ csv.field_size_limit(sys.maxsize)
 # Constants
 # =============================================================================
 
-DEFAULT_MAX_EVENTS = 50
-DEFAULT_MAX_RECENT_EVENTS = 30
+DEFAULT_MAX_EVENTS = 100
+DEFAULT_MAX_RECENT_EVENTS = 100
 DEFAULT_MAX_PRODUCTS = 20
 DEFAULT_MIN_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1

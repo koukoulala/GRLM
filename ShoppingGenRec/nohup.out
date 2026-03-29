@@ -1,0 +1,10 @@
+usage: step2.8_call_LLM_ranker.py [-h] [--input_file INPUT_FILE]
+                                  [--prompt_file PROMPT_FILE]
+                                  [--token_file TOKEN_FILE]
+                                  [--output_dir OUTPUT_DIR]
+                                  [--copilot_model COPILOT_MODEL]
+                                  [--num_workers NUM_WORKERS]
+                                  [--max_tokens MAX_TOKENS]
+                                  [--chunk_size CHUNK_SIZE] [--debug]
+                                  [--debug_rows DEBUG_ROWS]
+step2.8_call_LLM_ranker.py: error: unrecognized arguments: -output_dir=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/

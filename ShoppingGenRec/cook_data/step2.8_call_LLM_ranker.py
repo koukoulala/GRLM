@@ -98,6 +98,8 @@ def read_jwp_tsv(filepath, max_users=0):
             if not user_id or not jwp_str:
                 continue
 
+            user_history = row.get("UserHistory", "").strip()
+
             # Replace "#N#" separator with newlines
             events_text = events_raw.replace("#N#", "\n")
 
@@ -105,6 +107,7 @@ def read_jwp_tsv(filepath, max_users=0):
                 "user_id": user_id,
                 "events": events_text,
                 "request_time": request_time,
+                "user_history": user_history,
                 "jwp_str": jwp_str,
             })
 
@@ -353,7 +356,7 @@ def main():
                             escapechar="\\")
         writer.writerow([
             "UserId", "ReadableUserEvents", "RequestTime",
-            "JourneyWithProducts", "OUTPUT"
+            "UserHistory", "JourneyWithProducts", "OUTPUT"
         ])
 
         for user_id, raw_result in results:
@@ -363,7 +366,7 @@ def main():
             if not raw_result:
                 writer.writerow([
                     user_id, events_out, u["request_time"],
-                    u["jwp_str"], ""
+                    u["user_history"], u["jwp_str"], ""
                 ])
                 continue
             success_count += 1
@@ -373,14 +376,14 @@ def main():
                 json_valid_count += 1
                 writer.writerow([
                     user_id, events_out, u["request_time"],
-                    u["jwp_str"], clean_json
+                    u["user_history"], u["jwp_str"], clean_json
                 ])
             else:
                 json_invalid_ids.append(user_id)
                 fallback = raw_result.replace("\n", " ").replace("\t", " ")
                 writer.writerow([
                     user_id, events_out, u["request_time"],
-                    u["jwp_str"], fallback
+                    u["user_history"], u["jwp_str"], fallback
                 ])
 
     file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
