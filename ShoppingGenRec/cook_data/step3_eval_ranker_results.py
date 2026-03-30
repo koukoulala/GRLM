@@ -18,6 +18,7 @@ import csv
 import glob
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -32,6 +33,56 @@ KEEP_COLUMNS = [
     "JourneyWithProducts",
     "FinalJourney",
 ]
+
+
+def _unescape_json_field_v1(s):
+    """Unescape variant 1: for files where csv only escaped quotes.
+
+    Pattern: \\" -> placeholder, \\" -> ", placeholder -> \\"
+    Works when the writer only escaped " but not \\.
+    """
+    if '\\' not in s:
+        return s
+    placeholder = '\x00__ESC_QUOT__\x00'
+    s = s.replace('\\\\"', placeholder)
+    s = s.replace('\\"', '"')
+    s = s.replace(placeholder, '\\"')
+    return s
+
+
+def _unescape_json_field_v2(s):
+    """Unescape variant 2: for files where csv escaped both \\ and ".
+
+    csv escapechar='\\' with QUOTE_NONE escapes both \\ -> \\\\ and " -> \\".
+    Reverse: first \\\\ -> \\, then \\" -> ".
+    """
+    if '\\' not in s:
+        return s
+    placeholder = '\x00__BSLASH__\x00'
+    s = s.replace('\\\\', placeholder)
+    s = s.replace('\\"', '"')
+    s = s.replace(placeholder, '\\')
+    return s
+
+
+def _parse_json_field(raw):
+    """Try to parse a JSON field, handling old double-escaped format."""
+    if not raw or not raw.strip():
+        return None, "empty"
+    try:
+        return json.loads(raw), None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Try v1 unescape (only quotes escaped)
+    try:
+        return json.loads(_unescape_json_field_v1(raw)), None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Try v2 unescape (both backslashes and quotes escaped)
+    try:
+        return json.loads(_unescape_json_field_v2(raw)), None
+    except (json.JSONDecodeError, ValueError) as e:
+        return None, str(e)
 
 
 def build_jwp_index(jwp_data):
@@ -126,9 +177,13 @@ def clean_output(output_data, jwp_index):
 
 def process_file(input_file):
     """Process a single Ranker TSV file. Returns True on success."""
-    # Derive output file name from input
-    base = os.path.splitext(input_file)[0]
-    output_file = f"{base}_cleaned.tsv"
+    # Derive output file name: *_Ranker.tsv -> *_clean.tsv (short name for cosmos FUSE)
+    base = input_file
+    if base.endswith("_Ranker.tsv"):
+        base = base[:-len("_Ranker.tsv")]
+    else:
+        base = os.path.splitext(base)[0]
+    output_file = f"{base}_clean.tsv"
     print(f"  Input:  {input_file}")
     print(f"  Output: {output_file}")
 
@@ -146,8 +201,14 @@ def process_file(input_file):
     with open(input_file, "r", encoding="utf-8") as f_check:
         header = f_check.readline().strip().split("\t")
     if "UserHistory" not in header:
-        # Derive the JWP file path: *_JWP_Ranker.tsv -> *_JWP.tsv
+        # Try to find the original JWP file to get UserHistory.
+        # Ranker files may have a split suffix, e.g.:
+        #   *_80K_1_2_results_JWP_Ranker.tsv  ->  *_80K_1_results_JWP.tsv
+        # Strategy: first try direct replace, then strip the split number.
         jwp_file = input_file.replace("_Ranker.tsv", ".tsv")
+        if not os.path.isfile(jwp_file):
+            # Strip split suffix: *_80K_X_N_results_JWP.tsv -> *_80K_X_results_JWP.tsv
+            jwp_file = re.sub(r'_(\d+)_results_JWP\.tsv$', r'_results_JWP.tsv', jwp_file)
         if not os.path.isfile(jwp_file):
             print(f"ERROR: UserHistory column missing and JWP file not found: {jwp_file}")
             return False
@@ -161,6 +222,18 @@ def process_file(input_file):
                     user_history_map[uid] = jwp_row.get("UserHistory", "")
         print(f"  Loaded UserHistory for {len(user_history_map)} users from JWP")
 
+    # Detect old format: old step2.8 wrote with QUOTE_NONE + escapechar='\\',
+    # so the first data field containing JSON will have \\" patterns.
+    # New step2.8 uses QUOTE_MINIMAL which wraps fields in quotes instead.
+    is_old_format = False
+    with open(input_file, "r", encoding="utf-8") as f_detect:
+        f_detect.readline()  # skip header
+        first_line = f_detect.readline()
+        if first_line and '\\"' in first_line:
+            is_old_format = True
+    if is_old_format:
+        print(f"  Detected old TSV format (backslash-escaped); will unescape JSON fields")
+
     with open(input_file, "r", encoding="utf-8") as fin, \
          open(output_file, "w", encoding="utf-8", newline="") as fout:
 
@@ -172,19 +245,19 @@ def process_file(input_file):
         for row_idx, row in enumerate(reader):
             total_rows += 1
 
-            # 1. Skip rows where OUTPUT JSON can't be parsed
-            try:
-                output_data = json.loads(row["OUTPUT"])
-            except (json.JSONDecodeError, KeyError) as e:
+            # 1. Skip rows where OUTPUT or JWP JSON can't be parsed
+            output_data, out_err = _parse_json_field(row.get("OUTPUT", ""))
+            if output_data is None:
                 rows_deleted_parse_error += 1
-                print(f"[Row {row_idx}] DELETED — OUTPUT parse error: {e}")
+                if rows_deleted_parse_error <= 5:
+                    print(f"[Row {row_idx}] DELETED — OUTPUT parse error: {out_err}")
                 continue
 
-            try:
-                jwp_data = json.loads(row["JourneyWithProducts"])
-            except (json.JSONDecodeError, KeyError) as e:
+            jwp_data, jwp_err = _parse_json_field(row.get("JourneyWithProducts", ""))
+            if jwp_data is None:
                 rows_deleted_parse_error += 1
-                print(f"[Row {row_idx}] DELETED — JourneyWithProducts parse error: {e}")
+                if rows_deleted_parse_error <= 5:
+                    print(f"[Row {row_idx}] DELETED — JourneyWithProducts parse error: {jwp_err}")
                 continue
 
             # 2 & 3. Clean OUTPUT: remove bad products, add Queries
@@ -262,8 +335,16 @@ def main():
         files_to_process = []
         files_skipped = []
         for f in all_ranker_files:
-            cleaned_path = os.path.splitext(f)[0] + "_cleaned.tsv"
-            if os.path.isfile(cleaned_path):
+            # Match the output naming: *_Ranker.tsv -> *_clean.tsv
+            if f.endswith("_Ranker.tsv"):
+                clean_path = f[:-len("_Ranker.tsv")] + "_clean.tsv"
+            else:
+                clean_path = os.path.splitext(f)[0] + "_clean.tsv"
+            # Also check old naming variants
+            old_cleaned_path = os.path.splitext(f)[0] + "_cleaned.tsv"
+            old_cleaned_path2 = f.replace("_Ranker.tsv", "_cleaned.tsv") if f.endswith("_Ranker.tsv") else ""
+            if (os.path.isfile(clean_path) or os.path.isfile(old_cleaned_path)
+                    or (old_cleaned_path2 and os.path.isfile(old_cleaned_path2))):
                 files_skipped.append(f)
             else:
                 files_to_process.append(f)
