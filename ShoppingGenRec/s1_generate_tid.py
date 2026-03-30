@@ -1665,38 +1665,4 @@ def main():
     print(f"First {num_debug_show} LLM outputs:")
     for idx, res in enumerate(all_results[:num_debug_show]):
         print(f"\n  [{idx+1}] ID={res['id']}")
-        print(f"      Title: {res.get('title', 'N/A')[:120]}")
-        print(f"      LLM raw output: {res.get('llm_output', 'N/A')[:200]}")
-        print(f"      Parsed words:   {res.get('summary_words', [])}")
-    print(f"\n{'='*60}")
-
-    if debug:
-        # Debug mode: just print stats, don't write any files
-        success = sum(1 for r in all_results if r.get('llm_output'))
-        failed = sum(1 for r in all_results if not r.get('llm_output'))
-        valid_7 = sum(1 for r in all_results
-                      if len([w for w in r.get('summary_words', []) if w]) == 7)
-        print(f"\n[DEBUG] Summary (no files written):")
-        print(f"  Total: {len(all_results)}, Success: {success}, "
-              f"Failed: {failed}, Valid 7-word: {valid_7}")
-        return
-
-    # ---- Save all output files ----
-    stats = save_all_outputs(all_results, args.output_dir,
-                             id2meta_file=args.id2meta_file,
-                             output_prefix=output_prefix)
-
-    # ---- Clean up checkpoint ----
-    cleanup_checkpoint(checkpoint_dir)
-
-    # ---- Final summary ----
-    print(f"\nCompleted! Total: {len(all_results)}, "
-          f"Products: {stats['valid_product_count']}, "
-          f"Non-products: {stats['non_product_count']}, "
-          f"Failed: {stats['failed_count']}")
-    if inference_time > 0.01:
-        print(f"Throughput: {len(data) / inference_time:.1f} items/s")
-
-
-if __name__ == "__main__":
-    main()
+     

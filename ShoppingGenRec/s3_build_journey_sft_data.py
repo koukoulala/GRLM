@@ -1,4 +1,4 @@
-"""Step 2.6: Unified Journey SFT Data Builder (Event2Journey + Profile2Journey)
+"""Step 3: Unified Journey SFT Data Builder (Event2Journey + Profile2Journey)
 
 Unified pipeline for building SFT training data from user events/profiles
 to shopping journey predictions.  Supports two tasks via --task:
@@ -9,7 +9,6 @@ to shopping journey predictions.  Supports two tasks via --task:
   profile2journey:
     Input: shopping profile + recent events -> Output: predicted shopping journeys
 
-Compared to s2_4 (event2journey) and s2_5 (profile2journey), this unified
 version adds:
   - --min_products_per_journey: drop journeys below this product count
   - --max_journeys: cap journey count per sample (random subsample if exceeded)
@@ -27,13 +26,13 @@ Data sources:
 
 Usage:
   # Event to journey
-  python s2_6_build_journey_sft_data.py --task event2journey \\
+  python s3_build_journey_sft_data.py --task event2journey \\
       --shopping_journey_file ./raw_data/shopping_journeys.json \\
       --id2meta_file ./processed/id2meta.json \\
       --output_dir ./sft_data
 
   # Profile to journey
-  python s2_6_build_journey_sft_data.py --task profile2journey \\
+  python s3_build_journey_sft_data.py --task profile2journey \\
       --shopping_journey_file ./raw_data/shopping_journeys.json \\
       --shopping_profile_file ./raw_data/shopping_profiles.tsv \\
       --id2meta_file ./processed/id2meta.json \\
@@ -58,8 +57,8 @@ csv.field_size_limit(sys.maxsize)
 # Constants
 # =============================================================================
 
-DEFAULT_MAX_EVENTS = 50
-DEFAULT_MAX_RECENT_EVENTS = 30
+DEFAULT_MAX_EVENTS = 100
+DEFAULT_MAX_RECENT_EVENTS = 100
 DEFAULT_MAX_PRODUCTS = 20
 DEFAULT_MIN_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1
@@ -1007,20 +1006,4 @@ def main():
             out_obj = json.loads(sample["output"])
             cj = out_obj.get("ContinuedJourneys", [])
             if not cj:
-                print(f"  Output: (empty - no journeys)")
-            else:
-                for ji, j in enumerate(cj[:3]):
-                    print(f"  Journey {ji+1}: {j['Title']}")
-                    print(f"    Reason: {j['Reason'][:120]}")
-                    print(f"    Products: {len(j['ProductTIDs'])} TIDs")
-                    for pi, tid in enumerate(j["ProductTIDs"]):
-                        print(f"      [{pi}]: {tid}")
-        except (json.JSONDecodeError, KeyError):
-            print(f"  Output: {sample['output'][:200]}...")
-    print(f"\n{'=' * 70}")
-
-    print(f"\nDone! Generated {len(sft_data)} training samples -> {output_file}")
-
-
-if __name__ == "__main__":
-    main()
+               

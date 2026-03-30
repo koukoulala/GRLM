@@ -136,12 +136,26 @@ def main():
 
     sft_data = []
     sft_data_full = []
+    item_id2tid = {}       # item_id -> [7 summary words]
     num_gid = 0
     num_ptid = 0
     num_ptid_total = 0
     num_ptid_sampled = 0
+    num_no_tid = 0
 
     for key, value in parent_asin2meta.items():
+        # Build item_id2tid for ALL items (regardless of PageTitle sampling)
+        summary_words = value.get("summary_words", [])
+        valid_words = [
+            word.replace("[", "").replace("]", "")
+            for word in summary_words
+            if word and word.strip()
+        ]
+        if len(valid_words) >= 7 and "" not in valid_words:
+            item_id2tid[key] = valid_words[:7]
+        else:
+            num_no_tid += 1
+
         is_pagetitle = key.startswith("P")
         if is_pagetitle:
             num_ptid_total += 1
@@ -167,16 +181,76 @@ def main():
         json.dump(sft_data, f, ensure_ascii=False, indent=2)
 
     # Save full version with metadata
-    full_output_file = args.output_file.replace(".json", "_full.json")
-    with open(full_output_file, "w", encoding="utf-8") as f:
+    full_file = args.output_file.replace(".json", "_full.json")
+    with open(full_file, "w", encoding="utf-8") as f:
         json.dump(sft_data_full, f, ensure_ascii=False, indent=2)
+    full_mb = os.path.getsize(full_file) / (1024 * 1024)
+    print(f"Full data saved: {full_file} ({full_mb:.1f} MB)")
 
-    print(f"\nSFT data saved to: {args.output_file}")
-    print(f"Full data saved to: {full_output_file}")
-    print(f"Generated {len(sft_data)} training samples")
-    print(f"  GlobalOfferId items:  {num_gid:>10,}")
-    print(f"  PageTitle items:      {num_ptid:>10,} "
-          f"(sampled from {num_ptid_total:,}, prob={args.pagetitle_sample_prob})")
+    # =========================================================================
+    # Save item_id2tid and tid2item_id mappings
+    # =========================================================================
+    tid_dir = os.path.join(os.path.dirname(args.output_file), "item_id2tid")
+    os.makedirs(tid_dir, exist_ok=True)
+
+    # item_id2tid: item_id -> [7 summary words]
+    id2tid_file = os.path.join(tid_dir, "item_id2tid.json")
+    with open(id2tid_file, "w", encoding="utf-8") as f:
+        json.dump(item_id2tid, f, ensure_ascii=False, indent=2)
+
+    # tid2item_id: comma-joined TID string -> [list of item_ids]
+    tid2item_id = {}
+    for item_id, tid_words in item_id2tid.items():
+        tid_key = ",".join(tid_words)
+        if tid_key not in tid2item_id:
+            tid2item_id[tid_key] = []
+        tid2item_id[tid_key].append(item_id)
+
+    tid2id_file = os.path.join(tid_dir, "tid2item_id.json")
+    with open(tid2id_file, "w", encoding="utf-8") as f:
+        json.dump(tid2item_id, f, ensure_ascii=False, indent=2)
+
+    print(f"\n  item_id2tid mappings saved to: {tid_dir}")
+    print(f"    item_id2tid: {len(item_id2tid):,} items")
+    print(f"    tid2item_id: {len(tid2item_id):,} unique TIDs")
+    print(f"    Items without valid TID: {num_no_tid:,}")
+
+    # TID multiplicity statistics
+    tid_counts = [len(ids) for ids in tid2item_id.values()]
+    multi_tids = [c for c in tid_counts if c > 1]
+    print(f"\n  --- TID Multiplicity (1 TID -> N items) ---")
+    print(f"    TIDs mapping to 1 item:   {sum(1 for c in tid_counts if c == 1):>10,}")
+    print(f"    TIDs mapping to 2+ items: {len(multi_tids):>10,}")
+    if multi_tids:
+        import numpy as np
+        arr = np.array(multi_tids)
+        print(f"    Among multi-mapped TIDs:")
+        print(f"      Mean items/TID: {arr.mean():.1f}")
+        print(f"      Max items/TID:  {arr.max()}")
+        # Distribution buckets
+        for threshold in [2, 3, 5, 10, 50]:
+            count = sum(1 for c in multi_tids if c >= threshold)
+            print(f"      TIDs with >= {threshold:>2} items: {count:>10,}")
+
+    # Print summary statistics
+    train_mb = os.path.getsize(args.output_file) / (1024 * 1024)
+    print(f"\nSummary:")
+    print(f"  Total items in id2meta:   {len(parent_asin2meta):>10,}")
+    print(f"  GlobalOfferId items:      {num_gid:>10,}")
+    print(f"  PageTitle items (total):  {num_ptid_total:>10,}")
+    print(f"  PageTitle items (sampled):{num_ptid_sampled:>10,}")
+    print(f"  SFT training samples:     {len(sft_data):>10,}")
+    print(f"  Training data: {args.output_file} ({train_mb:.1f} MB)")
+
+    # Show examples
+    print(f"\nExample cases (first 2):")
+    for idx, sample in enumerate(sft_data[:2]):
+        print(f"\n--- Example {idx + 1} ---")
+        print(f"  Instruction: {sample['instruction'][:100]}...")
+        print(f"  Input: {sample['input'][:200]}...")
+        print(f"  Output: {sample['output']}")
+
+    print(f"\nDone!")
 
 
 if __name__ == "__main__":

@@ -210,13 +210,13 @@ def _load_journey_rows_from_dir(prompt_results_dir):
     required_cols = {"UserId", "ReadableUserEvents", "UserHistory",
                      "JourneyWithProducts", "FinalJourney"}
 
-    # Find all _cleaned.tsv files in the directory (step3 output)
+    # Find all _cleaned.tsv / _clean.tsv files in the directory (step3 output)
     tsv_files = sorted(
         f for f in os.listdir(prompt_results_dir)
-        if f.endswith("_cleaned.tsv")
+        if f.endswith("_cleaned.tsv") or f.endswith("_clean.tsv")
     )
     if not tsv_files:
-        print(f"  ERROR: No *_cleaned.tsv files found in {prompt_results_dir}")
+        print(f"  ERROR: No *_cleaned.tsv or *_clean.tsv files found in {prompt_results_dir}")
         sys.exit(1)
 
     print(f"  Found {len(tsv_files)} TSV file(s) in: {prompt_results_dir}")
