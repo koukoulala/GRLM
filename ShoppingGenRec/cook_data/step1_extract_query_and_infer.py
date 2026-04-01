@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import csv
+import glob
 import json
 import os
 import subprocess
@@ -203,12 +204,64 @@ def find_output_column(input_file):
     raise ValueError(f"'OUTPUT' column not found in header: {header}")
 
 
+# ========== Process Single File ==========
+def process_file(input_file, work_dir, skip_inference, gpu_count, gpu_ids,
+                 max_rows=0):
+    """Process a single input file: extract queries, save, run inference.
+
+    Returns True on success.
+    """
+    base = os.path.splitext(os.path.basename(input_file))[0]
+    query_file = os.path.join(work_dir, f"{base}_queries.tsv")
+    embedding_output = os.path.join(work_dir, f"{base}_query_embeddings.tsv")
+
+    col_output = find_output_column(input_file)
+    print(f"  Input file:    {input_file}")
+    print(f"  OUTPUT column: index {col_output}")
+    print(f"  Query file:    {query_file}")
+    print(f"  Embedding out: {embedding_output}")
+
+    # Step 1: Extract queries
+    print("=" * 80)
+    print("Step 1: Extract queries")
+    print("=" * 80)
+    queries = extract_queries(input_file, col_output, max_rows=max_rows)
+
+    if not queries:
+        print("No queries found!")
+        return False
+
+    # Step 2: Save queries
+    print("\n" + "=" * 80)
+    print("Step 2: Save queries")
+    print("=" * 80)
+    save_queries(queries, query_file)
+
+    # Step 3: Run embedding inference
+    if not skip_inference:
+        print("\n" + "=" * 80)
+        print("Step 3: Run embedding inference")
+        print("=" * 80)
+        run_inference(query_file, embedding_output, work_dir,
+                      gpu_count=gpu_count, gpu_ids=gpu_ids)
+    else:
+        print("\n[Skipping inference, using existing embeddings]")
+
+    print("\nDone!")
+    print(f"  Query file: {query_file}")
+    print(f"  Embedding file: {embedding_output}")
+    return True
+
+
 # ========== Main ==========
 def main():
     parser = argparse.ArgumentParser(description="Step 1: Extract queries and generate embeddings")
     parser.add_argument("--input_file", type=str,
                         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results.tsv",
                         help="Path to Journey_Results TSV from step0")
+    parser.add_argument("--input_folder", type=str, 
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/",
+                        help="Path to a folder; processes all *_results.tsv / *_Results.tsv files inside it")
     parser.add_argument("--work_dir", type=str, 
                         default=None,
                         help="Working directory for outputs")
@@ -221,50 +274,91 @@ def main():
                              "Overrides CUDA_VISIBLE_DEVICES. If not set, uses env or 0..gpu_count-1.")
     args = parser.parse_args()
 
-    # Derive paths from input file name
-    work_dir = args.work_dir or os.path.dirname(args.input_file)
-    os.makedirs(work_dir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(args.input_file))[0]
-    query_file = os.path.join(work_dir, f"{base}_queries.tsv")
-    embedding_output = os.path.join(work_dir, f"{base}_query_embeddings.tsv")
-
-    col_output = find_output_column(args.input_file)
-    print(f"  Input file:    {args.input_file}")
-    print(f"  OUTPUT column: index {col_output}")
-    print(f"  Query file:    {query_file}")
-    print(f"  Embedding out: {embedding_output}")
-
     max_rows = args.debug_rows if args.debug else 0
 
-    # Step 1: Extract queries
-    print("=" * 80)
-    print("Step 1: Extract queries")
-    print("=" * 80)
-    queries = extract_queries(args.input_file, col_output, max_rows=max_rows)
+    if args.input_folder and os.path.isdir(args.input_folder):
+        # Folder mode: find all *_results.tsv / *_Results.tsv files
+        all_files = sorted(
+            glob.glob(os.path.join(args.input_folder, "*_results.tsv"))
+            + glob.glob(os.path.join(args.input_folder, "*_Results.tsv"))
+        )
+        # Deduplicate (in case both patterns match the same file)
+        all_files = sorted(set(all_files))
+        # Exclude files that are themselves outputs from step1/step2
+        all_files = [f for f in all_files
+                     if not any(f.endswith(s) for s in (
+                         "_query_embeddings.tsv", "_queries.tsv",
+                         "_ann_results.tsv", "_with_products.tsv",
+                     ))]
 
-    if not queries:
-        print("No queries found!")
-        return
+        # Check which files already have embeddings generated
+        files_to_process = []
+        files_skipped = []
+        work_dir = args.work_dir or args.input_folder
+        for f in all_files:
+            base = os.path.splitext(os.path.basename(f))[0]
+            emb_file = os.path.join(work_dir, f"{base}_query_embeddings.tsv")
+            if os.path.isfile(emb_file):
+                files_skipped.append(f)
+            else:
+                files_to_process.append(f)
 
-    # Step 2: Save queries
-    print("\n" + "=" * 80)
-    print("Step 2: Save queries")
-    print("=" * 80)
-    save_queries(queries, query_file)
+        print(f"Folder: {args.input_folder}")
+        print(f"Found {len(all_files)} *_results.tsv file(s)")
+        print(f"  To process: {len(files_to_process)}")
+        print(f"  Skipped (already have embeddings): {len(files_skipped)}")
+        if files_skipped:
+            for f in files_skipped:
+                print(f"    SKIP: {os.path.basename(f)}")
+        print()
 
-    # Step 3: Run embedding inference
-    if not args.skip_inference:
-        print("\n" + "=" * 80)
-        print("Step 3: Run embedding inference")
-        print("=" * 80)
-        run_inference(query_file, embedding_output, work_dir,
-                      gpu_count=args.gpu_count, gpu_ids=args.gpu_ids)
+        if not files_to_process:
+            print("Nothing to process!")
+            return
+
+        os.makedirs(work_dir, exist_ok=True)
+        files_succeeded = []
+        files_failed = []
+        for i, f in enumerate(files_to_process, 1):
+            print(f"{'#' * 70}")
+            print(f"Processing file {i}/{len(files_to_process)}: {os.path.basename(f)}")
+            print(f"{'#' * 70}")
+            ok = process_file(f, work_dir, args.skip_inference,
+                              args.gpu_count, args.gpu_ids, max_rows=max_rows)
+            if ok:
+                files_succeeded.append(f)
+            else:
+                files_failed.append(f)
+            print()
+
+        # Final summary
+        print()
+        print("=" * 70)
+        print("FOLDER PROCESSING SUMMARY")
+        print("=" * 70)
+        print(f"Total *_results.tsv found:       {len(all_files)}")
+        print(f"  Skipped (already done):        {len(files_skipped)}")
+        print(f"  Processed successfully:        {len(files_succeeded)}")
+        print(f"  Failed:                        {len(files_failed)}")
+        if files_succeeded:
+            print("\nProcessed:")
+            for f in files_succeeded:
+                print(f"  OK:   {os.path.basename(f)}")
+        if files_failed:
+            print("\nFailed:")
+            for f in files_failed:
+                print(f"  FAIL: {os.path.basename(f)}")
+
+    elif args.input_file:
+        # Single-file mode
+        work_dir = args.work_dir or os.path.dirname(args.input_file)
+        os.makedirs(work_dir, exist_ok=True)
+        process_file(args.input_file, work_dir, args.skip_inference,
+                     args.gpu_count, args.gpu_ids, max_rows=max_rows)
+
     else:
-        print("\n[Skipping inference, using existing embeddings]")
-
-    print("\nStep 1 Done!")
-    print(f"Query file: {query_file}")
-    print(f"Embedding file: {embedding_output}")
+        print("ERROR: Please specify --input_file or --input_folder")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

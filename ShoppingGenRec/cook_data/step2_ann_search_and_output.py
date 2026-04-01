@@ -16,8 +16,10 @@ Usage:
 
 import argparse
 import csv
+import glob
 import json
 import os
+import sys
 import time
 from typing import Dict, List
 
@@ -320,40 +322,27 @@ def generate_output(query_to_products: Dict[str, List[dict]],
     print(f"{'='*80}")
 
 
-# ========== Main ==========
-def main():
-    parser = argparse.ArgumentParser(description="Step 2: ANN search and OUTPUT generation")
-    parser.add_argument("--input_file", type=str,
-                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results.tsv",
-                        help="Path to Journey_Results TSV from step0")
-    parser.add_argument("--work_dir", type=str, default=None,
-                        help="Working directory (default: same dir as input_file)")
-    parser.add_argument("--debug", action="store_true", help="Debug mode: process only first N rows")
-    parser.add_argument("--debug_rows", type=int, default=5, help="Number of rows in debug mode (default: 5)")
-    parser.add_argument("--skip_ann", action="store_true", help="Skip ANN search, load existing results")
-    parser.add_argument("--top_k", type=int, default=20, help="Number of nearest neighbors per query")
-    parser.add_argument("--score_threshold", type=float, default=0.85, help="Score threshold (default: 0.85)")
-    args = parser.parse_args()
+# ========== Process Single File ==========
+def process_file(input_file, work_dir, skip_ann, top_k, score_threshold,
+                 max_rows=0):
+    """Process a single input file: ANN search + output generation.
 
-    # Derive paths from input file name
-    work_dir = args.work_dir or os.path.dirname(args.input_file)
-    os.makedirs(work_dir, exist_ok=True)
-    base = os.path.splitext(os.path.basename(args.input_file))[0]
+    Returns True on success.
+    """
+    base = os.path.splitext(os.path.basename(input_file))[0]
     embedding_file = os.path.join(work_dir, f"{base}_query_embeddings.tsv")
     ann_output = os.path.join(work_dir, f"{base}_ann_results.tsv")
     final_output = os.path.join(work_dir, f"{base}_with_products.tsv")
     jwp_output = os.path.join(work_dir, f"{base}_JWP.tsv")
 
-    print(f"  Input file:     {args.input_file}")
+    print(f"  Input file:     {input_file}")
     print(f"  Work dir:       {work_dir}")
     print(f"  Embedding file: {embedding_file}")
     print(f"  ANN output:     {ann_output}")
     print(f"  Final output:   {final_output}")
     print(f"  JWP output:     {jwp_output}")
 
-    max_rows = args.debug_rows if args.debug else 0
-
-    if args.skip_ann:
+    if skip_ann:
         # Load existing ANN results
         print("=" * 80)
         print("Loading existing ANN results")
@@ -375,22 +364,129 @@ def main():
 
         if not query_embs:
             print("No embeddings found! Run step1 first.")
-            return
+            return False
 
         # Step 2: ANN search
         print("\n" + "=" * 80)
         print("Step 2: ANN search")
         print("=" * 80)
-        query_to_products = run_ann_search(query_embs, ann_output, top_k=args.top_k)
+        query_to_products = run_ann_search(query_embs, ann_output, top_k=top_k)
 
     # Step 3: Generate output
     print("\n" + "=" * 80)
     print("Step 3: Generate output with JourneyWithProducts")
     print("=" * 80)
-    generate_output(query_to_products, args.input_file, final_output,
-                    args.score_threshold, max_rows, jwp_output=jwp_output)
+    generate_output(query_to_products, input_file, final_output,
+                    score_threshold, max_rows, jwp_output=jwp_output)
 
-    print("\nStep 2 Done!")
+    print("\nDone!")
+    return True
+
+
+# ========== Main ==========
+def main():
+    parser = argparse.ArgumentParser(description="Step 2: ANN search and OUTPUT generation")
+    parser.add_argument("--input_file", type=str,
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results.tsv",
+                        help="Path to Journey_Results TSV from step0")
+    parser.add_argument("--input_folder", type=str, 
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/",
+                        help="Path to a folder; processes all *_results.tsv / *_Results.tsv files inside it")
+    parser.add_argument("--work_dir", type=str, default=None,
+                        help="Working directory (default: same dir as input_file)")
+    parser.add_argument("--debug", action="store_true", help="Debug mode: process only first N rows")
+    parser.add_argument("--debug_rows", type=int, default=5, help="Number of rows in debug mode (default: 5)")
+    parser.add_argument("--skip_ann", action="store_true", help="Skip ANN search, load existing results")
+    parser.add_argument("--top_k", type=int, default=20, help="Number of nearest neighbors per query")
+    parser.add_argument("--score_threshold", type=float, default=0.85, help="Score threshold (default: 0.85)")
+    args = parser.parse_args()
+
+    max_rows = args.debug_rows if args.debug else 0
+
+    if args.input_folder and os.path.isdir(args.input_folder):
+        # Folder mode: find all *_results.tsv / *_Results.tsv files
+        all_files = sorted(
+            glob.glob(os.path.join(args.input_folder, "*_results.tsv"))
+            + glob.glob(os.path.join(args.input_folder, "*_Results.tsv"))
+        )
+        all_files = sorted(set(all_files))
+        # Exclude files that are themselves outputs from step1/step2/step3
+        all_files = [f for f in all_files
+                     if not any(f.endswith(s) for s in (
+                         "_query_embeddings.tsv", "_queries.tsv",
+                         "_ann_results.tsv", "_with_products.tsv",
+                     ))]
+
+        work_dir = args.work_dir or args.input_folder
+
+        # Check which files already have JWP output
+        files_to_process = []
+        files_skipped = []
+        for f in all_files:
+            base = os.path.splitext(os.path.basename(f))[0]
+            jwp_file = os.path.join(work_dir, f"{base}_JWP.tsv")
+            if os.path.isfile(jwp_file):
+                files_skipped.append(f)
+            else:
+                files_to_process.append(f)
+
+        print(f"Folder: {args.input_folder}")
+        print(f"Found {len(all_files)} *_results.tsv file(s)")
+        print(f"  To process: {len(files_to_process)}")
+        print(f"  Skipped (already have JWP): {len(files_skipped)}")
+        if files_skipped:
+            for f in files_skipped:
+                print(f"    SKIP: {os.path.basename(f)}")
+        print()
+
+        if not files_to_process:
+            print("Nothing to process!")
+            return
+
+        os.makedirs(work_dir, exist_ok=True)
+        files_succeeded = []
+        files_failed = []
+        for i, f in enumerate(files_to_process, 1):
+            print(f"{'#' * 70}")
+            print(f"Processing file {i}/{len(files_to_process)}: {os.path.basename(f)}")
+            print(f"{'#' * 70}")
+            ok = process_file(f, work_dir, args.skip_ann,
+                              args.top_k, args.score_threshold,
+                              max_rows=max_rows)
+            if ok:
+                files_succeeded.append(f)
+            else:
+                files_failed.append(f)
+            print()
+
+        # Final summary
+        print()
+        print("=" * 70)
+        print("FOLDER PROCESSING SUMMARY")
+        print("=" * 70)
+        print(f"Total *_results.tsv found:       {len(all_files)}")
+        print(f"  Skipped (already done):        {len(files_skipped)}")
+        print(f"  Processed successfully:        {len(files_succeeded)}")
+        print(f"  Failed:                        {len(files_failed)}")
+        if files_succeeded:
+            print("\nProcessed:")
+            for f in files_succeeded:
+                print(f"  OK:   {os.path.basename(f)}")
+        if files_failed:
+            print("\nFailed:")
+            for f in files_failed:
+                print(f"  FAIL: {os.path.basename(f)}")
+
+    elif args.input_file:
+        # Single-file mode
+        work_dir = args.work_dir or os.path.dirname(args.input_file)
+        os.makedirs(work_dir, exist_ok=True)
+        process_file(args.input_file, work_dir, args.skip_ann,
+                     args.top_k, args.score_threshold, max_rows=max_rows)
+
+    else:
+        print("ERROR: Please specify --input_file or --input_folder")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

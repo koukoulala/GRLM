@@ -69,100 +69,24 @@ RESOURCES_DIR = os.path.join(PROJECT_DIR, "resources")
 sys.path.insert(0, RESOURCES_DIR)
 from llm_utils import (load_prompts, run_llm_parallel_with_checkpoint,
                       cleanup_checkpoint)
-from Infer_by_papyrus import (run_papyrus_parallel,
-                              run_papyrus_parallel_with_checkpoint)
-
-
-# =============================================================================
-# Time Normalization
-# =============================================================================
-
-def _normalize_time_expr(match):
-    """Normalize a single time expression to days or hours.
-
-    Converts weeks/months to days. If result is 0 days and hours are
-    available, uses "X hours ago" instead.
-    """
-    text = match.group(0)
-
-    # Parse all numeric + unit pairs in the expression
-    parts = re.findall(r'(\d+)\s*(month|week|day|hour|minute|second)s?', text,
-                       re.IGNORECASE)
-    if not parts:
-        return text
-
-    total_hours = 0
-    total_minutes = 0
-    for num_str, unit in parts:
-        num = int(num_str)
-        unit_lower = unit.lower()
-        if unit_lower == 'month':
-            total_hours += num * 30 * 24
-        elif unit_lower == 'week':
-            total_hours += num * 7 * 24
-        elif unit_lower == 'day':
-            total_hours += num * 24
-        elif unit_lower == 'hour':
-            total_hours += num
-        elif unit_lower == 'minute':
-            total_minutes += num
-        elif unit_lower == 'second':
-            total_minutes += 0
-
-    total_days = total_hours // 24
-
-    if total_days > 0:
-        return f"{total_days} days ago"
-    elif total_hours > 0:
-        return f"{total_hours} hours ago"
-    elif total_minutes > 0:
-        return f"{total_minutes} minutes ago"
-    else:
-        return "0 minutes ago"
-
-
-def normalize_event_times(events_text):
-    """Normalize all time expressions in event text to days/hours.
-
-    Converts patterns like "2 weeks 3 days ago", "1 month ago" to
-    "17 days ago", "30 days ago". If result is 0 days, shows hours.
-    """
-    # Match time expressions like "X weeks Y days ago", "X months ago", etc.
-    pattern = r'(?:\d+\s*(?:month|week|day|hour|minute|second)s?\s*)+ago'
-    return re.sub(pattern, _normalize_time_expr, events_text, flags=re.IGNORECASE)
-
-
-def truncate_events(events_text, max_events):
-    """Keep only the most recent max_events events.
-
-    Events are newline-separated lines. Each line starts with an index number.
-    Keeps the first max_events lines (most recent events come first).
-    """
-    lines = [line for line in events_text.strip().split("\n") if line.strip()]
-    if len(lines) <= max_events:
-        return events_text
-    return "\n".join(lines[:max_events])
 
 
 # =============================================================================
 # Data Loading
 # =============================================================================
 
-def read_user_events_tsv(filepath, max_events=100):
+def read_user_events_tsv(filepath):
     """Read TSV file and extract UserId and ReadableUserEvents columns.
 
     Reads column names from the header row so the script is resilient to
-    column ordering and extra columns. Normalizes time expressions and
-    truncates events to max_events.
+    column ordering and extra columns.
 
     Args:
         filepath: Path to the input TSV file.
-        max_events: Maximum number of events to keep per user.
 
     Returns:
         List of (user_id, events_text) tuples, where events_text has
-        "#N#" replaced with newline characters, time expressions
-        normalized, and events truncated.
+        "#N#" replaced with newline characters.
     """
     users = []
     with open(filepath, "r", encoding="utf-8") as f:
@@ -193,10 +117,6 @@ def read_user_events_tsv(filepath, max_events=100):
 
             # Replace "#N#" separator with actual newlines
             events_text = events_raw.replace("#N#", "\n")
-            # Normalize time expressions (weeks/months -> days)
-            events_text = normalize_event_times(events_text)
-            # Truncate to max_events
-            events_text = truncate_events(events_text, max_events)
             users.append((user_id, events_text))
 
     return users
@@ -242,7 +162,6 @@ def extract_and_validate_json(raw_text):
     text = raw_text.strip()
 
     # Strip markdown code fences if present
-    import re
     fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
@@ -354,6 +273,9 @@ def run_profile_generation_papyrus(
     Returns:
         List of (user_id, profile_json_string) tuples in original order.
     """
+    from Infer_by_papyrus import (run_papyrus_parallel,
+                                   run_papyrus_parallel_with_checkpoint)
+
     inputs = _build_inputs(users, prompt_template)
 
     if debug:
@@ -394,13 +316,15 @@ def parse_args():
     parser.add_argument(
         "--input_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_200K_EnUs_UserReadableHis_HisLarge50.tsv",
         help="Path to input TSV file with UserId and ReadableUserEvents columns",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data/",
         help="Directory to save output files",
     )
     parser.add_argument(
@@ -408,12 +332,6 @@ def parse_args():
         type=str,
         default="./resources/prompts.yaml",
         help="Path to prompts.yaml file with prompt templates",
-    )
-    parser.add_argument(
-        "--max_events",
-        type=int,
-        default=50,
-        help="Maximum number of events to keep per user",
     )
     parser.add_argument(
         "--inference_backend",
@@ -663,7 +581,6 @@ def main():
     print(f"  Input file:    {args.input_file}")
     print(f"  Output dir:    {args.output_dir}")
     print(f"  Backend:       {backend}")
-    print(f"  Max events:    {args.max_events}")
     print(f"  Max tokens:    {args.max_tokens}")
     if backend == "copilot":
         print(f"  Model:         {args.copilot_model}")
@@ -693,9 +610,9 @@ def main():
 
     # ---- Load data ----
     print(f"\nLoading user events from: {args.input_file}")
-    all_users = read_user_events_tsv(args.input_file, max_events=args.max_events)
+    all_users = read_user_events_tsv(args.input_file)
     total_loaded = len(all_users)
-    print(f"  Loaded {total_loaded} users (max {args.max_events} events each)")
+    print(f"  Loaded {total_loaded} users")
 
     # Filter out users with empty events
     empty_event_users = [(uid, ev) for uid, ev in all_users if not ev.strip()]

@@ -592,20 +592,20 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         #default="./processed/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(

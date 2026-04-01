@@ -1,18 +1,30 @@
 """
-Build enriched item JSON from JourneyProduct TSV file.
+Build enriched item JSON from JourneyProduct TSV file, optionally enriched
+with a secondary Step0_Product TSV file.
 
-Input TSV file:
+Input TSV files:
   JourneyProduct: columns are:
      GlobalOfferId, Title, Embedding, Seller, Gender, OriginalPrice,
      LLMCatId, CategoryName, AgeGroup, Brand, Description, OfferUrl, ImageUrl
+
+  Step0_Product (optional, has its own header row): columns are:
+     OfferId, GlobalOfferId, Title, Price, Brand, Model, Color, Size,
+     Material, Condition, Gender, AgeGroup, Description, LLMCatId,
+     BingCategory, GoogleCategory, MerchantCategory, Seller, Market,
+     MerchantId, MerchantProductId, CdmProperties, OfferURL,
+     OriginalImageURL, RowNumber
+
+  When both files are provided, Step0_Product has higher priority:
+  for overlapping GlobalOfferIds, non-empty fields from Step0_Product
+  overwrite JourneyProduct fields, and empty fields are filled in.
 
 Output:
   A JSON file keyed by GlobalOfferId, each item containing:
     - title (str)
     - description (str)
-    - categories (str) - from CategoryName
+    - categories (str) - from CategoryName / BingCategory
     - attributes (dict): Brand, Seller, Gender, AgeGroup, Price, Model,
-      Color, Size, Material. Only non-empty fields are included.
+      Color, Size, Material, Market. Only non-empty fields are included.
 
 Rules:
   - Items without a title are removed.
@@ -75,7 +87,7 @@ def read_tsv(filepath, expected_columns=None):
 
 
 def collect_from_rows(rows, title_key="Title", desc_key="Description",
-                      category_key=None):
+                      category_key=None, category_fallback_keys=None):
     """Collect item data grouped by GlobalOfferId from a set of rows.
 
     Args:
@@ -84,6 +96,8 @@ def collect_from_rows(rows, title_key="Title", desc_key="Description",
         desc_key: Column name for description.
         category_key: Column name for category (e.g., "Category" or
                       "CategoryName"). If None, category is not extracted.
+        category_fallback_keys: Optional list of fallback column names for
+            category. Tried in order when category_key value is empty.
 
     Returns:
         Dict: GlobalOfferId -> {
@@ -105,10 +119,15 @@ def collect_from_rows(rows, title_key="Title", desc_key="Description",
         if desc and not data[gid]["description"]:
             data[gid]["description"] = desc
 
-        # Category
-        if category_key:
+        # Category (with fallback keys)
+        if category_key and not data[gid]["category"]:
             cat = row.get(category_key, "").strip()
-            if cat and not data[gid]["category"]:
+            if not cat and category_fallback_keys:
+                for fb_key in category_fallback_keys:
+                    cat = row.get(fb_key, "").strip()
+                    if cat:
+                        break
+            if cat:
                 data[gid]["category"] = cat
 
         # Store full row for attribute extraction (first occurrence wins)
@@ -165,9 +184,16 @@ def parse_args():
         help="Path to JourneyProduct TSV file",
     )
     parser.add_argument(
+        "--more_product_file",
+        type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step0_Product.tsv",
+        help="Optional path to Step0_Product TSV file (has its own header). "
+             "Higher priority than JourneyProduct for overlapping GIDs. "
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -184,10 +210,10 @@ def main():
     args = parse_args()
 
     # =========================================================================
-    # Step 1: Read input TSV file
+    # Step 1: Read input TSV files
     # =========================================================================
     print("=" * 70)
-    print("Step 1: Reading input TSV file")
+    print("Step 1: Reading input TSV files")
     print("=" * 70)
 
     # JourneyProduct: specific columns
@@ -200,6 +226,13 @@ def main():
     journey_rows = read_tsv(args.journey_product_file, expected_columns=journey_columns)
     print(f"    Rows: {len(journey_rows):,}")
 
+    # Step0_Product (optional): self-describing header
+    product_rows = []
+    if args.more_product_file:
+        print(f"\n  Reading Step0_Product: {args.more_product_file}")
+        product_rows = read_tsv(args.more_product_file)  # uses its own header
+        print(f"    Rows: {len(product_rows):,}")
+
     # =========================================================================
     # Step 2: Group data by GlobalOfferId
     # =========================================================================
@@ -209,9 +242,30 @@ def main():
     print("=" * 70)
 
     journey_data = collect_from_rows(journey_rows, category_key="CategoryName")
-    all_gids = set(journey_data.keys())
+    journey_gids = set(journey_data.keys())
+    print(f"  Unique GIDs in JourneyProduct:             {len(journey_gids):>10,}")
 
-    print(f"  Unique GlobalOfferIds in JourneyProduct:   {len(all_gids):>10,}")
+    product_data = {}
+    product_gids = set()
+    if product_rows:
+        product_data = collect_from_rows(
+            product_rows,
+            category_key="BingCategory",
+            category_fallback_keys=["GoogleCategory", "MerchantCategory"],
+        )
+        product_gids = set(product_data.keys())
+        print(f"  Unique GIDs in Step0_Product:              {len(product_gids):>10,}")
+
+    # Overlap statistics
+    all_gids = journey_gids | product_gids
+    overlap_gids = journey_gids & product_gids
+    journey_only_gids = journey_gids - product_gids
+    product_only_gids = product_gids - journey_gids
+
+    print(f"  Overlapping GIDs (in both files):          {len(overlap_gids):>10,}")
+    print(f"  GIDs only in JourneyProduct:               {len(journey_only_gids):>10,}")
+    print(f"  GIDs only in Step0_Product:                {len(product_only_gids):>10,}")
+    print(f"  Total unique GIDs (union):                 {len(all_gids):>10,}")
 
     # =========================================================================
     # Step 3: Identify conflicting titles
@@ -221,9 +275,17 @@ def main():
     print("Step 3: Identifying items with conflicting titles")
     print("=" * 70)
 
+    # Merge title sets for conflict detection
+    merged_titles = defaultdict(set)
+    for gid in all_gids:
+        if gid in journey_data:
+            merged_titles[gid] |= journey_data[gid]["titles"]
+        if gid in product_data:
+            merged_titles[gid] |= product_data[gid]["titles"]
+
     conflicting_gids = set()
     for gid in all_gids:
-        if len(journey_data[gid]["titles"]) > 1:
+        if len(merged_titles[gid]) > 1:
             conflicting_gids.add(gid)
 
     print(f"  GlobalOfferIds with conflicting titles:     {len(conflicting_gids):>10,}")
@@ -241,6 +303,9 @@ def main():
         "conflict_removed": 0,
         "no_title": 0,
         "field_truncated": 0,
+        "product_enriched": 0,
+        "product_new": 0,
+        "fields_filled": 0,
     }
     max_field_len = args.max_field_length
 
@@ -253,20 +318,33 @@ def main():
             stats["conflict_removed"] += 1
             continue
 
-        # Get title
+        j_data = journey_data.get(gid)
+        p_data = product_data.get(gid)
+
+        # --- Title: product_data has higher priority ---
         title = ""
-        if journey_data[gid]["titles"]:
-            title = next(iter(journey_data[gid]["titles"]))
+        if p_data and p_data["titles"]:
+            title = next(iter(p_data["titles"]))
+        if not title and j_data and j_data["titles"]:
+            title = next(iter(j_data["titles"]))
 
         if not title:
             stats["no_title"] += 1
             continue
 
-        # Get description
-        description = journey_data[gid]["description"]
+        # --- Description: product_data preferred, fallback to journey ---
+        description = ""
+        if p_data and p_data["description"]:
+            description = p_data["description"]
+        if not description and j_data and j_data["description"]:
+            description = j_data["description"]
 
-        # Get category from CategoryName
-        categories = journey_data[gid]["category"]
+        # --- Category: product_data preferred, fallback to journey ---
+        categories = ""
+        if p_data and p_data["category"]:
+            categories = p_data["category"]
+        if not categories and j_data and j_data["category"]:
+            categories = j_data["category"]
 
         # Truncate overly long fields
         if len(title) > max_field_len:
@@ -279,10 +357,25 @@ def main():
             stats["field_truncated"] += 1
             categories = categories[:max_field_len]
 
-        # Build attributes from JourneyProduct
+        # --- Attributes: product_data preferred, journey fills gaps ---
         attrs = {}
-        if journey_data[gid]["row"]:
-            attrs = build_attributes(journey_data[gid]["row"])
+        if p_data and p_data["row"]:
+            attrs = build_attributes(p_data["row"])
+        if j_data and j_data["row"]:
+            j_attrs = build_attributes(j_data["row"])
+            filled_count = 0
+            for k, v in j_attrs.items():
+                if k not in attrs or not attrs[k]:
+                    attrs[k] = v  # journey fills empty fields only
+                    filled_count += 1
+            if filled_count > 0:
+                stats["fields_filled"] += filled_count
+
+        # Track source contribution
+        if p_data and j_data:
+            stats["product_enriched"] += 1
+        elif p_data and not j_data:
+            stats["product_new"] += 1
 
         # Track attribute coverage
         for field in attr_counts:
@@ -299,6 +392,9 @@ def main():
     print(f"  Items removed (conflicting titles):        {stats['conflict_removed']:>10,}")
     print(f"  Items removed (missing title):             {stats['no_title']:>10,}")
     print(f"  Fields truncated (over max length):        {stats['field_truncated']:>10,}")
+    print(f"  Items enriched by Step0_Product:           {stats['product_enriched']:>10,}")
+    print(f"  Items new from Step0_Product only:         {stats['product_new']:>10,}")
+    print(f"  Attribute fields filled from Step0_Product:{stats['fields_filled']:>10,}")
     print(f"  Total items in final output:               {len(items):>10,}")
 
     # =========================================================================
@@ -330,7 +426,13 @@ def main():
 
     # Source stats
     print()
-    print(f"  JourneyProduct:  {len(all_gids):>10,} total -> {len(items):>10,} kept")
+    print(f"  JourneyProduct:  {len(journey_gids):>10,} GIDs")
+    if product_gids:
+        print(f"  Step0_Product:   {len(product_gids):>10,} GIDs")
+        print(f"  Overlap:         {len(overlap_gids):>10,} GIDs")
+        print(f"  Journey only:    {len(journey_only_gids):>10,} GIDs")
+        print(f"  Product only:    {len(product_only_gids):>10,} GIDs")
+    print(f"  Union total:     {len(all_gids):>10,} GIDs -> {len(items):>10,} kept")
 
     # =========================================================================
     # Step 6: Write output

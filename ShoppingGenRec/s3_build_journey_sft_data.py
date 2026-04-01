@@ -42,6 +42,7 @@ Usage:
 import os
 import csv
 import json
+import re
 import sys
 import random
 import argparse
@@ -54,17 +55,61 @@ csv.field_size_limit(sys.maxsize)
 
 
 # =============================================================================
+# Time Normalization
+# =============================================================================
+
+def _normalize_time_expr(match):
+    """Normalize a single time expression to days or hours."""
+    text = match.group(0)
+    parts = re.findall(r'(\d+)\s*(month|week|day|hour|minute|second)s?', text,
+                       re.IGNORECASE)
+    if not parts:
+        return text
+
+    total_hours = 0
+    total_minutes = 0
+    for num_str, unit in parts:
+        num = int(num_str)
+        unit_lower = unit.lower()
+        if unit_lower == 'month':
+            total_hours += num * 30 * 24
+        elif unit_lower == 'week':
+            total_hours += num * 7 * 24
+        elif unit_lower == 'day':
+            total_hours += num * 24
+        elif unit_lower == 'hour':
+            total_hours += num
+        elif unit_lower == 'minute':
+            total_minutes += num
+
+    total_days = total_hours // 24
+    if total_days > 0:
+        return f"{total_days} days ago"
+    elif total_hours > 0:
+        return f"{total_hours} hours ago"
+    elif total_minutes > 0:
+        return f"{total_minutes} minutes ago"
+    return "0 minutes ago"
+
+
+def normalize_event_times(text):
+    """Normalize all time expressions (weeks/months -> days) in event text."""
+    pattern = r'(?:\d+\s*(?:month|week|day|hour|minute|second)s?\s*)+ago'
+    return re.sub(pattern, _normalize_time_expr, text, flags=re.IGNORECASE)
+
+
+# =============================================================================
 # Constants
 # =============================================================================
 
-DEFAULT_MAX_EVENTS = 100
-DEFAULT_MAX_RECENT_EVENTS = 100
+DEFAULT_MAX_EVENTS = 50
+DEFAULT_MAX_RECENT_EVENTS = 50
 DEFAULT_MAX_PRODUCTS = 20
 DEFAULT_MIN_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 10
-DEFAULT_KEEP_EMPTY_RATIO = 0.8
-DEFAULT_HALF_FILTERED_DROP = True
+DEFAULT_KEEP_EMPTY_RATIO = 0
+DEFAULT_COUNT_RATIO = 1.0
 
 
 # =============================================================================
@@ -302,48 +347,71 @@ def build_output_json(resolved_journeys):
 # Task-Specific Builders
 # =============================================================================
 
-def create_instruction(task, num_journeys, min_products_in_user):
-    """Create instruction text based on task and journey count.
+def create_instruction(task, num_journeys, min_products_in_user,
+                       count_ratio=DEFAULT_COUNT_RATIO):
+    """Create instruction text and requirement lines.
 
-    50% of the time (when num_journeys > 0), the specific journey count is
-    omitted so the model learns to decide how many journeys to generate.
-    The "at least N products" is set to the minimum product count across
-    this user's journeys, so the instruction matches the actual output.
+    The instruction is a single paragraph matching the canonical format:
+      "Based on ... predict {N} shopping journey(s) ... at least {M}
+       recommended products ... Output JSON: {...}."
+
+    Requirement lines are also returned separately to be appended to the
+    input text for extra emphasis.
 
     Returns:
-        Tuple of (instruction_text, has_count) where has_count indicates
-        whether the specific journey count was included.
+        Tuple of (instruction_text, has_count, requirements) where
+        has_count indicates whether the specific journey count was included,
+        and requirements is a list of requirement strings.
     """
-    if task == "event2journey":
-        base = "Based on the user's shopping event history, "
-    else:
-        base = "Based on the user's shopping profile and recent shopping events, "
+    has_count = num_journeys > 0 and random.random() < count_ratio
 
-    # 50% chance to specify the count (only when non-zero)
-    has_count = num_journeys > 0 and random.random() < 0.5
+    # --- Build opening with embedded journey count ---
+    if task == "event2journey":
+        if has_count:
+            opening = (f"Based on the user's shopping event history, predict "
+                       f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+        else:
+            opening = ("Based on the user's shopping event history, predict "
+                       "shopping journey(s) the user is likely to pursue.")
+    else:
+        if has_count:
+            opening = (f"Based on the user's shopping profile and shopping event history, predict "
+                       f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+        else:
+            opening = ("Based on the user's shopping profile and shopping event history, predict "
+                       "shopping journey(s) the user is likely to pursue.")
+
+    # --- Embed product count into description ---
+    product_text = f"at least {min_products_in_user}"
+
+    # --- Single-paragraph instruction ---
+    instruction = (
+        f"{opening}"
+        f" Each journey represents a different product category."
+        f" Each journey has a short, engaging title, a brief user-centric reason"
+        f" referencing the user's history, and {product_text} recommended products"
+        f" as text IDs (7 slots each)."
+        f" Products within each journey should cover different brands, styles, use cases"
+        f" and subcategories -- avoid recommending near-identical items."
+        f' Output JSON:'
+        f' {{"ContinuedJourneys":[{{"Title":"...","Reason":"...",'
+        f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
+    )
+
+    # --- Build prompt line with embedded requirements ---
+    parts = ["Predict the user's shopping journeys"]
     if has_count:
         jword = "journey" if num_journeys == 1 else "journeys"
-        base += f"predict {num_journeys} distinct shopping {jword} "
-    else:
-        base += "predict the shopping journey(s) "
-    base += "the user is likely to pursue. "
+        parts.append(f"exactly {num_journeys} {jword}")
+    parts_str = ", ".join(parts)
+    prompt_line = f"{parts_str}, at least {min_products_in_user} products in each journey:"
 
-    base += (
-        "Each journey represents a different product category. "
-        "Each journey has a short, engaging title, "
-        "a brief user-centric reason referencing the user's history, "
-        f"and at least {min_products_in_user} recommended products as text IDs (7 slots each). "
-        "Products within each journey should cover different brands, styles, use cases "
-        "and subcategories — avoid recommending near-identical items. "
-        "If no meaningful journeys can be inferred, output an empty list. "
-        'Output JSON: {"ContinuedJourneys":[{"Title":"...","Reason":"...",'
-        '"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]},...]}.'
-    )
-    return base, has_count
+    return instruction, has_count, prompt_line
 
 
 def build_input_text(task, user_events, max_events,
-                     profile_text=None, max_recent_events=None):
+                     profile_text=None, max_recent_events=None,
+                     prompt_line=None):
     """Build input text based on task type.
 
     Args:
@@ -352,19 +420,22 @@ def build_input_text(task, user_events, max_events,
         max_events: Max events for event2journey.
         profile_text: Profile JSON string (profile2journey only).
         max_recent_events: Max recent events for profile2journey.
+        prompt_line: Final prompt string with embedded requirements.
 
     Returns:
         Tuple of (input_text, num_events_used).
     """
+    final_prompt = prompt_line or "Predict the user's shopping journeys:"
     if task == "event2journey":
         events = user_events[:max_events]
         lines = ["User Event History:"]
         for idx, event in enumerate(events, 1):
+            event = normalize_event_times(event)
             if len(event) > 150:
                 event = event[:150] + "..."
             lines.append(f"{idx} | {event}")
         lines.append("")
-        lines.append("Predict the user's shopping journeys:")
+        lines.append(final_prompt)
         return "\n".join(lines), len(events)
     else:  # profile2journey
         n = max_recent_events or DEFAULT_MAX_RECENT_EVENTS
@@ -376,11 +447,12 @@ def build_input_text(task, user_events, max_events,
             "Recent Shopping Events:",
         ]
         for idx, event in enumerate(recent, 1):
+            event = normalize_event_times(event)
             if len(event) > 150:
                 event = event[:150] + "..."
             lines.append(f"{idx} | {event}")
         lines.append("")
-        lines.append("Predict the user's shopping journeys:")
+        lines.append(final_prompt)
         return "\n".join(lines), len(recent)
 
 
@@ -436,6 +508,7 @@ def create_sft_data(
     min_journeys=DEFAULT_MIN_JOURNEYS,
     max_journeys=DEFAULT_MAX_JOURNEYS,
     keep_empty_ratio=DEFAULT_KEEP_EMPTY_RATIO,
+    count_ratio=DEFAULT_COUNT_RATIO,
 ):
     """Create SFT data for the specified task.
 
@@ -451,6 +524,7 @@ def create_sft_data(
         min_journeys: Min journeys per user after filtering (default 1).
         max_journeys: Max journeys per sample; excess are subsampled (default 10).
         keep_empty_ratio: Fraction of zero-journey users to retain.
+        count_ratio: Probability of including journey count in instruction.
 
     Returns:
         List of SFT sample dicts.
@@ -501,13 +575,12 @@ def create_sft_data(
 
         # Resolve all journeys' product IDs to TIDs, then diversify
         resolved_journeys = []
-        journeys_before_filter = 0
+        journeys_before_filter = 0  # only count journeys that had valid TIDs
         for journey in journeys:
             orig_count = len(journey.get("product_ids", []))
             resolved = resolve_journey_tids(journey, id2meta, max_products)
             if resolved is None:
                 skipped_journeys_no_tid += 1
-                journeys_before_filter += 1
                 continue
             journeys_before_filter += 1
 
@@ -565,7 +638,7 @@ def create_sft_data(
             skip_reasons["below_min_journeys"] += 1
             continue
 
-        # Compute num_journeys and min_products_in_user from FINAL output
+        # Compute num_journeys and min product count from FINAL output
         final_num_journeys = len(resolved_journeys)
         if resolved_journeys:
             min_products_in_user = min(
@@ -574,22 +647,25 @@ def create_sft_data(
         else:
             min_products_in_user = min_products
 
-        # Build input text
+        # Instruction uses FINAL counts (after diversity + subsampling)
+        instruction, has_count, prompt_line = create_instruction(
+            task, final_num_journeys, min_products_in_user, count_ratio,
+        )
+
+        # Build input text (prompt_line is the final line with embedded requirements)
         if task == "event2journey":
             input_text, num_events_used = build_input_text(
                 task, user_events, max_events,
+                prompt_line=prompt_line,
             )
         else:  # profile2journey
             input_text, num_events_used = build_input_text(
                 task, user_events, max_events,
                 profile_text=profiles[user_id],
                 max_recent_events=max_recent_events,
+                prompt_line=prompt_line,
             )
 
-        # Instruction uses FINAL counts (after diversity + subsampling)
-        instruction, has_count = create_instruction(
-            task, final_num_journeys, min_products_in_user,
-        )
         if has_count:
             instruction_with_count += 1
         else:
@@ -815,7 +891,7 @@ def parse_args():
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/sft_data",
+                "Data/LLMTrainingData/20260324/sft_data_v3_new",
         help="Output directory",
     )
 
@@ -868,6 +944,13 @@ def parse_args():
         default=DEFAULT_KEEP_EMPTY_RATIO,
         help=f"Fraction of zero-journey users to keep as training samples "
              f"(default: {DEFAULT_KEEP_EMPTY_RATIO})",
+    )
+    parser.add_argument(
+        "--count_ratio",
+        type=float,
+        default=DEFAULT_COUNT_RATIO,
+        help=f"Probability of including the specific journey count in the "
+             f"instruction (default: {DEFAULT_COUNT_RATIO})",
     )
     parser.add_argument(
         "--seed",
@@ -951,6 +1034,7 @@ def main():
     print(f"  min_journeys = {args.min_journeys}")
     print(f"  max_journeys = {args.max_journeys}")
     print(f"  keep_empty_ratio = {args.keep_empty_ratio}")
+    print(f"  count_ratio = {args.count_ratio}")
     print(f"  seed = {args.seed}")
     print("=" * 70)
 
@@ -966,6 +1050,7 @@ def main():
         min_journeys=args.min_journeys,
         max_journeys=args.max_journeys,
         keep_empty_ratio=args.keep_empty_ratio,
+        count_ratio=args.count_ratio,
     )
 
     # =========================================================================
@@ -1006,4 +1091,27 @@ def main():
             out_obj = json.loads(sample["output"])
             cj = out_obj.get("ContinuedJourneys", [])
             if not cj:
+                print(f"  Output:         (empty journeys)")
+            else:
+                print(f"  Output ({len(cj)} journeys):")
+                for ji, journey in enumerate(cj[:3], 1):
+                    title = journey.get("Title", "")
+                    reason = journey.get("Reason", "")
+                    tids = journey.get("ProductTIDs", [])
+                    print(f"    Journey {ji}: {title}")
+                    print(f"      Reason: {reason[:120]}")
+                    print(f"      Products: {len(tids)} TIDs")
+                    if tids:
+                        print(f"        First: {tids[0]}")
+                if len(cj) > 3:
+                    print(f"    ... ({len(cj) - 3} more journeys)")
+        except json.JSONDecodeError:
+            print(f"  Output:         {sample['output'][:200]}...")
+
+    print(f"\n{'=' * 70}")
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()
                
