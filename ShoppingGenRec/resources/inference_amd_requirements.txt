@@ -5,7 +5,7 @@
 #       setuptools downgraded to 79.0.0 for vllm compat (<80)
 
 # === Inference Engine ===
-vllm==0.16.0rc2+rocm700       # pre-installed from Docker image; requires transformers<5
+vllm==0.16.0rc2.dev293+g2b84ac669.rocm700  # pre-installed from Docker image; requires transformers<5
 transformers==4.57.6           # must be <5 for vllm compat; does NOT support Qwen3.5 natively
                                # (vllm has its own model loading, so Qwen3.5 inference works)
 
