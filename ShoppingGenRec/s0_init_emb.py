@@ -198,6 +198,7 @@ def compute_similarities_faiss(
     nlist: int = 4096,
     nprobe: int = 128,
     num_threads: int = 0,
+    query_indices: np.ndarray = None,
 ) -> Dict:
     """Compute top-k cosine similarities using FAISS ANN.
 
@@ -222,6 +223,9 @@ def compute_similarities_faiss(
         nprobe: Number of clusters to search (higher = more accurate but slower).
         num_threads: Number of CPU threads for FAISS OpenMP parallelism.
             0 means use all available cores. Only effective on CPU.
+        query_indices: Optional numpy array of indices into embeddings/item_ids
+            to search for. If None, searches for all items. The index is
+            always built on ALL embeddings so neighbors come from the full set.
     """
     n, dim = embeddings.shape
 
@@ -244,7 +248,19 @@ def compute_similarities_faiss(
     else:
         mode_str = "FAISS CPU"
         use_gpu = False
-    print(f"Computing Top-{k} similarities for {n} items using {mode_str} ...")
+
+    # Determine query set
+    if query_indices is not None:
+        query_embeddings = embeddings[query_indices]
+        query_global_indices = query_indices  # maps local query idx -> global idx
+        num_queries = len(query_indices)
+        print(f"Computing Top-{k} similarities for {num_queries} query items "
+              f"(index built on {n} items) using {mode_str} ...")
+    else:
+        query_embeddings = embeddings
+        query_global_indices = np.arange(n)
+        num_queries = n
+        print(f"Computing Top-{k} similarities for {n} items using {mode_str} ...")
     print(f"  Index: IVFFlat, nlist={nlist}, nprobe={nprobe}, dim={dim}")
     start_time = time.time()
 
@@ -275,18 +291,18 @@ def compute_similarities_faiss(
     index.nprobe = min(nprobe, effective_nlist)
 
     # Batch search: search k+1 to exclude self, then filter
-    print(f"  Searching top-{k+1} neighbors ...")
+    print(f"  Searching top-{k+1} neighbors for {num_queries} queries ...")
     search_k = min(k + 1, n)
     # Search in batches to avoid OOM on very large datasets
     search_batch_size = 100000
     all_distances = []
     all_indices = []
-    num_batches = (n + search_batch_size - 1) // search_batch_size
-    for start in tqdm(range(0, n, search_batch_size),
+    num_batches = (num_queries + search_batch_size - 1) // search_batch_size
+    for start in tqdm(range(0, num_queries, search_batch_size),
                       total=num_batches, desc="  FAISS search",
                       dynamic_ncols=True):
-        end = min(start + search_batch_size, n)
-        D_batch, I_batch = index.search(embeddings[start:end], search_k)
+        end = min(start + search_batch_size, num_queries)
+        D_batch, I_batch = index.search(query_embeddings[start:end], search_k)
         all_distances.append(D_batch)
         all_indices.append(I_batch)
     D = np.vstack(all_distances)
@@ -294,20 +310,21 @@ def compute_similarities_faiss(
 
     # Build results dict, excluding self-matches
     results = {}
-    for i in tqdm(range(n), desc="  Building results", dynamic_ncols=True):
+    for qi in tqdm(range(num_queries), desc="  Building results", dynamic_ncols=True):
+        global_idx = int(query_global_indices[qi])
         similar_items = []
         for j in range(search_k):
-            idx = int(I[i, j])
-            if idx != i and idx >= 0:
+            idx = int(I[qi, j])
+            if idx != global_idx and idx >= 0:
                 similar_items.append(
                     {
                         "item_id": item_ids[idx],
-                        "similarity": float(D[i, j]),
+                        "similarity": float(D[qi, j]),
                     }
                 )
             if len(similar_items) >= k:
                 break
-        results[item_ids[i]] = similar_items
+        results[item_ids[global_idx]] = similar_items
 
     elapsed = time.time() - start_time
     print(f"FAISS similarity search finished in {elapsed:.2f}s")
@@ -321,19 +338,18 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
         "--embedding_model",
         type=str,
-        #default="/data/xiaoyukou/ckpts/Qwen3-Embedding-0.6B",
         default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3-Embedding-0.6B",
         help="Path to embedding model",
     )
@@ -374,7 +390,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()
@@ -415,6 +431,9 @@ def main():
     resume_dir = args.resume_from_dir.strip() if args.resume_from_dir else ""
     resume_emb_file = os.path.join(resume_dir, "embeddings.npy") if resume_dir else ""
     resume_ids_file = os.path.join(resume_dir, "item_ids.json") if resume_dir else ""
+    resume_sim_file = os.path.join(resume_dir, "similarities.json") if resume_dir else ""
+
+    new_id_set = set()  # track new items for incremental similarity
 
     if resume_dir and os.path.exists(resume_emb_file) and os.path.exists(resume_ids_file):
         print(f"\n[RESUME] Loading existing embeddings from: {resume_dir}")
@@ -452,6 +471,7 @@ def main():
                 tmp_dir=tmp_dir,
             )
             print(f"  New embeddings shape: {new_embeddings.shape}")
+            new_id_set = set(new_item_ids)
 
             # Merge: build arrays in current data order
             new_id_to_idx = {nid: i for i, nid in enumerate(new_item_ids)}
@@ -512,17 +532,67 @@ def main():
     # =========================================================================
     # Stage 2: FAISS similarity search
     # =========================================================================
-    # Always recompute similarities (even on resume) because the item set
-    # may have changed. Similarity is fast relative to embedding generation.
-    similarity_results = compute_similarities_faiss(
-        embeddings,
-        item_ids,
-        k=args.top_k,
-        faiss_gpu_id=0,
-        nlist=args.faiss_nlist,
-        nprobe=args.faiss_nprobe,
-        num_threads=args.faiss_threads,
-    )
+    # If resuming and we have previous similarities, only compute for new items
+    # and merge with previous results.
+    prev_similarities = {}
+    if resume_dir and new_id_set and os.path.exists(resume_sim_file):
+        print(f"\n[RESUME] Loading previous similarities from: {resume_sim_file}")
+        with open(resume_sim_file, "r", encoding="utf-8") as f:
+            prev_similarities = json.load(f)
+        print(f"  Previous similarity entries: {len(prev_similarities):,}")
+
+        # Filter: keep only entries for items still in current data
+        prev_similarities = {
+            k: v for k, v in prev_similarities.items() if k in current_id_set
+        }
+        # Also filter out neighbors that no longer exist
+        for k in prev_similarities:
+            prev_similarities[k] = [
+                nb for nb in prev_similarities[k]
+                if nb["item_id"] in current_id_set
+            ]
+        print(f"  Kept similarity entries (in current data): {len(prev_similarities):,}")
+
+    if new_id_set:
+        # Build query_indices: indices of new items in the merged arrays
+        id_to_global_idx = {iid: i for i, iid in enumerate(item_ids)}
+        query_indices = np.array(
+            [id_to_global_idx[nid] for nid in new_id_set if nid in id_to_global_idx],
+            dtype=np.int64,
+        )
+        print(f"\n  Computing similarities for {len(query_indices):,} new items only...")
+
+        new_similarity_results = compute_similarities_faiss(
+            embeddings,
+            item_ids,
+            k=args.top_k,
+            faiss_gpu_id=0,
+            nlist=args.faiss_nlist,
+            nprobe=args.faiss_nprobe,
+            num_threads=args.faiss_threads,
+            query_indices=query_indices,
+        )
+
+        # Merge: previous similarities for old items + new results for new items
+        similarity_results = prev_similarities
+        similarity_results.update(new_similarity_results)
+        print(f"  Merged similarities: {len(prev_similarities):,} old + "
+              f"{len(new_similarity_results):,} new = {len(similarity_results):,} total")
+    elif prev_similarities:
+        # No new items, but we loaded previous similarities — just use them
+        similarity_results = prev_similarities
+        print(f"  No new items, using {len(similarity_results):,} previous similarities")
+    else:
+        # Full run: compute similarities for all items
+        similarity_results = compute_similarities_faiss(
+            embeddings,
+            item_ids,
+            k=args.top_k,
+            faiss_gpu_id=0,
+            nlist=args.faiss_nlist,
+            nprobe=args.faiss_nprobe,
+            num_threads=args.faiss_threads,
+        )
 
     print(f"Saving similarity results to: {output_file}")
     with open(output_file, "w", encoding="utf-8") as f:

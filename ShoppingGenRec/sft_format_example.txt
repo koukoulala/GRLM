@@ -1,0 +1,35 @@
+================================================================================
+event2journey 模板
+================================================================================
+
+<|im_start|>user
+Based on the user's shopping event history, predict {num_journeys} shopping journey(s) the user is likely to pursue. Each journey represents a different product category. Each journey has a short, engaging title, a brief user-centric reason referencing the user's history, and at least {min_products} recommended products as text IDs (7 slots each). Products within each journey should cover different brands, styles, use cases and subcategories -- avoid recommending near-identical items. Output JSON: {"ContinuedJourneys":[{"Title":"...","Reason":"...","ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]},...]}. 
+User Event History:
+1 | {event_1}
+2 | {event_2}
+...
+N | {event_N}
+
+Predict the user's shopping journeys, exactly {num_journeys} journeys, at least {min_products} products in each journey:<|im_end|>
+<|im_start|>assistant
+{"ContinuedJourneys":[{"Title":"{title_1}","Reason":"{reason_1}","ProductTIDs":[["w1","w2","w3","w4","w5","w6","w7"],...]},{"Title":"{title_2}","Reason":"{reason_2}","ProductTIDs":[["w1","w2","w3","w4","w5","w6","w7"],...]}]}<|im_end|>
+
+
+================================================================================
+profile2journey 模板
+================================================================================
+
+<|im_start|>user
+Based on the user's shopping profile and shopping event history, predict {num_journeys} shopping journey(s) the user is likely to pursue. Each journey represents a different product category. Each journey has a short, engaging title, a brief user-centric reason referencing the user's history, and at least {min_products} recommended products as text IDs (7 slots each). Products within each journey should cover different brands, styles, use cases and subcategories -- avoid recommending near-identical items. Output JSON: {"ContinuedJourneys":[{"Title":"...","Reason":"...","ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]},...]}. 
+User Shopping Profile:
+{profile_json}
+
+Recent Shopping Events:
+1 | {event_1}
+2 | {event_2}
+...
+N | {event_N}
+
+Predict the user's shopping journeys, exactly {num_journeys} journeys, at least {min_products} products in each journey:<|im_end|>
+<|im_start|>assistant
+{"ContinuedJourneys":[{"Title":"{title_1}","Reason":"{reason_1}","ProductTIDs":[["w1","w2","w3","w4","w5","w6","w7"],...]},{"Title":"{title_2}","Reason":"{reason_2}","ProductTIDs":[["w1","w2","w3","w4","w5","w6","w7"],...]}]}<|im_end|>

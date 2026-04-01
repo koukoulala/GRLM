@@ -54,8 +54,6 @@ sys.path.insert(0, PREPROCESS_DIR)
 
 from llm_utils import (load_prompts, run_llm_parallel_with_checkpoint,
                         cleanup_checkpoint)
-from Infer_by_papyrus import (run_papyrus_parallel,
-                               run_papyrus_parallel_with_checkpoint)
 
 # Reuse event processing utilities from pre_s1
 from pre_s1_construct_shopping_profile import (
@@ -382,6 +380,9 @@ def run_journey_generation_papyrus(
     debug=False,
 ):
     """Generate shopping journeys via Papyrus API with checkpoint/resume."""
+    from Infer_by_papyrus import (run_papyrus_parallel,
+                                   run_papyrus_parallel_with_checkpoint)
+
     inputs = _build_inputs(rows, prompt_template)
 
     if debug:
@@ -423,12 +424,14 @@ def parse_args():
     # --- I/O ---
     parser.add_argument(
         "--input_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_200K_EnUs_UserReadableHis_HisLarge50.tsv",
         help="Path to raw input TSV (must have UserId, ReadableUserEvents)",
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/",
         help="Directory to save output files",
     )
     parser.add_argument(
@@ -510,7 +513,7 @@ def parse_args():
         help="Users per processing chunk for checkpoint saving",
     )
     parser.add_argument(
-        "--max_events", type=int, default=50,
+        "--max_events", type=int, default=500,
         help="Maximum number of events to keep per user",
     )
 
@@ -680,7 +683,7 @@ def main():
         out_name = args.output_name
     else:
         base = os.path.splitext(os.path.basename(args.input_file))[0]
-        out_name = f"{base}_Journey_Results.tsv"
+        out_name = f"{base}_Results.tsv"
 
     output_file = os.path.join(args.output_dir, out_name)
 
