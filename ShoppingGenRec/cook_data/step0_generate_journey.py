@@ -48,18 +48,60 @@ csv.field_size_limit(sys.maxsize)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 RESOURCES_DIR = os.path.join(PROJECT_DIR, "resources")
-PREPROCESS_DIR = os.path.join(PROJECT_DIR, "preprocess_raw_data")
 sys.path.insert(0, RESOURCES_DIR)
-sys.path.insert(0, PREPROCESS_DIR)
 
 from llm_utils import (load_prompts, run_llm_parallel_with_checkpoint,
                         cleanup_checkpoint)
 
-# Reuse event processing utilities from pre_s1
-from pre_s1_construct_shopping_profile import (
-    normalize_event_times,
-    truncate_events,
-)
+
+# =============================================================================
+# Event Processing Utilities
+# =============================================================================
+
+def _normalize_time_expr(match):
+    """Normalize a single time expression to days or hours."""
+    text = match.group(0)
+    parts = re.findall(r'(\d+)\s*(month|week|day|hour|minute|second)s?', text,
+                       re.IGNORECASE)
+    if not parts:
+        return text
+    total_hours = 0
+    total_minutes = 0
+    for num_str, unit in parts:
+        num = int(num_str)
+        u = unit.lower()
+        if u == 'month':
+            total_hours += num * 30 * 24
+        elif u == 'week':
+            total_hours += num * 7 * 24
+        elif u == 'day':
+            total_hours += num * 24
+        elif u == 'hour':
+            total_hours += num
+        elif u == 'minute':
+            total_minutes += num
+    total_days = total_hours // 24
+    if total_days > 0:
+        return f"{total_days} days ago"
+    elif total_hours > 0:
+        return f"{total_hours} hours ago"
+    elif total_minutes > 0:
+        return f"{total_minutes} minutes ago"
+    return "0 minutes ago"
+
+
+def normalize_event_times(text):
+    """Normalize all time expressions (weeks/months -> days) in event text."""
+    pattern = r'(?:\d+\s*(?:month|week|day|hour|minute|second)s?\s*)+ago'
+    return re.sub(pattern, _normalize_time_expr, text, flags=re.IGNORECASE)
+
+
+def truncate_events(events_text, max_events):
+    """Keep only the first max_events lines (most recent events)."""
+    lines = [line for line in events_text.strip().split("\n") if line.strip()]
+    if len(lines) <= max_events:
+        return events_text
+    return "\n".join(lines[:max_events])
 
 
 # =============================================================================
@@ -157,7 +199,7 @@ def read_raw_input(filepath, exclude_ids=None, max_events=100, max_rows=0):
     total_read = 0
     excluded_count = 0
 
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, "r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f, delimiter="\t")
         header = next(reader, None)
         if header is None:
@@ -425,7 +467,7 @@ def parse_args():
     parser.add_argument(
         "--input_file", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input.tsv",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_200K_EnUs_UserReadableHis_HisLarge50.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_ShoppingJourney_HisLarge_100_200K.tsv",
         help="Path to raw input TSV (must have UserId, ReadableUserEvents)",
     )
     parser.add_argument(
