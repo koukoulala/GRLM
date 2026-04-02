@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShoppingGenRec – Generative Shopping Journey Recommendation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+  }
+
+  .slide {
+    width: 1280px;
+    min-height: 720px;
+    margin: 40px auto;
+    padding: 48px 56px;
+    background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+    border: 1px solid #30363d;
+    border-radius: 16px;
+    position: relative;
+    overflow: hidden;
+    page-break-after: always;
+  }
+
+  .slide::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #58a6ff, #3fb950, #d29922);
+  }
+
+  .slide-number {
+    position: absolute;
+    bottom: 20px;
+    right: 32px;
+    font-size: 13px;
+    color: #484f58;
+    font-weight: 500;
+  }
+
+  .title-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .title-bar h1 {
+    font-size: 26px;
+    font-weight: 700;
+    color: #f0f6fc;
+    letter-spacing: -0.3px;
+  }
+
+  .title-bar .subtitle {
+    font-size: 14px;
+    color: #8b949e;
+    font-weight: 400;
+    margin-top: 4px;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-blue { background: rgba(88,166,255,0.15); color: #58a6ff; }
+  .badge-green { background: rgba(63,185,80,0.15); color: #3fb950; }
+  .badge-yellow { background: rgba(210,153,34,0.15); color: #d29922; }
+  .badge-purple { background: rgba(188,140,255,0.15); color: #bc8cff; }
+
+  .columns { display: flex; gap: 24px; }
+  .col { flex: 1; }
+  .col-wide { flex: 1.2; }
+  .col-narrow { flex: 0.8; }
+
+  .section-header {
+    font-size: 14px;
+    font-weight: 700;
+    color: #58a6ff;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .section-header .icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  .card {
+    background: rgba(22,27,34,0.8);
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #f0f6fc;
+    margin-bottom: 6px;
+  }
+
+  .card-body {
+    font-size: 12px;
+    color: #8b949e;
+    line-height: 1.65;
+  }
+
+  .card-body strong { color: #c9d1d9; }
+  .card-body code {
+    background: rgba(110,118,129,0.15);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #79c0ff;
+    font-family: 'SF Mono', Consolas, monospace;
+  }
+
+  .highlight-box {
+    background: rgba(88,166,255,0.08);
+    border-left: 3px solid #58a6ff;
+    border-radius: 0 8px 8px 0;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+
+  .highlight-box.green {
+    background: rgba(63,185,80,0.08);
+    border-left-color: #3fb950;
+  }
+
+  .highlight-box.yellow {
+    background: rgba(210,153,34,0.08);
+    border-left-color: #d29922;
+  }
+
+  .highlight-box.purple {
+    background: rgba(188,140,255,0.08);
+    border-left-color: #bc8cff;
+  }
+
+  .comparison-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    margin-bottom: 2px;
+  }
+
+  .comp-label {
+    width: 110px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #8b949e;
+    padding: 7px 10px;
+    background: rgba(22,27,34,0.6);
+    display: flex;
+    align-items: center;
+    border-radius: 4px 0 0 4px;
+  }
+
+  .comp-before {
+    flex: 1;
+    font-size: 11px;
+    color: #f85149;
+    padding: 7px 10px;
+    background: rgba(248,81,73,0.06);
+    display: flex;
+    align-items: center;
+  }
+
+  .comp-after {
+    flex: 1;
+    font-size: 11px;
+    color: #3fb950;
+    padding: 7px 10px;
+    background: rgba(63,185,80,0.06);
+    display: flex;
+    align-items: center;
+    border-radius: 0 4px 4px 0;
+  }
+
+  .flow-diagram {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+  }
+
+  .flow-step {
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.25);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 10.5px;
+    color: #c9d1d9;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .flow-arrow {
+    color: #484f58;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .metric-item {
+    background: rgba(22,27,34,0.6);
+    border: 1px solid #21262d;
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
+  .metric-label {
+    font-size: 10px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .metric-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: #f0f6fc;
+    margin-top: 2px;
+  }
+
+  .tag-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-weight: 500;
+  }
+  .tag.active { border-color: #58a6ff; color: #58a6ff; }
+
+  ul.compact {
+    list-style: none;
+    padding: 0;
+  }
+  ul.compact li {
+    font-size: 12px;
+    color: #8b949e;
+    line-height: 1.6;
+    padding-left: 14px;
+    position: relative;
+    margin-bottom: 3px;
+  }
+  ul.compact li::before {
+    content: '▸';
+    position: absolute;
+    left: 0;
+    color: #58a6ff;
+    font-size: 10px;
+    top: 1px;
+  }
+  ul.compact li strong { color: #c9d1d9; }
+
+  .divider {
+    height: 1px;
+    background: #21262d;
+    margin: 14px 0;
+  }
+
+  .footnote {
+    font-size: 10px;
+    color: #484f58;
+    position: absolute;
+    bottom: 18px;
+    left: 56px;
+  }
+
+  @media print {
+    body { background: white; }
+    .slide {
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      page-break-after: always;
+      page-break-inside: avoid;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ========================================================================
+     SLIDE 1: What is TermID, Why TermID, and ShoppingGenRec Task Design
+     ======================================================================== -->
+<div class="slide">
+  <div class="title-bar">
+    <div>
+      <h1>ShoppingGenRec: Generative Shopping Journey Recommendation via Term IDs</h1>
+      <div class="subtitle">From Item Identifiers to Multi-Journey Generation — Adapting GRLM (Zhang et al., arXiv 2601.06798) for Production Shopping</div>
+    </div>
+  </div>
+
+  <div class="columns">
+    <!-- LEFT COLUMN: Problem → TermID Concept → How it Works -->
+    <div class="col">
+
+      <!-- THE PROBLEM -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(248,81,73,0.2);color:#f85149;">!</span>
+        The Core Problem: How Do LLMs Represent Items?
+      </div>
+      <div class="card" style="border-left: 3px solid #f85149; margin-bottom: 10px;">
+        <div class="card-body">
+          <strong>Generative Recommendation</strong> replaces the traditional recall → rank pipeline with an LLM that <strong>autoregressively generates item identifiers</strong> from user behavior. The critical question: <em>how to represent items so an LLM can reliably generate them?</em>
+        </div>
+      </div>
+
+      <!-- TWO FAILED APPROACHES -->
+      <div class="comparison-row" style="margin-bottom:1px;">
+        <div class="comp-label" style="font-weight:700;">Approach</div>
+        <div class="comp-before" style="font-weight:600;">❌ Text IDs (Titles)</div>
+        <div class="comp-after" style="font-weight:600; color:#d29922; background:rgba(210,153,34,0.06);">❌ Semantic IDs (SIDs)</div>
+      </div>
+      <div class="comparison-row" style="margin-bottom:1px;">
+        <div class="comp-label">Representation</div>
+        <div class="comp-before" style="color:#8b949e;">Raw product titles/descriptions</div>
+        <div class="comp-after" style="color:#8b949e; background:rgba(210,153,34,0.04);">Quantized embedding codes (e.g. [42, 87, 13])</div>
+      </div>
+      <div class="comparison-row" style="margin-bottom:1px;">
+        <div class="comp-label">Weakness</div>
+        <div class="comp-before" style="color:#f85149;">Vast output space → <strong>hallucination</strong><br>Titles lack discriminative info</div>
+        <div class="comp-after" style="color:#d29922; background:rgba(210,153,34,0.04);"><strong>Semantic gap</strong> with LLM vocabulary<br>Costly vocab expansion + alignment</div>
+      </div>
+      <div class="comparison-row" style="margin-bottom:12px;">
+        <div class="comp-label">Limit</div>
+        <div class="comp-before" style="color:#f85149;">Needs constrained decoding</div>
+        <div class="comp-after" style="color:#d29922; background:rgba(210,153,34,0.04);">Domain-specific, no cross-domain</div>
+      </div>
+
+      <!-- TERM ID: THE SOLUTION -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(63,185,80,0.2);color:#3fb950;">★</span>
+        Solution: Term IDs (TIDs) — Best of Both Worlds
+      </div>
+      <div class="highlight-box green" style="margin-bottom: 10px;">
+        <div class="card-body">
+          <strong>Term ID = a fixed-length sequence of semantic keywords from the LLM's own vocabulary.</strong><br>
+          Each product is compressed into <strong>structured keyword slots</strong> ordered by importance.<br><br>
+          Example: <em>"Blue Mountain Unisex PVC Rainsuit"</em><br>
+          → TID: <code>[rainsuit, waterproof, pvc, unisex, mountain, blue, outdoor]</code><br><br>
+          <strong>Why it works:</strong><br>
+          ▸ <strong>Native vocabulary</strong> — no vocab expansion or alignment training needed<br>
+          ▸ <strong>Compact</strong> — 5~7 tokens per item vs. 20+ token titles → efficient sequence modeling<br>
+          ▸ <strong>Semantic</strong> — human-readable, captures core features, enables cross-domain transfer<br>
+          ▸ <strong>Low hallucination</strong> — GRLM achieves >99% valid rate (VR@10) and >99% direct hit rate
+        </div>
+      </div>
+
+      <!-- HOW TID IS GENERATED -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(88,166,255,0.2);color:#58a6ff;">⚙</span>
+        Context-Aware Term Generation (CTG)
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <strong>Problem:</strong> Naive LLM extraction produces inconsistent terms — "Cell-Phone" vs. "Mobile-Phone" for similar items, or identical generic terms for different models.<br><br>
+          <strong>Solution:</strong> Inject <strong>neighbor context</strong> so the LLM sees similar items when generating:<br>
+          <div style="margin: 8px 0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <div class="flow-step">Product Metadata</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step" style="border-color:rgba(63,185,80,0.4);">Embedding Model<br>(Qwen3-Emb)</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step" style="border-color:rgba(88,166,255,0.4);">FAISS ANN<br>Top-k Neighbors</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step" style="border-color:rgba(210,153,34,0.4);">LLM + Neighbors<br>as Context</div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step" style="border-color:rgba(63,185,80,0.4);">Structured<br>Term ID</div>
+          </div>
+          This ensures <strong>global consistency</strong> (same terms for shared attributes) + <strong>local discriminability</strong> (unique terms for distinguishing features). GRLM ablation shows CTG improves Recall@5 by 3-5%.
+        </div>
+      </div>
+
+      <!-- GRLM RESULTS HIGHLIGHT -->
+      <div class="highlight-box" style="margin-top: 10px;">
+        <div class="card-body">
+          <strong>GRLM Paper Results:</strong> SOTA on 3 in-domain + 4 cross-domain Amazon datasets. <strong>+7.8~30% Recall@5</strong> in-domain, <strong>+50~112% Recall@5</strong> cross-domain over all baselines. Follows LLM scaling law (0.6B→14B). No extra architecture needed for cross-domain — TIDs act as a <strong>"semantic bridge"</strong> across categories.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN: ShoppingGenRec Adaptation -->
+    <div class="col">
+
+      <!-- WHAT WE DID DIFFERENTLY -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(210,153,34,0.2);color:#d29922;">⚡</span>
+        ShoppingGenRec: From Next-Item to Shopping Journeys
+      </div>
+      <div class="card" style="border-left: 3px solid #d29922; margin-bottom: 10px;">
+        <div class="card-body">
+          <strong>GRLM</strong> predicts <em>one next item</em> from a user behavior sequence. But real shopping surfaces need <strong>themed multi-product journey generation</strong> — coherent groups of recommendations with titles, reasons, and diverse products. <strong>ShoppingGenRec</strong> extends GRLM to this new paradigm.
+        </div>
+      </div>
+
+      <!-- TERMID: 5 → 7 -->
+      <div class="card" style="border-left: 3px solid #bc8cff; margin-bottom: 10px;">
+        <div class="card-title"><span class="badge badge-purple">Adaptation 1</span> &nbsp;TermID: 5 Slots → 7 Slots</div>
+        <div class="card-body">
+          Production shopping catalogs (apparel, electronics, home) have richer attribute spaces than academic datasets. 7 slots with priority <code>category → function → feature → attribute → brand → seller → audience</code> reduce collision while the paper confirms 7-slot performance ≈ 5-slot (no degradation). Non-product items (services, software, restricted) filtered via empty <code>[]</code> output.
+        </div>
+      </div>
+
+      <!-- 3 TASKS -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(63,185,80,0.2);color:#3fb950;">T</span>
+        Multi-Task SFT Design — 3 Tasks
+      </div>
+
+      <div class="card" style="border-left: 3px solid #58a6ff; margin-bottom: 6px;">
+        <div class="card-title"><span class="badge badge-blue">Task 1</span> &nbsp;Meta → TermID (Generative Term Internalization)</div>
+        <div class="card-body">
+          Product metadata → <strong>7-word TID</strong>. Teaches model to internalize the TermID mapping without neighbor context (same as GRLM's GTI). Foundation for generating valid identifiers at inference time.
+        </div>
+      </div>
+
+      <div class="card" style="border-left: 3px solid #3fb950; margin-bottom: 6px;">
+        <div class="card-title"><span class="badge badge-green">Task 2</span> &nbsp;Events → Journeys (NEW: replaces next-item prediction)</div>
+        <div class="card-body">
+          User event history (browse/click/search + timestamps) → <strong>structured JSON: N themed journeys × M product TIDs</strong>. Each journey has title, personalized reason, and diverse product recommendations. <strong>Diversity algorithm:</strong> hard dedup (≥6/7 word overlap) + greedy reranking (minimize max overlap) + brand/seller tie-breaking.
+        </div>
+      </div>
+
+      <div class="card" style="border-left: 3px solid #d29922; margin-bottom: 10px;">
+        <div class="card-title"><span class="badge badge-yellow">Task 3</span> &nbsp;Profile + Events → Journeys (NEW: cold-start mitigation)</div>
+        <div class="card-body">
+          LLM-generated <strong>11-field user profile</strong> (gender, categories, brands, price sensitivity, fashion style, values, etc.) + events → journeys. Richer personalization for sparse-event users.
+        </div>
+      </div>
+
+      <!-- KEY COMPARISON TABLE -->
+      <div style="margin-top:4px;">
+        <div class="comparison-row">
+          <div class="comp-label">Dimension</div>
+          <div class="comp-before" style="font-weight:600;">GRLM (Paper)</div>
+          <div class="comp-after" style="font-weight:600;">ShoppingGenRec</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">TermID Slots</div>
+          <div class="comp-before">5 words</div>
+          <div class="comp-after">7 words (richer catalog)</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">Rec Task</div>
+          <div class="comp-before">Next single item</div>
+          <div class="comp-after">N journeys × M products</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">User Signal</div>
+          <div class="comp-before">Interaction sequence</div>
+          <div class="comp-after">Events + LLM profile</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">Metrics</div>
+          <div class="comp-before">Recall@k, NDCG@k</div>
+          <div class="comp-after">70+ journey quality metrics</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">Alignment</div>
+          <div class="comp-before">SFT only</div>
+          <div class="comp-after">SFT + RL (GRPO)</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comp-label">Domain</div>
+          <div class="comp-before">Amazon academic</div>
+          <div class="comp-after">Production shopping logs</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="footnote">GRLM: "Unleashing the Native Recommendation Potential" (Zhang et al., arXiv 2601.06798, Kuaishou, 2026) &nbsp;|&nbsp; ShoppingGenRec: Production Shopping Journey Extension</div>
+  <div class="slide-number">1 / 2</div>
+</div>
+
+
+<!-- ========================================================================
+     SLIDE 2: Pipeline, Evaluation, Known Issues & Next Steps
+     ======================================================================== -->
+<div class="slide">
+  <div class="title-bar">
+    <div>
+      <h1>Pipeline, Evaluation Framework, Known Issues & Next Steps</h1>
+      <div class="subtitle">End-to-End Flow, Multi-Dimensional Journey Quality Assessment, and RL Alignment</div>
+    </div>
+  </div>
+
+  <div class="columns">
+    <!-- LEFT COLUMN: Pipeline + Metrics -->
+    <div class="col-wide">
+
+      <!-- PIPELINE FLOW -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(188,140,255,0.2);color:#bc8cff;">P</span>
+        End-to-End Pipeline (8 Steps)
+      </div>
+
+      <div class="flow-diagram">
+        <div class="flow-step">s0: Raw Product TSVs</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(63,185,80,0.4);">s0: Qwen3-Emb<br>FAISS ANN Index</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(210,153,34,0.4);">s1: LLM + Neighbors<br>→ 7-word TID</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">s2: Meta→TID SFT</div>
+      </div>
+      <div class="flow-diagram">
+        <div class="flow-step">User Events + Profiles</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(63,185,80,0.4);">s3: Journey SFT<br>(event + profile)</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(210,153,34,0.4);">s4: Smart Merge<br>3 tasks → 1 dataset</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(188,140,255,0.4);">LlamaFactory SFT<br>(Qwen3-4B)</div>
+      </div>
+      <div class="flow-diagram" style="margin-bottom: 12px;">
+        <div class="flow-step">s5: Journey Eval<br>(TID → OfferId)</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(63,185,80,0.4);">s6: 70+ Quality<br>Metrics</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(210,153,34,0.4);">s7: RL Data<br>(GRPO format)</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step" style="border-color:rgba(188,140,255,0.4);">verl/EasyR1<br>RL Training</div>
+      </div>
+
+      <!-- EVALUATION PARADIGM SHIFT -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(88,166,255,0.2);color:#58a6ff;">E</span>
+        Evaluation: Single-Item Ranking → Journey Quality
+      </div>
+
+      <div class="highlight-box" style="margin-bottom: 10px;">
+        <div class="card-body">
+          GRLM measures <code>Recall@k / NDCG@k</code> — did the model rank the correct next item? ShoppingGenRec evaluates <strong>entire journey quality</strong> across <strong>7 dimensions</strong> with <strong>70+ metrics</strong>, reflecting real user satisfaction.
+        </div>
+      </div>
+
+      <!-- 7 METRIC DIMENSIONS -->
+      <div class="metric-grid" style="grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px;">
+        <div class="metric-item" style="border-left: 3px solid #58a6ff;">
+          <div class="metric-label">1. Volume</div>
+          <div class="metric-value" style="font-size:11px;">Journeys/user, products/journey</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #3fb950;">
+          <div class="metric-label">2. Journey Diversity</div>
+          <div class="metric-value" style="font-size:11px;">Category groups, diversity ratio</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #d29922;">
+          <div class="metric-label">3. Journey Quality</div>
+          <div class="metric-value" style="font-size:11px;">Value, compliance, coherence</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #bc8cff;">
+          <div class="metric-label">4. Journey Relevance</div>
+          <div class="metric-value" style="font-size:11px;">Shopping relevance, 2-step classify</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #f85149;">
+          <div class="metric-label">5. Product Diversity</div>
+          <div class="metric-value" style="font-size:11px;">Brand/seller coverage</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #79c0ff;">
+          <div class="metric-label">6. Product Quality</div>
+          <div class="metric-value" style="font-size:11px;">Intent/attribute/gender align</div>
+        </div>
+        <div class="metric-item" style="border-left: 3px solid #56d364;">
+          <div class="metric-label">7. Cross-Metrics</div>
+          <div class="metric-value" style="font-size:11px;">Correlations across dims</div>
+        </div>
+      </div>
+
+      <!-- TID RESOLUTION -->
+      <div class="section-header" style="margin-top: 12px;">
+        <span class="icon" style="background:rgba(63,185,80,0.2);color:#3fb950;">R</span>
+        TID → Product Resolution (Elastic Identifier Grounding)
+      </div>
+
+      <div class="card" style="margin-bottom: 10px;">
+        <div class="card-body">
+          Model outputs TermIDs, not product IDs. GRLM introduced <strong>Elastic Identifier Grounding (EIG)</strong> — we extend it for shopping journeys:<br>
+          <code>Exact Match</code> → <code>Normalized (case/space)</code> → <code>Sorted (order-invariant)</code> → <code>Fuzzy Prefix (position-weighted: w<sub>j</sub>=1/(j+1))</code><br>
+          Dedup by product ID and journey title. Enables <strong>soft matching</strong> even with word-order variations.
+        </div>
+      </div>
+
+      <!-- RL PIPELINE -->
+      <div class="section-header">
+        <span class="icon" style="background:rgba(210,153,34,0.2);color:#d29922;">R</span>
+        RL Alignment (GRPO) — Zero Data Leakage Design
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <strong>3-way split</strong> from journey product sequence [item₁ ... item<sub>N-2</sub> | item<sub>N-1</sub> | item<sub>N</sub>]:<br>
+          ▸ <strong>RL Prompt:</strong> instruction + events + output up to item<sub>N-2</sub><br>
+          ▸ <strong>Reward Signal:</strong> item<sub>N-1</sub> TermID (for GRPO reward computation)<br>
+          ▸ <strong>Held-Out Test:</strong> item<sub>N</sub> TermID (never seen during training)<br>
+          Strict isolation via EasyR1/verl format. Prevents reward hacking.
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN: Known Issues + Next Steps -->
+    <div class="col-narrow">
+      <div class="section-header">
+        <span class="icon" style="background:rgba(248,81,73,0.2);color:#f85149;">!</span>
+        Known Issues
+      </div>
+
+      <div class="card" style="border-left: 3px solid #f85149;">
+        <div class="card-body">
+          <ul class="compact">
+            <li><strong>TID Collision:</strong> ~2-3% items share identical 7-word TIDs (color/size variants). Grows with catalog scale</li>
+            <li><strong>LLM Validity:</strong> Not all items get exactly 7 valid words — partial outputs need fallback</li>
+            <li><strong>Teacher Bias:</strong> Training journeys are LLM-generated, not human-curated</li>
+            <li><strong>Profile Cold-Start:</strong> Sparse-event users get generic profiles</li>
+            <li><strong>Eval Cost:</strong> Journey quality (0-2 UHRS scoring) requires human evaluation</li>
+            <li><strong>Diversity-Relevance:</strong> Aggressive diversity reranking may push out highly relevant similar products</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section-header" style="margin-top: 14px;">
+        <span class="icon" style="background:rgba(63,185,80,0.2);color:#3fb950;">→</span>
+        Next Steps
+      </div>
+
+      <div class="card" style="border-left: 3px solid #3fb950;">
+        <div class="card-body">
+          <ul class="compact">
+            <li><strong>RL Training:</strong> Run GRPO with verl/EasyR1 to align with journey quality rewards</li>
+            <li><strong>Collaborative Signals:</strong> Add co-purchase/co-view patterns (GRLM's SASRec task)</li>
+            <li><strong>Adaptive TID Length:</strong> Dynamic 5-9 slots by catalog complexity</li>
+            <li><strong>Online A/B:</strong> Deploy to production, measure CTR/conversion/journey completion</li>
+            <li><strong>Multi-Market:</strong> Multilingual TIDs, cross-market catalogs</li>
+            <li><strong>LLM-as-Judge:</strong> Replace human UHRS with automated eval for faster iteration</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- TECH HIGHLIGHT SUMMARY -->
+      <div class="section-header" style="margin-top: 14px;">
+        <span class="icon" style="background:rgba(210,153,34,0.2);color:#d29922;">★</span>
+        Technical Highlights Summary
+      </div>
+      <div class="highlight-box yellow">
+        <div class="card-body">
+          <strong>1.</strong> <strong>Term IDs</strong> — LLM-native item identifiers with >99% grounding precision, no vocab expansion<br>
+          <strong>2.</strong> First TermID application to <strong>multi-product journey generation</strong><br>
+          <strong>3.</strong> <strong>3-task SFT</strong> (meta→TID + event→journey + profile→journey)<br>
+          <strong>4.</strong> <strong>7-slot TID</strong> with context-aware generation for production catalogs<br>
+          <strong>5.</strong> <strong>Diversity-aware</strong> recommendation with greedy reranking<br>
+          <strong>6.</strong> <strong>Zero-leakage RL</strong> pipeline for GRPO alignment<br>
+          <strong>7.</strong> <strong>70+ metric</strong> multi-dimensional journey quality framework
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="footnote">Pipeline: s0→s1→s2→s3→s4 (data) → LlamaFactory SFT → s5→s6 (eval) → s7 (RL) &nbsp;|&nbsp; Base: Qwen3-4B-Instruct, Emb: Qwen3-Embedding-0.6B</div>
+  <div class="slide-number">2 / 2</div>
+</div>
+
+</body>
+</html>

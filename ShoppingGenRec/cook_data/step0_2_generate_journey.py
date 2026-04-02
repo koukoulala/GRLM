@@ -467,13 +467,13 @@ def parse_args():
     parser.add_argument(
         "--input_file", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input.tsv",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_ShoppingJourney_HisLarge_100_200K.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/Step1_ShoppingJourney_Mixed_600K.tsv",
         help="Path to raw input TSV (must have UserId, ReadableUserEvents)",
     )
     parser.add_argument(
         "--output_dir", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
         help="Directory to save output files",
     )
     parser.add_argument(
@@ -636,7 +636,7 @@ def main():
 
         for ci in range(num_chunks):
             chunk = rows[ci * chunk_size : (ci + 1) * chunk_size]
-            chunk_k = len(chunk) // 1000
+            chunk_k = chunk_size // 1000
             if num_chunks > 1:
                 suffix = f"_{chunk_k}K_{ci + 1}"
             else:

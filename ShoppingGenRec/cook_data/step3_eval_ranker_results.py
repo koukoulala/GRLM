@@ -109,6 +109,7 @@ def build_jwp_index(jwp_data):
             index[title] = {
                 "products": products,
                 "queries": journey.get("Queries", []),
+                "journey_type": journey.get("JourneyType", ""),
             }
     return index
 
@@ -125,6 +126,7 @@ def clean_output(output_data, jwp_index):
         "products_kept": 0,
         "journeys_removed": 0,
         "queries_added": 0,
+        "journey_type_restored": 0,
     }
 
     for jtype in JOURNEY_TYPES:
@@ -168,6 +170,15 @@ def clean_output(output_data, jwp_index):
             # Add Queries from JWP into this journey
             journey["Queries"] = jwp_queries
             stats["queries_added"] += 1
+
+            # Restore JourneyType from JWP if missing or incorrect in ranker output
+            jwp_journey_type = jwp_entry.get("journey_type", "")
+            if jwp_journey_type:
+                output_jtype = journey.get("JourneyType", "")
+                if not output_jtype or output_jtype != jwp_journey_type:
+                    journey["JourneyType"] = jwp_journey_type
+                    stats["journey_type_restored"] += 1
+
             kept_journeys.append(journey)
 
         output_data[jtype] = kept_journeys
@@ -194,6 +205,7 @@ def process_file(input_file):
     total_products_kept = 0
     total_journeys_removed = 0
     total_queries_added = 0
+    total_journey_type_restored = 0
     rows_with_product_removal = 0
 
     # Pre-scan: check if UserHistory column exists in input
@@ -270,6 +282,7 @@ def process_file(input_file):
             total_queries_added += stats["queries_added"]
             if stats["products_removed"] > 0:
                 rows_with_product_removal += 1
+            total_journey_type_restored += stats["journey_type_restored"]
 
             # Build FinalJourney: cleaned output with Queries
             final_journey = json.dumps(cleaned_output, ensure_ascii=False)
@@ -304,6 +317,7 @@ def process_file(input_file):
     print()
     print(f"--- Query Enrichment ---")
     print(f"  Journeys with Queries added from JWP:  {total_queries_added}")
+    print(f"  JourneyType restored from JWP:         {total_journey_type_restored}")
     print()
     print(f"Output written to: {output_file}")
     return True
@@ -317,7 +331,7 @@ def main():
         help="Path to a single Ranker output TSV from step2.8")
     parser.add_argument(
         "--input_folder", type=str, 
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
         help="Path to a folder; processes all *_Ranker.tsv files inside it")
     args = parser.parse_args()
 
