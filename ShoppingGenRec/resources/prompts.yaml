@@ -929,7 +929,7 @@ prompts:
       - Stop generating journeys once additional journeys would become repetitive or low quality.
       - Ensure that the output is clean, correctly formatted, and can be parsed as valid JSON.
       - Do **NOT** include markdown or explanations.
-      - Maximum number of journeys: **10**.
+      - Maximum number of journeys: **20**.
 
       ---
 
@@ -1066,7 +1066,7 @@ prompts:
       The number of generated journeys should reflect the diversity of the user's interests.
       - If events focus on ONE category → generate 1 journeys
       - If events span TWO categories → generate 2–3 journeys
-      - If events span THREE or more categories → generate up to 10 journeys
+      - If events span THREE or more categories → generate up to 20 journeys
 
       Do NOT force additional journeys if the user's interests are highly concentrated.Quality and relevance are more important than quantity.
 
@@ -1114,7 +1114,7 @@ prompts:
       - Use a variety of tones such as: question, statement, metaphor, moment, or bold hook.
 
       **Query**
-      - Generate 2-3 distinct search queries per shopping journey.
+      - Generate 2-7 distinct search queries per shopping journey.
       - Queries must stay grounded in attributes explicitly supported by <USER-EVENTS>, such as product type, brand, color, size, feature, or compatibility.
       - Every query must directly support the shopping goal described in the Journey title.
       - Prefer realistic product search patterns used in online shopping: product type + brand / attribute / compatibility.

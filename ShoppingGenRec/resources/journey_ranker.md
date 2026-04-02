@@ -27,9 +27,34 @@ For each journey, pool ALL candidate products from ALL queries together into a s
 
 ## Ranking: Apply Filters in Order — Each is a Gate
 
-Gate 1 — Relevance (most critical): Every product must directly fulfill the journey's need. Match all explicit attributes (brand, color, size, style, occasion). Zero tolerance for partial matches. Validation: "Does this product directly solve the need expressed in this journey?" Exclude if uncertain.
-- **User-event boost**: Among products that pass relevance filtering, rank higher those that align with brands, styles, or product features the user has previously engaged with in <USER-EVENTS>. For example, if the user has browsed Nike running shoes, a Nike product should rank above an equally relevant unknown brand.
-- **Seasonal relevance boost**: Among products that pass relevance filtering, boost products that are seasonally appropriate based on <SYSTEM-TIME>. For example, if the current time is in June, lightweight summer dresses should rank above wool sweaters within a women's fashion journey. This is a soft boost — never exclude an otherwise relevant product solely for being off-season.
+Gate 1 — Relevance (most critical): Evaluate every candidate product on two sub-dimensions. A product must score well on BOTH to be kept.
+
+  ### 1a. Intent Alignment
+  Evaluate whether the product directly supports the journey's stated core intent.
+  - **Keep** (strong): The product's primary category matches the journey's target category, its core function directly addresses the user's need, and it supports the specific scenario or occasion described. The product would reasonably be a top candidate for this journey.
+  - **Demote** (partial): The product is related to the journey's category but only addresses part of the intent, serves as a secondary alternative, or requires additional assumptions to be considered a fit.
+  - **Exclude** (misaligned): The product's category is unrelated, its function does not address the journey's need, a core requirement is missing or contradicted, or the product belongs to a different intent thread (e.g., accessories when the journey is about primary items). Exclude if the product would confuse or distract from the shopping decision.
+
+  ### 1b. Attribute Alignment
+  Evaluate whether the product's attributes comply with all explicit and implied constraints from the journey. Check these attributes **only when stated or clearly implied** by the journey:
+  - Style & aesthetic (e.g., minimalist, formal, streetwear)
+  - Fit, size & dimensions (e.g., slim fit, oversized, compact)
+  - Material & build quality (e.g., leather, waterproof)
+  - Brand / brand positioning
+  - Price range
+  - Occasion or usage context (e.g., wedding, work, travel, sports)
+  - Color
+  - Cultural context (if stated)
+
+  Scoring:
+  - **Keep** (strong): Product fully matches all relevant journey constraints with no contradictions.
+  - **Demote** (partial): Product satisfies core intent and category but one or more secondary attributes are missing or loosely matched — not a direct contradiction.
+  - **Exclude** (misaligned): Explicit contradiction in a core attribute, product lacks required evidence for a central journey attribute, or clearly wrong subcategory.
+  - **Missing attribute handling**: If the journey requires an attribute and the product provides no evidence → exclude. If the journey is broad with no explicit attribute required → accept when reasonable.
+
+  ### Relevance Boosting Signals (soft — for reranking, not filtering)
+  - **User-event boost**: Among products that pass relevance, rank higher those that align with brands, styles, or features the user has previously engaged with in <USER-EVENTS>.
+  - **Seasonal relevance boost**: Boost products that are seasonally appropriate based on <SYSTEM-TIME>. Never exclude an otherwise relevant product solely for being off-season.
 
 Gate 2 — Gender and Attribute Consistency (hard filter — zero tolerance — MANDATORY):
 
@@ -82,13 +107,36 @@ Exclude (hard filter — zero tolerance): eBay, Alibaba, AliExpress, Temu, Wish,
 Gate 4 — Price Coherence: Remove products priced >±30% from the average. Max price ≤ 150% of min price. Reject extreme tier mixes.
 - **User-event calibration**: Cross-reference the user's typical spending range from <USER-EVENTS>. If the user consistently browses premium products (e.g., $200+ headphones), do not penalize higher-priced candidates that would otherwise be filtered by the ±30% rule — instead, adjust the acceptable range to reflect the user's demonstrated price comfort zone. Conversely, if the user is budget-oriented, prefer lower-priced options when breaking ties.
 
-Gate 5 — Diversity:
-- Zero duplicates. Same product from different sellers → keep one (highest-authority seller).
-- Brand diversity when journey doesn't specify a single brand.
-- Seller diversity: avoid selecting more than 2-3 products from the same seller.
-- When the journey is about a brand or broad category (not a specific product): prioritize product variety — different styles, use cases, price points, and subcategories. The ranked list should feel like a curated showroom, not a search results page with 10 similar items.
+Gate 5 — Diversity (systematic product grouping + diversified selection):
 
-Select up to 20 products per journey. Fewer is fine if quality can't be maintained.
+Diversity is enforced through a two-stage process: first group near-duplicate products, then select diversely across groups.
+
+  ### Stage 1: Product Grouping (collapse near-duplicates)
+  Group two or more products into the same group when ALL of the following are true:
+  - **Same brand** (case-insensitive, normalized)
+  - **Same primary product type or model line** (e.g., "running shoe", "wireless earbuds", "leather wallet")
+  - **Same key variant attributes**: color (exact or clearly equivalent, e.g., "black" vs "jet black"), material/core build (if stated), and major functional variant (e.g., standard vs pro, wired vs wireless)
+  - Size-only differences (shoe size, clothing size) count as the same group
+
+  DO NOT group products when:
+  - Brands differ
+  - Core product type differs
+  - Functionality differs materially
+  - A variant materially changes the value proposition (e.g., waterproof vs non-waterproof)
+
+  Each resulting group represents one distinct product option. From each group, keep only the single best product (highest relevance score → highest seller authority → best price).
+
+  ### Stage 2: Diversified Selection
+  After deduplication via grouping, apply these diversity rules to the remaining candidates:
+  - **Brand diversity**: When the journey does not target a single brand, avoid selecting more than 2–3 products from the same brand. Spread selections across brands.
+  - **Seller diversity**: Avoid selecting more than 2 products from the same seller.
+  - **Product variety**: Prioritize covering different styles, use cases, price points, and subcategories. The final list should feel like a curated showroom — not a search results page with 10 similar items.
+  - **Diversity target**: Aim for a diversity ratio (distinct product groups / selected products) of 1.0. Every selected product should represent a meaningfully different option.
+
+  ### Diversity Validation
+  Before finalizing, review the selected list and ask: "Would a user see meaningful variety here?" If multiple products are functionally interchangeable (same type, same brand, similar price), keep only the best one and replace the rest with products from underrepresented styles, brands, or subcategories.
+
+Select up to 30 products per journey. Fewer is fine if quality or diversity cannot be maintained.
 
 **Final ranking tiebreaker**: When two products are equal across all gates, use the user profile extracted from <USER-EVENTS> to break the tie — prefer the product whose brand, style, price point, or seller better matches the user's demonstrated shopping behavior.
 
@@ -111,11 +159,12 @@ If any candidate product falls into these categories, it must be excluded immedi
 
 ## Critical Rules
 - Safety exclusions are absolute and applied before all other filters
-- Relevance is paramount
+- Relevance is paramount: evaluate both intent alignment and attribute alignment
+- Diversity through product grouping: collapse near-duplicates, then select across groups
 - Zero duplicates, brand diversity, seller diversity
 - Gender: explicit → match; none → unisex
 - Price coherence enforced
-- Quality and relevance over quantity
+- Quality, relevance, and diversity over quantity
 - If ALL journeys have zero qualifying products after filtering, return an empty result
 - **Data integrity (non-negotiable)**: Do NOT modify any input data. Journey Titles, Journey Reasons, and product attributes (OfferId, Title, Seller, Price) must be copied exactly as provided in the input. Do not rewrite, paraphrase, correct spelling, or alter any field values. The ranker's job is to filter and reorder, never to edit.
 

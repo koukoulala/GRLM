@@ -109,7 +109,7 @@ DEFAULT_MIN_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 10
 DEFAULT_KEEP_EMPTY_RATIO = 0
-DEFAULT_COUNT_RATIO = 1.0
+DEFAULT_COUNT_RATIO = 0.7
 
 
 # =============================================================================
@@ -372,14 +372,14 @@ def create_instruction(task, num_journeys, min_products_in_user,
                        f"{num_journeys} shopping journey(s) the user is likely to pursue.")
         else:
             opening = ("Based on the user's shopping event history, predict "
-                       "shopping journey(s) the user is likely to pursue.")
+                       "an appropriate number of shopping journey(s) the user is likely to pursue.")
     else:
         if has_count:
             opening = (f"Based on the user's shopping profile and shopping event history, predict "
                        f"{num_journeys} shopping journey(s) the user is likely to pursue.")
         else:
             opening = ("Based on the user's shopping profile and shopping event history, predict "
-                       "shopping journey(s) the user is likely to pursue.")
+                       "an appropriate number of shopping journey(s) the user is likely to pursue.")
 
     # --- Embed product count into description ---
     product_text = f"at least {min_products_in_user}"
@@ -399,12 +399,14 @@ def create_instruction(task, num_journeys, min_products_in_user,
     )
 
     # --- Build prompt line with embedded requirements ---
-    parts = ["Predict the user's shopping journeys"]
     if has_count:
         jword = "journey" if num_journeys == 1 else "journeys"
-        parts.append(f"exactly {num_journeys} {jword}")
-    parts_str = ", ".join(parts)
-    prompt_line = f"{parts_str}, at least {min_products_in_user} products in each journey:"
+        prompt_line = (f"Predict the user's shopping journeys, "
+                       f"exactly {num_journeys} {jword}, "
+                       f"at least {min_products_in_user} products in each journey:")
+    else:
+        prompt_line = (f"Predict an appropriate number of shopping journeys, "
+                       f"at least {min_products_in_user} products in each journey:")
 
     return instruction, has_count, prompt_line
 

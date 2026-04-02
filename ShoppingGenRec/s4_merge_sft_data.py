@@ -228,7 +228,7 @@ def parse_args():
         help="Sampling probability for meta2tid training data",
     )
     parser.add_argument(
-        "--meta2tid_max_train", type=int, default=300000,
+        "--meta2tid_max_train", type=int, default=500000,
         help="Maximum number of meta2tid training samples (default: 500000)",
     )
     parser.add_argument(
@@ -254,11 +254,11 @@ def parse_args():
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data_v3_new",
+                "OneRec/Data/LLMTrainingData/20260324/sft_data_v3_new_2",
         help="Output directory",
     )
     parser.add_argument(
-        "--seed", type=int, default=42,
+        "--seed", type=int, default=43,
         help="Random seed (default: 42)",
     )
     return parser.parse_args()
