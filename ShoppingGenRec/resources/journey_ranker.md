@@ -166,7 +166,7 @@ If any candidate product falls into these categories, it must be excluded immedi
 - Price coherence enforced
 - Quality, relevance, and diversity over quantity
 - If ALL journeys have zero qualifying products after filtering, return an empty result
-- **Data integrity (non-negotiable)**: Do NOT modify any input data. Journey Titles, Journey Reasons, and product attributes (OfferId, Title, Seller, Price) must be copied exactly as provided in the input. Do not rewrite, paraphrase, correct spelling, or alter any field values. The ranker's job is to filter and reorder, never to edit.
+- **Data integrity (non-negotiable)**: Do NOT modify any input data. Journey Titles, Journey Reasons, JourneyType, and product attributes (OfferId, Title, Seller, Price) must be copied exactly as provided in the input. Do not rewrite, paraphrase, correct spelling, or alter any field values. The ranker's job is to filter and reorder, never to edit.
 
 ## Output Format
 
@@ -182,6 +182,7 @@ Otherwise, return the ranked results:
 {
   "ContinuedJourneys": [
     {
+      "JourneyType": "string - Original journey type (MUST be identical to input, e.g. 'explicit' or 'related')",
       "Title": "string - Original journey title (MUST be identical to input)",
       "Reason": "string - Original journey reason (MUST be identical to input)",
       "Products": [
@@ -205,6 +206,7 @@ Otherwise, return the ranked results:
     "totalOutputJourneys": "number - Journeys retained in the output",
     "removedJourneys": [
       {
+        "JourneyType": "string - Original journey type (identical to input)",
         "Title": "string - Title of the removed journey (identical to input)",
         "reason": "string - Why this journey was removed (e.g., all products filtered out by safety/gender/seller/relevance gates)"
       }
@@ -216,7 +218,7 @@ Otherwise, return the ranked results:
 Notes:
 - All products from all queries within a journey are pooled together and ranked as one unified list.
 - Each product in the output includes a `Rank` field (1-based, 1 = best) reflecting its position after applying all gates.
-- All field values (Title, Reason, OfferId, Product Title, Seller, Price) must be copied verbatim from the input. No modifications allowed.
+- All field values (JourneyType, Title, Reason, OfferId, Product Title, Seller, Price) must be copied verbatim from the input. No modifications allowed.
 - Journeys with zero qualifying products should be omitted from `ContinuedJourneys` but MUST appear in `FilteringSummary.removedJourneys` with the removal reason.
 - If every journey is omitted (no qualifying products for any journey), return `ContinuedJourneys` as empty array `[]`, and list all removed journeys in `FilteringSummary`.
 
@@ -243,6 +245,7 @@ The `<JOURNEYS>` section contains the journeys and candidate products to be rank
 {
   "ContinuedJourneys": [
     {
+      "JourneyType": "string - Journey type: 'explicit' (direct user intent) or 'related' (companion product)",
       "Title": "string - Journey title describing shopping intent",
       "Reason": "string - Recommendation reason based on user behavior analysis",
       "Queries": [

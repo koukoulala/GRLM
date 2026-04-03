@@ -234,6 +234,7 @@ def load_all_user_events(sequence_file, exclude_ids, scan_ratio=0.5):
 
     CHUNK_SIZE = 5_000_000
     total_rows = 0
+    excluded_rows = 0
     chunks = []
     stopped_early = False
 
@@ -247,7 +248,9 @@ def load_all_user_events(sequence_file, exclude_ids, scan_ratio=0.5):
 
         mask = (chunk["UserId"] != "")
         if exclude_set:
-            mask = mask & (~chunk["UserId"].isin(exclude_set))
+            exclude_mask = chunk["UserId"].isin(exclude_set)
+            excluded_rows += exclude_mask.sum()
+            mask = mask & (~exclude_mask)
         filtered = chunk[mask]
 
         if len(filtered) > 0:
@@ -262,6 +265,8 @@ def load_all_user_events(sequence_file, exclude_ids, scan_ratio=0.5):
               f"(~{scan_ratio:.0%} of file)")
     else:
         print(f"  Scanned all {total_rows:,} rows")
+    if exclude_set:
+        print(f"  Excluded {excluded_rows:,} rows from {len(exclude_set):,} users")
 
     if not chunks:
         print(f"  No valid rows found")
@@ -446,20 +451,20 @@ def parse_args():
 
     parser.add_argument(
         "--sequence_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/1225_0325/Step0_Sequence.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step0_Sequence.tsv",
+        default="/vc_data/users/xiaoyukou/GRLM/ShoppingGenRec/resources/Step0_Sequence.tsv",
         help="Path to Step0_Sequence.tsv",
     )
     parser.add_argument(
         "--product_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/1225_0325/Step0_Product.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step0_Product.tsv",
+        default="/vc_data/users/xiaoyukou/GRLM/ShoppingGenRec/resources/Step0_Product.tsv",
         help="Path to Step0_Product.tsv",
     )
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/1225_0325",
+                "OneRec/Data/1225_0325/CookData_merged",
         help="Output directory",
     )
     parser.add_argument(
@@ -473,24 +478,22 @@ def parse_args():
     )
     parser.add_argument(
         "--exclude_files", type=str, nargs="*", 
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_200K_EnUs_UserReadableHis_HisLarge50.tsv"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/Step0_UserProfile_200KHisLarge50_300KHisLess50.tsv"],
         help="TSV files whose UserId values will be excluded from processing",
     )
     parser.add_argument(
-        "--min_events", type=int, default=100,
+        "--min_events", type=int, default=5,
         help="Minimum number of valid events per user. Users below this "
-             "threshold are dropped",
+             "threshold are dropped (default: 5)",
     )
     parser.add_argument(
         "--sample_count", type=int, default=200000,
-        help="If >0, randomly sample this many users from the full result "
-             "and save as a separate file (default: 0 = no sampling)",
+        help="Max users to sample per bucket (default: 200000)",
     )
     parser.add_argument(
-        "--scan_ratio", type=float, default=0.5,
-        help="Fraction of sequence file to scan (0.0-1.0). Default 0.5 "
-             "scans half the file, which is usually sufficient for "
-             "200K+ qualified users (default: 0.5)",
+        "--scan_ratio", type=float, default=0.8,
+        help="Fraction of sequence file to scan (0.0-1.0). Default 1.0 "
+             "scans the entire file (default: 1.0)",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -555,28 +558,39 @@ def main():
     del all_counts
     print()
 
-    # ---- Step 4: Select target users ----
-    print("Step 4: Selecting target users")
-    qualified_uids = [uid for uid, cnt in user_counts.items()
-                      if cnt >= args.min_events]
-    print(f"  Users with >= {args.min_events} events: {len(qualified_uids):,}")
+    # ---- Step 4: Bucket users by event count ----
+    print("Step 4: Bucketing users by event count")
+    BUCKETS = [
+        ("HisLess50",   args.min_events, 49),
+        ("His50to100",  50, 99),
+        ("HisLarge100", 100, None),  # None = no upper bound
+    ]
+
+    bucket_uids = {}
+    for name, lo, hi in BUCKETS:
+        uids = [uid for uid, cnt in user_counts.items()
+                if cnt >= lo and (hi is None or cnt <= hi)]
+        bucket_uids[name] = uids
+        print(f"  {name} ({lo}-{hi or '∞'} events): {len(uids):,} users")
     del user_counts
+    print()
 
-    is_sampled = False
-    if args.sample_count > 0 and len(qualified_uids) > args.sample_count:
-        target_uids = set(random.sample(sorted(qualified_uids),
-                                         args.sample_count))
-        is_sampled = True
-        print(f"  Sampled {args.sample_count:,} target users (seed={args.seed})")
-    else:
-        target_uids = set(qualified_uids)
-        print(f"  Using all {len(target_uids):,} qualified users")
-    del qualified_uids
+    # Sample each bucket
+    for name in bucket_uids:
+        uids = bucket_uids[name]
+        if args.sample_count > 0 and len(uids) > args.sample_count:
+            bucket_uids[name] = random.sample(sorted(uids), args.sample_count)
+            print(f"  {name}: sampled {args.sample_count:,} from {len(uids):,}")
+        else:
+            print(f"  {name}: using all {len(uids):,}")
 
-    # Drop non-target users from memory
+    # Collect all target UIDs and prune memory
+    all_target = set()
+    for uids in bucket_uids.values():
+        all_target.update(uids)
     user_events = {uid: evts for uid, evts in user_events.items()
-                   if uid in target_uids}
-    print(f"  Retained {len(user_events):,} users in memory")
+                   if uid in all_target}
+    print(f"  Total retained in memory: {len(user_events):,} users")
     print()
 
     # ---- Step 5: Build output rows (parallelized) ----
@@ -629,33 +643,32 @@ def main():
             total=len(user_events), desc="Building rows",
         ))
 
-    output_rows = []
+    # Index results by UserId
+    row_map = {}
     skipped_no_valid = 0
-    event_counts = []
     for row in results:
         if row is None:
             skipped_no_valid += 1
             continue
-        output_rows.append(row)
-        event_counts.append(int(row["HisCount"]))
+        row_map[row["UserId"]] = row
     del results
 
     print(f"\n  Target users: {len(user_events):,}")
-    print(f"  Users with valid output: {len(output_rows):,}")
+    print(f"  Users with valid output: {len(row_map):,}")
     print(f"  Skipped (no valid events after formatting): {skipped_no_valid:,}")
 
     # Event count statistics
-    if event_counts:
-        event_counts.sort()
-        n = len(event_counts)
+    all_event_counts = sorted(int(r["HisCount"]) for r in row_map.values())
+    if all_event_counts:
+        n = len(all_event_counts)
         print(f"\n  Output event count distribution:")
-        print(f"    Min: {event_counts[0]:>6}")
-        print(f"    P25: {event_counts[n // 4]:>6}")
-        print(f"    P50: {event_counts[n // 2]:>6}")
-        print(f"    P75: {event_counts[3 * n // 4]:>6}")
-        print(f"    P90: {event_counts[int(n * 0.9)]:>6}")
-        print(f"    Max: {event_counts[-1]:>6}")
-        print(f"    Avg: {sum(event_counts) / n:>6.1f}")
+        print(f"    Min: {all_event_counts[0]:>6}")
+        print(f"    P25: {all_event_counts[n // 4]:>6}")
+        print(f"    P50: {all_event_counts[n // 2]:>6}")
+        print(f"    P75: {all_event_counts[3 * n // 4]:>6}")
+        print(f"    P90: {all_event_counts[int(n * 0.9)]:>6}")
+        print(f"    Max: {all_event_counts[-1]:>6}")
+        print(f"    Avg: {sum(all_event_counts) / n:>6.1f}")
 
     # Vertical type statistics
     print(f"\n  Vertical type distribution:")
@@ -664,41 +677,49 @@ def main():
         print(f"    {v:30s} -> {action:10s}  {cnt:>12,}")
     print()
 
-    # ---- Step 6: Save output ----
-    print("Step 6: Saving output")
+    # ---- Step 6: Save output (merge all buckets into one file) ----
+    print("Step 6: Saving output (merged)")
     os.makedirs(args.output_dir, exist_ok=True)
 
     output_header = ["UserId", "ReadableUserEvents", "RequestTime",
                      "UserHistory", "HisCount"]
 
-    if is_sampled:
-        sample_k = args.sample_count // 1000
-        out_file = os.path.join(
-            args.output_dir,
-            f"Step1_ShoppingJourney_HisLarge_{args.min_events}_{sample_k}K.tsv")
-    else:
-        out_file = os.path.join(
-            args.output_dir,
-            f"Step1_ShoppingJourney_HisLarge_{args.min_events}.tsv")
+    # Collect rows from all buckets, then shuffle
+    all_output_rows = []
+    for name, lo, hi in BUCKETS:
+        uids = bucket_uids[name]
+        bucket_rows = [row_map[uid] for uid in uids if uid in row_map]
+        print(f"  {name} ({lo}-{hi or '∞'}): {len(bucket_rows):,} users")
+        all_output_rows.extend(bucket_rows)
+
+    random.shuffle(all_output_rows)
+    total_written = len(all_output_rows)
+
+    total_k = total_written // 1000
+    out_file = os.path.join(
+        args.output_dir,
+        f"Step1_ShoppingJourney_Mixed_{total_k}K.tsv")
 
     with open(out_file, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t", lineterminator="\n")
         writer.writerow(output_header)
-        for row in output_rows:
+        for row in all_output_rows:
             writer.writerow([row[col] for col in output_header])
 
     out_mb = os.path.getsize(out_file) / (1024 * 1024)
-    print(f"  Output: {out_file}")
-    print(f"    Users: {len(output_rows):,}  Size: {out_mb:.1f} MB")
+    print(f"\n  Output: {out_file}")
+    print(f"    Users: {total_written:,}  Size: {out_mb:.1f} MB")
 
     # ---- Summary ----
     elapsed = time.time() - start_time
     print(f"\n{'=' * 70}")
     print(f"Done! ({elapsed:.1f}s)")
     print(f"  Sequence rows scanned: {total_seq_rows:,}")
-    print(f"  Output users: {len(output_rows):,}")
-    if is_sampled:
-        print(f"  (Sampled {args.sample_count:,} from qualified users)")
+    print(f"  Total output users: {total_written:,}")
+    for name, lo, hi in BUCKETS:
+        uids = bucket_uids[name]
+        written = sum(1 for uid in uids if uid in row_map)
+        print(f"    {name}: {written:,}")
     print(f"{'=' * 70}")
 
 

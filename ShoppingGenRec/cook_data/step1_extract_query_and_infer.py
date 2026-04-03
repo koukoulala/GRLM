@@ -257,10 +257,10 @@ def process_file(input_file, work_dir, skip_inference, gpu_count, gpu_ids,
 def main():
     parser = argparse.ArgumentParser(description="Step 1: Extract queries and generate embeddings")
     parser.add_argument("--input_file", type=str,
-                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_1_results.tsv",
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/ShoppingJourney_Input_80K_1_results.tsv",
                         help="Path to Journey_Results TSV from step0")
     parser.add_argument("--input_folder", type=str, 
-                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/",
+                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
                         help="Path to a folder; processes all *_results.tsv / *_Results.tsv files inside it")
     parser.add_argument("--work_dir", type=str, 
                         default=None,

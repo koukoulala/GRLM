@@ -316,7 +316,8 @@ def main():
     # ---- Call LLM ----
     output_dir = args.output_dir or os.path.dirname(args.input_file)
     os.makedirs(output_dir, exist_ok=True)
-    checkpoint_dir = os.path.join(output_dir, "_ranker_checkpoint")
+    input_base = os.path.splitext(os.path.basename(args.input_file))[0]
+    checkpoint_dir = os.path.join(output_dir, f"_ranker_checkpoint_{input_base}")
 
     print(f"\nCalling LLM ranker ({args.copilot_model}) ...")
     start_time = time.time()

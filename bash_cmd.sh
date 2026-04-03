@@ -10,7 +10,8 @@ cd GRLM/ShoppingGenRec/
 nohup python -u preprocess_raw_data/pre_s0_combine_item_data.py > logs/pre_s0.out 2>&1 &
 nohup python -u s0_init_emb.py > logs/s0_init_emb.out 2>&1 &
 nohup python -u cook_data/step0_0_build_input.py > logs/step0_0_build.out 2>&1 &
-nohup python -u cook_data/step0_generate_journey.py --max_users=80000 > logs/step0_split.out 2>&1 &
+nohup python -u cook_data/step0_1_merge_inputs.py > logs/step0_1_merge.out 2>&1 &
+nohup python -u cook_data/step0_2_generate_journey.py --max_users=60000 > logs/step0_split.out 2>&1 &
 nohup python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py > logs/pre_s1.out 2>&1 &
 nohup python -u s5_journey_eval.py > logs/s5_eval.out 2>&1 &
 nohup python -u cook_data/step3_eval_ranker_results.py > logs/step3.out 2>&1 &
