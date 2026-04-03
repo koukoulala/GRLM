@@ -338,7 +338,8 @@ def main():
         help="Path to a single Ranker output TSV from step2.8")
     parser.add_argument(
         "--input_folder", type=str, 
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
+        default=None,
         help="Path to a folder; processes all *_Ranker.tsv files inside it")
     args = parser.parse_args()
 
