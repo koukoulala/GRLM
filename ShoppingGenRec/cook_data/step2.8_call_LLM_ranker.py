@@ -86,8 +86,10 @@ def read_jwp_tsv(filepath, max_users=0):
         List of dicts with keys: user_id, events, request_time, jwp_str
     """
     users = []
+    has_profile = False
     with open(filepath, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
+        has_profile = "UserProfile" in (reader.fieldnames or [])
 
         for row in reader:
             user_id = row.get("UserId", "").strip()
@@ -99,6 +101,7 @@ def read_jwp_tsv(filepath, max_users=0):
                 continue
 
             user_history = row.get("UserHistory", "").strip()
+            user_profile = row.get("UserProfile", "").strip() if has_profile else ""
 
             # Replace "#N#" separator with newlines
             events_text = events_raw.replace("#N#", "\n")
@@ -108,13 +111,14 @@ def read_jwp_tsv(filepath, max_users=0):
                 "events": events_text,
                 "request_time": request_time,
                 "user_history": user_history,
+                "user_profile": user_profile,
                 "jwp_str": jwp_str,
             })
 
             if max_users > 0 and len(users) >= max_users:
                 break
 
-    return users
+    return users, has_profile
 
 
 # =============================================================================
@@ -273,8 +277,8 @@ def main():
 
     # ---- Load data ----
     print(f"\nLoading JWP data: {args.input_file}")
-    users = read_jwp_tsv(args.input_file, max_users=max_users)
-    print(f"  Loaded {len(users):,} users")
+    users, has_profile = read_jwp_tsv(args.input_file, max_users=max_users)
+    print(f"  Loaded {len(users):,} users (UserProfile: {'yes' if has_profile else 'no'})")
 
     if not users:
         print("No users found!")
@@ -355,37 +359,33 @@ def main():
     with open(output_file, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t", quoting=csv.QUOTE_NONE,
                             escapechar="\\")
-        writer.writerow([
-            "UserId", "ReadableUserEvents", "RequestTime",
-            "UserHistory", "JourneyWithProducts", "OUTPUT"
-        ])
+        out_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
+        if has_profile:
+            out_header.append("UserProfile")
+        out_header.extend(["JourneyWithProducts", "OUTPUT"])
+        writer.writerow(out_header)
 
         for user_id, raw_result in results:
             u = user_map[user_id]
             events_out = u["events"].replace("\n", "#N#")
+            base_row = [user_id, events_out, u["request_time"], u["user_history"]]
+            if has_profile:
+                base_row.append(u["user_profile"])
+            base_row.append(u["jwp_str"])
 
             if not raw_result:
-                writer.writerow([
-                    user_id, events_out, u["request_time"],
-                    u["user_history"], u["jwp_str"], ""
-                ])
+                writer.writerow(base_row + [""])
                 continue
             success_count += 1
 
             clean_json = extract_output_json(raw_result)
             if clean_json:
                 json_valid_count += 1
-                writer.writerow([
-                    user_id, events_out, u["request_time"],
-                    u["user_history"], u["jwp_str"], clean_json
-                ])
+                writer.writerow(base_row + [clean_json])
             else:
                 json_invalid_ids.append(user_id)
                 fallback = raw_result.replace("\n", " ").replace("\t", " ")
-                writer.writerow([
-                    user_id, events_out, u["request_time"],
-                    u["user_history"], u["jwp_str"], fallback
-                ])
+                writer.writerow(base_row + [fallback])
 
     file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
     print(f"  Saved {len(results):,} users ({file_size_mb:.1f} MB)")

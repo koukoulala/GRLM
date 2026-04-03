@@ -246,11 +246,18 @@ def process_file(input_file):
     if is_old_format:
         print(f"  Detected old TSV format (backslash-escaped); will unescape JSON fields")
 
+    # Build output columns dynamically: include UserProfile if present in input
+    has_profile = "UserProfile" in header
+    keep_columns = list(KEEP_COLUMNS)
+    if has_profile:
+        idx = keep_columns.index("UserHistory") + 1
+        keep_columns.insert(idx, "UserProfile")
+
     with open(input_file, "r", encoding="utf-8") as fin, \
          open(output_file, "w", encoding="utf-8", newline="") as fout:
 
         reader = csv.DictReader(fin, delimiter="\t")
-        writer = csv.DictWriter(fout, fieldnames=KEEP_COLUMNS, delimiter="\t",
+        writer = csv.DictWriter(fout, fieldnames=keep_columns, delimiter="\t",
                                 lineterminator="\n")
         writer.writeheader()
 
@@ -288,7 +295,7 @@ def process_file(input_file):
             final_journey = json.dumps(cleaned_output, ensure_ascii=False)
 
             # Write cleaned row with selected columns only
-            out_row = {col: row.get(col, "") for col in KEEP_COLUMNS}
+            out_row = {col: row.get(col, "") for col in keep_columns}
             out_row["FinalJourney"] = final_journey
             # Fill UserHistory from JWP if missing in input
             if user_history_map is not None:

@@ -154,8 +154,7 @@ def generate_output(query_to_products: Dict[str, List[dict]],
     if max_rows > 0:
         print(f"  [DEBUG] Limiting to first {max_rows} valid rows")
 
-    output_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory",
-                     "ShoppingJourney", "JourneyWithAllProducts", "JourneyWithProducts"]
+    # (output_header built dynamically after reading input header)
 
     # Statistics
     total_users = 0
@@ -178,12 +177,21 @@ def generate_output(query_to_products: Dict[str, List[dict]],
         idx_events = col_map["ReadableUserEvents"]
         idx_time = col_map.get("RequestTime")
         idx_history = col_map.get("UserHistory")
+        idx_profile = col_map.get("UserProfile")
         idx_output = col_map["OUTPUT"]
+        has_profile = idx_profile is not None
 
+        # Build headers dynamically based on available columns
+        output_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
+        if has_profile:
+            output_header.append("UserProfile")
+        output_header.extend(["ShoppingJourney", "JourneyWithAllProducts", "JourneyWithProducts"])
         f_out.write("\t".join(output_header) + "\n")
         if jwp_output:
-            jwp_header = ["UserId", "ReadableUserEvents", "RequestTime",
-                          "UserHistory", "JourneyWithProducts"]
+            jwp_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
+            if has_profile:
+                jwp_header.append("UserProfile")
+            jwp_header.append("JourneyWithProducts")
             f_jwp.write("\t".join(jwp_header) + "\n")
 
         line_count = 0
@@ -274,15 +282,22 @@ def generate_output(query_to_products: Dict[str, List[dict]],
                 parts[idx_events],
                 parts[idx_time] if idx_time is not None and len(parts) > idx_time else "",
                 parts[idx_history] if idx_history is not None and len(parts) > idx_history else "",
+            ]
+            if has_profile:
+                row.append(parts[idx_profile] if len(parts) > idx_profile else "")
+            row.extend([
                 json.dumps(output_json, ensure_ascii=False),     # ShoppingJourney (original)
                 json.dumps(enriched, ensure_ascii=False),         # JourneyWithAllProducts (all products)
                 json.dumps(filtered, ensure_ascii=False)          # JourneyWithProducts (filtered)
-            ]
+            ])
             f_out.write("\t".join(row) + "\n")
             if jwp_output:
-                # Write JWP row: cols 0,1,2,3,6 (UserId, ReadableUserEvents,
-                # RequestTime, UserHistory, JourneyWithProducts)
-                f_jwp.write("\t".join([row[0], row[1], row[2], row[3], row[6]]) + "\n")
+                # Write JWP row: base cols + optional UserProfile + JourneyWithProducts
+                jwp_row = [row[0], row[1], row[2], row[3]]
+                if has_profile:
+                    jwp_row.append(row[4])
+                jwp_row.append(row[-1])  # JourneyWithProducts is always the last element
+                f_jwp.write("\t".join(jwp_row) + "\n")
 
             line_count += 1
             if max_rows > 0 and line_count >= max_rows:

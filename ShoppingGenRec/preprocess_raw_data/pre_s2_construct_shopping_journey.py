@@ -185,11 +185,16 @@ def parse_final_journey(journey_text, valid_offer_ids):
             stats["empty_product_journeys"] += 1
             continue
 
-        journeys.append({
+        journey_entry = {
             "title": title,
             "reason": reason,
             "product_ids": product_ids,
-        })
+        }
+        journey_type = j_raw.get("JourneyType", "").strip()
+        if journey_type:
+            journey_entry["journey_type"] = journey_type
+
+        journeys.append(journey_entry)
         stats["kept_journeys"] += 1
 
     return journeys, stats, missing_ids
@@ -209,6 +214,8 @@ def _load_journey_rows_from_dir(prompt_results_dir):
     """
     required_cols = {"UserId", "ReadableUserEvents", "UserHistory",
                      "JourneyWithProducts", "FinalJourney"}
+    optional_cols = {"UserProfile"}
+    all_target_cols = required_cols | optional_cols
 
     # Find all _cleaned.tsv / _clean.tsv files in the directory (step3 output)
     tsv_files = sorted(
@@ -239,7 +246,9 @@ def _load_journey_rows_from_dir(prompt_results_dir):
                 print(f"      Need: {sorted(required_cols)}")
                 continue
 
-            col_indices = {c: header.index(c) for c in required_cols}
+            # Determine which target columns are present (required + optional)
+            present_cols = required_cols | (optional_cols & header_set)
+            col_indices = {c: header.index(c) for c in present_cols}
             max_idx = max(col_indices.values())
 
             file_rows = 0
@@ -247,7 +256,7 @@ def _load_journey_rows_from_dir(prompt_results_dir):
                 if len(row) <= max_idx:
                     continue
                 all_rows.append({
-                    c: row[col_indices[c]] for c in required_cols
+                    c: row[col_indices[c]] for c in present_cols
                 })
                 file_rows += 1
 
@@ -412,6 +421,10 @@ def main():
             "user_shopping_events": user_events,
             "journeys": journeys,
         }
+        # Include UserProfile if present in the row
+        user_profile = row.get("UserProfile", "").strip()
+        if user_profile:
+            results[user_id]["user_profile"] = user_profile
 
     print(f"  Successfully parsed entries: {len(results):>12,}")
     print(f"  Rows with empty UserId: {no_userid:>12,}")
