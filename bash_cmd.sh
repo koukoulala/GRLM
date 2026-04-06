@@ -14,7 +14,7 @@ nohup python -u cook_data/step0_1_merge_inputs.py > logs/step0_1_merge.out 2>&1 
 nohup python -u cook_data/step0_2_generate_journey.py --max_users=60000 > logs/step0_split.out 2>&1 &
 nohup python -u cook_data/step3_eval_ranker_results.py --input_folder=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/ > logs/step3_profile.out 2>&1 &
 nohup python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py > logs/pre_s1.out 2>&1 &
-nohup python -u s4_journey_eval.py > logs/s4_eval.out 2>&1 &
+nohup python -u s5_journey_eval.py > logs/s5_eval.out 2>&1 &
 nohup python -u cook_data/step3_eval_ranker_results.py > logs/step3.out 2>&1 &
 nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py > logs/pre_s2.out 2>&1 &
 nohup python -u s1_generate_tid.py --prompt_results_dir="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/" > logs/s1_merge.out 2>&1 &

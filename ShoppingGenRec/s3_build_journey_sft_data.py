@@ -54,6 +54,35 @@ import numpy as np
 csv.field_size_limit(sys.maxsize)
 
 
+def _clean_profile_json(raw):
+    """Unescape multi-layer escaped profile JSON.
+
+    Handles TSV escaping artifacts where quotes are escaped multiple times:
+      \\\"key\\\" -> "key"
+    Returns clean JSON string or original if unparseable.
+    """
+    if not raw or not raw.strip():
+        return raw
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, (dict, list)):
+            return json.dumps(obj, ensure_ascii=False, separators=(',', ': '))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    text = raw
+    for _ in range(3):
+        text = text.replace('\\\\', '\x00__BS__\x00')
+        text = text.replace('\\"', '"')
+        text = text.replace('\x00__BS__\x00', '\\')
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, (dict, list)):
+                return json.dumps(obj, ensure_ascii=False, separators=(',', ': '))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return raw
+
+
 # =============================================================================
 # Constants
 # =============================================================================
@@ -556,6 +585,7 @@ def create_sft_data(
     for user_id, entry in tqdm(
         shopping_journey_data.items(),
         desc=f"Building {task} SFT data",
+        mininterval=30, maxinterval=60,
     ):
         user_events = entry.get("user_shopping_events", [])
         journeys = entry.get("journeys", [])
@@ -566,7 +596,7 @@ def create_sft_data(
 
         # Task-specific: profile2journey requires a profile in the entry
         if task == "profile2journey":
-            user_profile = entry.get("user_profile", "")
+            user_profile = _clean_profile_json(entry.get("user_profile", ""))
             if not user_profile:
                 skip_reasons["no_profile"] += 1
                 continue
@@ -680,7 +710,7 @@ def create_sft_data(
         else:  # profile2journey
             input_text, num_events_used = build_input_text(
                 task, user_events, max_events,
-                profile_text=entry.get("user_profile", ""),
+                profile_text=_clean_profile_json(entry.get("user_profile", "")),
                 max_recent_events=max_recent_events,
                 prompt_line=prompt_line,
             )
@@ -919,7 +949,6 @@ def parse_args():
                 "Data/LLMTrainingData/20260406/sft_data",
         help="Output directory",
     )
-
     # Event/input controls
     parser.add_argument(
         "--max_events",
