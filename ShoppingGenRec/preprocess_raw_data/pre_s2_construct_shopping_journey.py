@@ -185,11 +185,16 @@ def parse_final_journey(journey_text, valid_offer_ids):
             stats["empty_product_journeys"] += 1
             continue
 
-        journeys.append({
+        journey_entry = {
             "title": title,
             "reason": reason,
             "product_ids": product_ids,
-        })
+        }
+        journey_type = j_raw.get("JourneyType", "").strip()
+        if journey_type:
+            journey_entry["journey_type"] = journey_type
+
+        journeys.append(journey_entry)
         stats["kept_journeys"] += 1
 
     return journeys, stats, missing_ids
@@ -199,16 +204,25 @@ def parse_final_journey(journey_text, valid_offer_ids):
 # Argument Parsing
 # =============================================================================
 
-def _load_journey_rows_from_dir(prompt_results_dir):
+def _load_journey_rows_from_dir(prompt_results_dir, require_profile=False):
     """Load and merge step3 _cleaned.tsv files from a directory.
 
     Expected format (5-col with header):
       UserId, ReadableUserEvents, UserHistory, JourneyWithProducts, FinalJourney
 
-    Returns list of dicts with keys matching the 5 required columns.
+    Args:
+        prompt_results_dir: Directory containing *_cleaned.tsv / *_clean.tsv files.
+        require_profile: If True, require Profile column and skip files without it.
+
+    Returns list of dicts with keys matching the required columns.
     """
     required_cols = {"UserId", "ReadableUserEvents", "UserHistory",
                      "JourneyWithProducts", "FinalJourney"}
+    if require_profile:
+        required_cols.add("Profile")
+        optional_cols = set()
+    else:
+        optional_cols = {"Profile"}
 
     # Find all _cleaned.tsv / _clean.tsv files in the directory (step3 output)
     tsv_files = sorted(
@@ -239,7 +253,9 @@ def _load_journey_rows_from_dir(prompt_results_dir):
                 print(f"      Need: {sorted(required_cols)}")
                 continue
 
-            col_indices = {c: header.index(c) for c in required_cols}
+            # Determine which target columns are present (required + optional)
+            present_cols = required_cols | (optional_cols & header_set)
+            col_indices = {c: header.index(c) for c in present_cols}
             max_idx = max(col_indices.values())
 
             file_rows = 0
@@ -247,7 +263,7 @@ def _load_journey_rows_from_dir(prompt_results_dir):
                 if len(row) <= max_idx:
                     continue
                 all_rows.append({
-                    c: row[col_indices[c]] for c in required_cols
+                    c: row[col_indices[c]] for c in present_cols
                 })
                 file_rows += 1
 
@@ -263,6 +279,14 @@ def parse_args():
                     "TSV and item metadata"
     )
     parser.add_argument(
+        "--task",
+        type=str,
+        default="event2journey",
+        choices=["event2journey", "profile2journey"],
+        help="Task type. profile2journey requires Profile column in input "
+             "and outputs shopping_journeys_Profile.json (default: event2journey)",
+    )
+    parser.add_argument(
         "--journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
@@ -273,7 +297,7 @@ def parse_args():
         "--prompt_results_dir",
         type=str,
         #default=None,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/",
         help="Directory containing step3 *_cleaned.tsv files to merge. "
              "Only files ending with '_cleaned.tsv' are loaded. "
              "When set, overrides --journey_file.",
@@ -287,7 +311,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260406/raw_data/",
         help="Path to the output directory",
     )
     return parser.parse_args()
@@ -323,8 +347,15 @@ def main():
     print("Step 2: Reading journey prediction file")
     print("=" * 70)
 
+    require_profile = (args.task == "profile2journey")
+    if require_profile:
+        print(f"  Task: profile2journey (Profile column required)")
+    else:
+        print(f"  Task: event2journey")
+
     if args.prompt_results_dir:
-        rows = _load_journey_rows_from_dir(args.prompt_results_dir)
+        rows = _load_journey_rows_from_dir(args.prompt_results_dir,
+                                          require_profile=require_profile)
     else:
         tsv_columns = [
             "UserId", "ReadableUserEvents", "UserHistory",
@@ -412,6 +443,13 @@ def main():
             "user_shopping_events": user_events,
             "journeys": journeys,
         }
+        # Include Profile if present in the row
+        user_profile = row.get("Profile", "").strip()
+        if user_profile:
+            results[user_id]["user_profile"] = user_profile
+        elif require_profile:
+            # profile2journey task but row has empty Profile — skip
+            continue
 
     print(f"  Successfully parsed entries: {len(results):>12,}")
     print(f"  Rows with empty UserId: {no_userid:>12,}")
@@ -559,7 +597,8 @@ def main():
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, "shopping_journeys.json")
+    output_name = f"{args.task}.json"
+    output_path = os.path.join(args.output_dir, output_name)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
