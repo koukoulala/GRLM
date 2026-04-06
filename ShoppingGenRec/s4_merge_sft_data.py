@@ -203,7 +203,7 @@ def parse_args():
     parser.add_argument(
         "--meta2tid_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data/"
+                "OneRec/Data/LLMTrainingData/20260324/sft_data_v4/"
                 "all_meta2tid_sft_full.json",
         help="Path to meta2tid *_full.json (with metadata.GlobalOfferId)",
     )
@@ -246,7 +246,7 @@ def parse_args():
              "(default: 5)",
     )
     parser.add_argument(
-        "--test_sample_n", type=int, default=5000,
+        "--test_sample_n", type=int, default=2000,
         help="Number of test samples per task (default: 5000)",
     )
 

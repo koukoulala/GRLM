@@ -1114,7 +1114,7 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v3_new/merged_checkpoint_960",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_checkpoint-1200/merged_checkpoint/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_27B_checkpoint-300/merged_checkpoint/",
-        default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-4500-merged",
+        default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-8000-merged",
         help="Path to the trained SFT model checkpoint",
     )
     parser.add_argument(
@@ -1133,7 +1133,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_27B_checkpoint-300/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_9B_checkpoint-4500/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_9B_checkpoint-8000/",
         help="Directory to save evaluation output files",
     )
     parser.add_argument(

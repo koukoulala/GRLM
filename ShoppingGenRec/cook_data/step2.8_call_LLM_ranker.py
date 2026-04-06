@@ -291,40 +291,7 @@ def main():
         print("No users found!")
         return
 
-    # Show sample
-    sample = users[0]
-    print(f"\n  Sample user: {sample['user_id']}")
-    print(f"  Events length: {len(sample['events'])} chars")
-    print(f"  RequestTime: {sample['request_time']}")
-    try:
-        jwp = json.loads(sample["jwp_str"])
-        num_j = len(jwp.get("ContinuedJourneys", []))
-        num_q = sum(
-            len(j.get("Queries", []))
-            for j in jwp.get("ContinuedJourneys", [])
-        )
-        num_p = sum(
-            len(q.get("Products", []))
-            for j in jwp.get("ContinuedJourneys", [])
-            for q in j.get("Queries", [])
-        )
-        print(f"  Journeys: {num_j}, Queries: {num_q}, Products: {num_p}")
-    except json.JSONDecodeError:
-        print(f"  JWP: (invalid JSON)")
-
-    # ---- Build prompts ----
-    print("\nBuilding prompts ...")
-    inputs = []
-    for u in users:
-        prompt = build_prompt(u, prompt_template)
-        inputs.append((u["user_id"], prompt))
-
-    # Show prompt length stats
-    prompt_lens = [len(p) for _, p in inputs]
-    print(f"  Prompt lengths: min={min(prompt_lens):,}, "
-          f"max={max(prompt_lens):,}, avg={sum(prompt_lens)/len(prompt_lens):,.0f}")
-
-    # ---- Call LLM ----
+    # ---- Paths ----
     output_dir = args.output_dir or os.path.dirname(args.input_file)
     os.makedirs(output_dir, exist_ok=True)
     input_base = os.path.splitext(os.path.basename(args.input_file))[0]
@@ -340,7 +307,7 @@ def main():
             return
         print(f"  Loaded {len(ckpt):,} completed items")
 
-        # Build results list aligned with users
+        # Build results list — only include users that have checkpoint results
         results = []
         found = 0
         for u in users:
@@ -348,14 +315,47 @@ def main():
             if uid in ckpt:
                 results.append((uid, ckpt[uid]))
                 found += 1
-            else:
-                results.append((uid, ""))
+        del ckpt  # free checkpoint memory before saving
         print(f"  Matched {found:,}/{len(users):,} users")
+        print(f"  [SAVE-INTERMEDIATE] Skipping prompt building (not needed)")
+        print(f"  [SAVE-INTERMEDIATE] Checkpoint will NOT be deleted")
 
         # Fall through to save results
         # (reuse the same save logic below)
         pass
     else:
+        # Show sample
+        sample = users[0]
+        print(f"\n  Sample user: {sample['user_id']}")
+        print(f"  Events length: {len(sample['events'])} chars")
+        print(f"  RequestTime: {sample['request_time']}")
+        try:
+            jwp = json.loads(sample["jwp_str"])
+            num_j = len(jwp.get("ContinuedJourneys", []))
+            num_q = sum(
+                len(j.get("Queries", []))
+                for j in jwp.get("ContinuedJourneys", [])
+            )
+            num_p = sum(
+                len(q.get("Products", []))
+                for j in jwp.get("ContinuedJourneys", [])
+                for q in j.get("Queries", [])
+            )
+            print(f"  Journeys: {num_j}, Queries: {num_q}, Products: {num_p}")
+        except json.JSONDecodeError:
+            print(f"  JWP: (invalid JSON)")
+
+        # ---- Build prompts ----
+        print("\nBuilding prompts ...")
+        inputs = []
+        for u in users:
+            prompt = build_prompt(u, prompt_template)
+            inputs.append((u["user_id"], prompt))
+
+        # Show prompt length stats
+        prompt_lens = [len(p) for _, p in inputs]
+        print(f"  Prompt lengths: min={min(prompt_lens):,}, "
+              f"max={max(prompt_lens):,}, avg={sum(prompt_lens)/len(prompt_lens):,.0f}")
         print(f"\nCalling LLM ranker ({args.copilot_model}) ...")
         start_time = time.time()
 
@@ -451,7 +451,10 @@ def main():
             print(f"  Raw (truncated): {(raw or '')[:200]}...")
 
     # ---- Cleanup ----
-    cleanup_checkpoint(checkpoint_dir)
+    if args.save_intermediate_only:
+        print(f"\n  [SAVE-INTERMEDIATE] Checkpoint preserved at: {checkpoint_dir}")
+    else:
+        cleanup_checkpoint(checkpoint_dir)
 
     # ---- Before/After Ranker Statistics ----
     print(f"\n{'=' * 70}")
