@@ -204,35 +204,35 @@ def parse_args():
         "--meta2tid_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
                 "OneRec/Data/LLMTrainingData/20260324/sft_data/"
-                "meta2tid_sft_full.json",
+                "all_meta2tid_sft_full.json",
         help="Path to meta2tid *_full.json (with metadata.GlobalOfferId)",
     )
     parser.add_argument(
         "--event2journey_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data_v3_new/"
+                "OneRec/Data/LLMTrainingData/20260406/sft_data/"
                 "event2journey_sft_full.json",
         help="Path to event2journey *_full.json (with metadata.user_id)",
     )
     parser.add_argument(
         "--profile2journey_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data_v3_new/"
+                "OneRec/Data/LLMTrainingData/20260406/sft_data/"
                 "profile2journey_sft_full.json",
         help="Path to profile2journey *_full.json (with metadata.user_id)",
     )
 
     # --- Sampling ---
     parser.add_argument(
-        "--meta2tid_prob", type=float, default=0.1,
+        "--meta2tid_prob", type=float, default=0.5,
         help="Sampling probability for meta2tid training data",
     )
     parser.add_argument(
-        "--meta2tid_max_train", type=int, default=500000,
+        "--meta2tid_max_train", type=int, default=1000000,
         help="Maximum number of meta2tid training samples (default: 500000)",
     )
     parser.add_argument(
-        "--journey_target_total", type=int, default=600000,
+        "--journey_target_total", type=int, default=1000000,
         help="Target total for event2journey + profile2journey combined. "
              "If deduped total is below this, shared users are duplicated "
              "across both tasks to fill the gap (default: 1000000)",
@@ -254,11 +254,11 @@ def parse_args():
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data_v3_new_2",
+                "OneRec/Data/LLMTrainingData/20260406/sft_data",
         help="Output directory",
     )
     parser.add_argument(
-        "--seed", type=int, default=43,
+        "--seed", type=int, default=42,
         help="Random seed (default: 42)",
     )
     return parser.parse_args()
@@ -373,28 +373,37 @@ def main():
     print(f"    event2journey only:   {len(e2j_only_uids):>10,}")
     print(f"    profile2journey only: {len(p2j_only_uids):>10,}")
 
-    # --- Sample test users from shared users ---
-    shared_sorted = sorted(shared_uids)
-    rng.shuffle(shared_sorted)
-    test_n_journey = min(args.test_sample_n, len(shared_uids))
-    test_uids = set(shared_sorted[:test_n_journey])
+    # --- Sample test users independently from each task ---
+    # event2journey test
+    e2j_all_uids = sorted(e2j_by_user.keys())
+    rng.shuffle(e2j_all_uids)
+    test_n_e2j = min(args.test_sample_n, len(e2j_all_uids))
+    e2j_test_uids = set(e2j_all_uids[:test_n_e2j])
+
+    # profile2journey test
+    p2j_all_uids = sorted(p2j_by_user.keys())
+    rng.shuffle(p2j_all_uids)
+    test_n_p2j = min(args.test_sample_n, len(p2j_all_uids))
+    p2j_test_uids = set(p2j_all_uids[:test_n_p2j])
+
+    test_uids = e2j_test_uids | p2j_test_uids
 
     # Build test sets: sft fields + UserId
     e2j_test = []
     p2j_test = []
-    for uid in sorted(test_uids):
-        if uid in e2j_by_user:
-            entry = extract_sft_fields(e2j_by_user[uid])
-            entry["UserId"] = uid
-            e2j_test.append(entry)
-        if uid in p2j_by_user:
-            entry = extract_sft_fields(p2j_by_user[uid])
-            entry["UserId"] = uid
-            p2j_test.append(entry)
+    for uid in sorted(e2j_test_uids):
+        entry = extract_sft_fields(e2j_by_user[uid])
+        entry["UserId"] = uid
+        e2j_test.append(entry)
+    for uid in sorted(p2j_test_uids):
+        entry = extract_sft_fields(p2j_by_user[uid])
+        entry["UserId"] = uid
+        p2j_test.append(entry)
 
-    print(f"\n  Test set ({test_n_journey:,} shared users):")
-    print(f"    event2journey test:    {len(e2j_test):,}")
-    print(f"    profile2journey test:  {len(p2j_test):,}")
+    print(f"\n  Test sets (independently sampled):")
+    print(f"    event2journey test:    {len(e2j_test):,} (from {len(e2j_by_user):,} users)")
+    print(f"    profile2journey test:  {len(p2j_test):,} (from {len(p2j_by_user):,} users)")
+    print(f"    Total test users:      {len(test_uids):,} (union)")
 
     # --- Remove test users from all pools ---
     shared_train_uids = shared_uids - test_uids

@@ -25,6 +25,45 @@ from collections import defaultdict
 JOURNEY_TYPES = ["ContinuedJourneys"]
 PRODUCT_ATTRS = ["Title", "Seller", "Price"]
 
+
+def _open_strip_nul(filepath, **kwargs):
+    """Open a text file and transparently strip NUL bytes from each line.
+
+    Some LLM outputs contain stray NUL (\x00) bytes that crash csv.reader.
+    This wrapper removes them on the fly.
+    """
+    f = open(filepath, "r", **kwargs)
+
+    class _NulStripper:
+        def __init__(self, fobj):
+            self._f = fobj
+            self.nul_lines = 0
+
+        def __iter__(self):
+            for line in self._f:
+                if "\x00" in line:
+                    self.nul_lines += 1
+                    line = line.replace("\x00", "")
+                yield line
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self._f.close()
+
+        def readline(self):
+            line = self._f.readline()
+            if "\x00" in line:
+                self.nul_lines += 1
+                line = line.replace("\x00", "")
+            return line
+
+        def close(self):
+            self._f.close()
+
+    return _NulStripper(f)
+
 # Columns to keep in the output file (matches pre_s2 input format)
 KEEP_COLUMNS = [
     "UserId",
@@ -40,13 +79,17 @@ def _unescape_json_field_v1(s):
 
     Pattern: \\" -> placeholder, \\" -> ", placeholder -> \\"
     Works when the writer only escaped " but not \\.
+    Also handles multi-backslash inch patterns (\\\\\" etc).
     """
     if '\\' not in s:
         return s
-    placeholder = '\x00__ESC_QUOT__\x00'
-    s = s.replace('\\\\"', placeholder)
+    # Protect content quotes (inch marks etc): 2+ backslashes before quote
+    ph_inch = '\x00__INCH__\x00'
+    s = s.replace('\\\\\\"', ph_inch)   # \\\" (2 bs + q) -> placeholder
+    # Unescape structure quotes: \" -> "
     s = s.replace('\\"', '"')
-    s = s.replace(placeholder, '\\"')
+    # Restore content quotes as properly escaped
+    s = s.replace(ph_inch, '\\"')
     return s
 
 
@@ -65,24 +108,84 @@ def _unescape_json_field_v2(s):
     return s
 
 
+def _unescape_json_field_v3(s):
+    """Unescape variant 3: multi-layer escaped format.
+
+    Applied when csv escapechar='\\' was used multiple times during writing,
+    producing patterns like \\\\\\\" (3 actual backslashes + quote).
+    Fix: apply v2 unescape exactly twice (two layers of csv escaping).
+    """
+    if '\\' not in s:
+        return s
+    # Round 1
+    placeholder = '\x00__BSLASH3__\x00'
+    s = s.replace('\\\\', placeholder)
+    s = s.replace('\\"', '"')
+    s = s.replace(placeholder, '\\')
+    # Round 2
+    s = s.replace('\\\\', placeholder)
+    s = s.replace('\\"', '"')
+    s = s.replace(placeholder, '\\')
+    return s
+
+
+def _extract_output_tag(s):
+    """Extract JSON from <OUTPUT>...</OUTPUT> tags if present."""
+    match = re.search(r'<OUTPUT>\s*(.*?)\s*</OUTPUT>', s, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    # Also try without closing tag (truncated output)
+    match = re.search(r'<OUTPUT>\s*(.*)', s, re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+        # Try to find the last valid } 
+        brace_end = text.rfind('}')
+        if brace_end > 0:
+            return text[:brace_end + 1]
+    return s
+
+
 def _parse_json_field(raw):
-    """Try to parse a JSON field, handling old double-escaped format."""
+    """Try to parse a JSON field, handling various escaped formats and tags."""
     if not raw or not raw.strip():
         return None, "empty"
+
+    # Try each candidate string: original, then with <OUTPUT> tag stripped
+    candidates = [raw]
+    if '<OUTPUT>' in raw or '<output>' in raw.lower():
+        candidates.append(_extract_output_tag(raw))
+
+    for text in candidates:
+        if not text or not text.strip():
+            continue
+        # Try raw
+        try:
+            return json.loads(text), None
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Try v1 unescape (only quotes escaped)
+        try:
+            return json.loads(_unescape_json_field_v1(text)), None
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Try v2 unescape (both backslashes and quotes escaped)
+        try:
+            return json.loads(_unescape_json_field_v2(text)), None
+        except (json.JSONDecodeError, ValueError):
+            pass
+        # Try v3 unescape (multi-layer escaped)
+        try:
+            return json.loads(_unescape_json_field_v3(text)), None
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # All attempts failed
+    last_text = candidates[-1] if candidates else raw
     try:
-        return json.loads(raw), None
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # Try v1 unescape (only quotes escaped)
-    try:
-        return json.loads(_unescape_json_field_v1(raw)), None
-    except (json.JSONDecodeError, ValueError):
-        pass
-    # Try v2 unescape (both backslashes and quotes escaped)
-    try:
-        return json.loads(_unescape_json_field_v2(raw)), None
+        json.loads(last_text)
     except (json.JSONDecodeError, ValueError) as e:
         return None, str(e)
+    return None, "unknown parse error"
 
 
 def build_jwp_index(jwp_data):
@@ -207,6 +310,15 @@ def process_file(input_file):
     total_queries_added = 0
     total_journey_type_restored = 0
     rows_with_product_removal = 0
+    # Per-journey product count tracking (after cleaning)
+    journey_product_counts = []
+    user_journey_counts = []
+    # Before-ranker stats (from JWP)
+    jwp_journey_counts = []          # journeys per user in JWP
+    jwp_products_per_journey = []    # products per journey in JWP (total across queries)
+    # After-ranker stats (from OUTPUT, before step3 cleaning)
+    ranker_journey_counts = []
+    ranker_products_per_journey = []
 
     # Pre-scan: check if UserHistory column exists in input
     user_history_map = None
@@ -246,14 +358,14 @@ def process_file(input_file):
     if is_old_format:
         print(f"  Detected old TSV format (backslash-escaped); will unescape JSON fields")
 
-    # Build output columns dynamically: include UserProfile if present in input
-    has_profile = "UserProfile" in header
+    # Build output columns dynamically: include Profile if present in input
+    has_profile = "Profile" in header or "UserProfile" in header
     keep_columns = list(KEEP_COLUMNS)
     if has_profile:
         idx = keep_columns.index("UserHistory") + 1
-        keep_columns.insert(idx, "UserProfile")
+        keep_columns.insert(idx, "Profile")
 
-    with open(input_file, "r", encoding="utf-8") as fin, \
+    with _open_strip_nul(input_file, encoding="utf-8") as fin, \
          open(output_file, "w", encoding="utf-8", newline="") as fout:
 
         reader = csv.DictReader(fin, delimiter="\t")
@@ -268,16 +380,33 @@ def process_file(input_file):
             output_data, out_err = _parse_json_field(row.get("OUTPUT", ""))
             if output_data is None:
                 rows_deleted_parse_error += 1
-                if rows_deleted_parse_error <= 5:
-                    print(f"[Row {row_idx}] DELETED — OUTPUT parse error: {out_err}")
+                if rows_deleted_parse_error <= 20:
+                    print(f"[Row {row_idx}] DELETED -- OUTPUT parse error: {out_err}")
                 continue
 
             jwp_data, jwp_err = _parse_json_field(row.get("JourneyWithProducts", ""))
             if jwp_data is None:
                 rows_deleted_parse_error += 1
-                if rows_deleted_parse_error <= 5:
-                    print(f"[Row {row_idx}] DELETED — JourneyWithProducts parse error: {jwp_err}")
+                if rows_deleted_parse_error <= 20:
+                    print(f"[Row {row_idx}] DELETED -- JourneyWithProducts parse error: {jwp_err}")
                 continue
+
+            # Track before-ranker stats from JWP
+            jwp_journeys = jwp_data.get("ContinuedJourneys", [])
+            jwp_journey_counts.append(len(jwp_journeys))
+            for jj in jwp_journeys:
+                # JWP products are nested under Queries
+                n_prods = sum(
+                    len(q.get("Products", []))
+                    for q in jj.get("Queries", [])
+                )
+                jwp_products_per_journey.append(n_prods)
+
+            # Track after-ranker stats from OUTPUT (before step3 cleaning)
+            ranker_journeys = output_data.get("ContinuedJourneys", [])
+            ranker_journey_counts.append(len(ranker_journeys))
+            for rj in ranker_journeys:
+                ranker_products_per_journey.append(len(rj.get("Products", [])))
 
             # 2 & 3. Clean OUTPUT: remove bad products, add Queries
             jwp_index = build_jwp_index(jwp_data)
@@ -291,6 +420,15 @@ def process_file(input_file):
                 rows_with_product_removal += 1
             total_journey_type_restored += stats["journey_type_restored"]
 
+            # Track per-journey product counts after cleaning
+            user_j_count = 0
+            for jtype in JOURNEY_TYPES:
+                for j in cleaned_output.get(jtype, []):
+                    n_prods = len(j.get("Products", []))
+                    journey_product_counts.append(n_prods)
+                    user_j_count += 1
+            user_journey_counts.append(user_j_count)
+
             # Build FinalJourney: cleaned output with Queries
             final_journey = json.dumps(cleaned_output, ensure_ascii=False)
 
@@ -303,6 +441,10 @@ def process_file(input_file):
                 out_row["UserHistory"] = user_history_map.get(uid, "")
             writer.writerow(out_row)
             rows_kept += 1
+
+        # Report NUL bytes stripped
+        if fin.nul_lines > 0:
+            print(f"  [WARN] Stripped NUL bytes from {fin.nul_lines} line(s)")
 
     # ===== Print Summary =====
     print()
@@ -325,6 +467,86 @@ def process_file(input_file):
     print(f"--- Query Enrichment ---")
     print(f"  Journeys with Queries added from JWP:  {total_queries_added}")
     print(f"  JourneyType restored from JWP:         {total_journey_type_restored}")
+
+    # ===== Before vs After Ranker Comparison =====
+    def _print_dist(label, arr):
+        """Print distribution stats for an integer array."""
+        if not arr:
+            print(f"  {label}: (no data)")
+            return
+        s = sorted(arr)
+        n = len(s)
+        avg = sum(s) / n
+        p25 = s[int(n * 0.25)]
+        p50 = s[int(n * 0.5)]
+        p75 = s[int(n * 0.75)]
+        p90 = s[int(n * 0.9)]
+        print(f"  {label}:")
+        print(f"    N={n:,}  Min={s[0]}  P25={p25}  P50={p50}  "
+              f"P75={p75}  P90={p90}  Max={s[-1]}  Mean={avg:.1f}")
+
+    print()
+    print(f"--- Before Ranker (JWP input) ---")
+    _print_dist("Journeys per User", jwp_journey_counts)
+    _print_dist("Products per Journey", jwp_products_per_journey)
+    if jwp_products_per_journey:
+        print(f"    Total journeys: {len(jwp_products_per_journey):,}  "
+              f"Total products: {sum(jwp_products_per_journey):,}")
+
+    print()
+    print(f"--- After Ranker (OUTPUT, before step3 cleaning) ---")
+    _print_dist("Journeys per User", ranker_journey_counts)
+    _print_dist("Products per Journey", ranker_products_per_journey)
+    if ranker_products_per_journey:
+        print(f"    Total journeys: {len(ranker_products_per_journey):,}  "
+              f"Total products: {sum(ranker_products_per_journey):,}")
+
+    # Journey reduction ratio
+    if jwp_products_per_journey and ranker_products_per_journey:
+        jwp_total_j = len(jwp_products_per_journey)
+        ranker_total_j = len(ranker_products_per_journey)
+        jwp_total_p = sum(jwp_products_per_journey)
+        ranker_total_p = sum(ranker_products_per_journey)
+        print()
+        print(f"--- Ranker Reduction ---")
+        print(f"  Journeys: {jwp_total_j:,} -> {ranker_total_j:,} "
+              f"({ranker_total_j / max(jwp_total_j, 1) * 100:.1f}% retained)")
+        print(f"  Products: {jwp_total_p:,} -> {ranker_total_p:,} "
+              f"({ranker_total_p / max(jwp_total_p, 1) * 100:.1f}% retained)")
+        if jwp_products_per_journey and ranker_products_per_journey:
+            avg_before = sum(jwp_products_per_journey) / len(jwp_products_per_journey)
+            avg_after = sum(ranker_products_per_journey) / len(ranker_products_per_journey)
+            print(f"  Avg products/journey: {avg_before:.1f} -> {avg_after:.1f}")
+
+    # Per-journey product count distribution (after step3 cleaning)
+    if journey_product_counts:
+        print()
+        print(f"--- After Step3 Cleaning ---")
+        _print_dist("Products per Journey", journey_product_counts)
+        _print_dist("Journeys per User", user_journey_counts)
+        if journey_product_counts:
+            print(f"    Total journeys: {len(journey_product_counts):,}  "
+                  f"Total products: {sum(journey_product_counts):,}")
+        # Bucket distribution for products per journey
+        buckets = defaultdict(int)
+        for c in journey_product_counts:
+            if c <= 3:
+                buckets["1-3"] += 1
+            elif c <= 5:
+                buckets["4-5"] += 1
+            elif c <= 10:
+                buckets["6-10"] += 1
+            elif c <= 20:
+                buckets["11-20"] += 1
+            else:
+                buckets["21+"] += 1
+        n = len(journey_product_counts)
+        print(f"    Product count distribution:")
+        for bucket in ["1-3", "4-5", "6-10", "11-20", "21+"]:
+            cnt = buckets.get(bucket, 0)
+            pct = cnt / n * 100
+            print(f"      {bucket:>6s} products: {cnt:>10,} journeys ({pct:5.1f}%)")
+
     print()
     print(f"Output written to: {output_file}")
     return True

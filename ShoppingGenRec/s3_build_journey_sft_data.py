@@ -60,8 +60,9 @@ csv.field_size_limit(sys.maxsize)
 
 DEFAULT_MAX_EVENTS = 500
 DEFAULT_MAX_RECENT_EVENTS = 200
-DEFAULT_MAX_PRODUCTS = 30
-DEFAULT_MIN_PRODUCTS = 8
+DEFAULT_MAX_PRODUCTS = 20
+DEFAULT_MIN_PRODUCTS = 5
+DEFAULT_MIN_AVG_PRODUCTS = 5
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 20
 DEFAULT_KEEP_EMPTY_RATIO = 0
@@ -118,27 +119,38 @@ def normalize_event_times(text):
 def get_item_tid(item_id, id2meta):
     """Get the text ID (7 summary words) for an item.
 
+    Prefers summary_words_norm if available, falls back to summary_words.
+
     Args:
         item_id: Item identifier string (GlobalOfferId).
         id2meta: Dict mapping item IDs to metadata with summary_words.
 
     Returns:
-        List of 7 summary words, or None if not found or invalid.
+        Tuple of (list of 7 summary words, used_norm: bool), or (None, False)
+        if not found or invalid.
     """
     if item_id not in id2meta:
-        return None
+        return None, False
     meta = id2meta[item_id]
-    summary_words = meta.get("summary_words", [])
+
+    # Prefer summary_words_norm over summary_words
+    used_norm = False
+    summary_words = meta.get("summary_words_norm")
+    if summary_words and len(summary_words) >= 7 and "" not in summary_words:
+        used_norm = True
+    else:
+        summary_words = meta.get("summary_words", [])
+
     if not summary_words or "" in summary_words:
-        return None
+        return None, False
     valid_words = [
         word.replace("[", "").replace("]", "")
         for word in summary_words
         if word and word.strip()
     ]
     if len(valid_words) < 7:
-        return None
-    return valid_words[:7]
+        return None, False
+    return valid_words[:7], used_norm
 
 
 def resolve_journey_tids(journey, id2meta, max_products):
@@ -156,11 +168,14 @@ def resolve_journey_tids(journey, id2meta, max_products):
     """
     product_tids = []
     resolved_pids = []
+    norm_count = 0
     for pid in journey.get("product_ids", []):
-        tid = get_item_tid(pid, id2meta)
+        tid, used_norm = get_item_tid(pid, id2meta)
         if tid is not None:
             product_tids.append(tid)
             resolved_pids.append(pid)
+            if used_norm:
+                norm_count += 1
             if len(product_tids) >= max_products:
                 break
 
@@ -170,8 +185,10 @@ def resolve_journey_tids(journey, id2meta, max_products):
     return {
         "title": journey.get("title", ""),
         "reason": journey.get("reason", ""),
+        "journey_type": journey.get("journey_type", "explicit"),
         "product_tids": product_tids,
         "product_ids": resolved_pids,
+        "norm_count": norm_count,
     }
 
 
@@ -297,10 +314,12 @@ def build_output_json(resolved_journeys):
     """Build the structured JSON output string for SFT training.
 
     Output format:
-    {"ContinuedJourneys":[{"Title":"...","Reason":"...","ProductTIDs":[["a","b",...],...]},...]}"
+    {"ContinuedJourneys":[{"JourneyType":"...","Title":"...","Reason":"...",
+     "ProductTIDs":[["a","b",...],...]},...]}
 
     Args:
-        resolved_journeys: List of dicts with title, reason, product_tids.
+        resolved_journeys: List of dicts with journey_type, title, reason,
+            product_tids.
 
     Returns:
         JSON string.
@@ -308,6 +327,7 @@ def build_output_json(resolved_journeys):
     continued = []
     for j in resolved_journeys:
         continued.append({
+            "JourneyType": j.get("journey_type", "explicit"),
             "Title": j["title"],
             "Reason": j["reason"],
             "ProductTIDs": j["product_tids"],
@@ -359,14 +379,13 @@ def create_instruction(task, num_journeys, min_products_in_user,
     # --- Single-paragraph instruction ---
     instruction = (
         f"{opening}"
-        f" Each journey represents a different product category."
-        f" Each journey has a short, engaging title, a brief user-centric reason"
-        f" referencing the user's history, and {product_text} recommended products"
-        f" as text IDs (7 slots each)."
-        f" Products within each journey must be diverse: cover different brands, styles,"
-        f" use cases and subcategories."
+        f" Each journey has a JourneyType ('explicit' or 'related'),"
+        f" a short engaging title, a user-centric reason,"
+        f" and {product_text} recommended products as text IDs (7 slots each)."
+        f" Products within each journey must be diverse:"
+        f" cover different brands, styles, use cases, and subcategories."
         f' Output JSON:'
-        f' {{"ContinuedJourneys":[{{"Title":"...","Reason":"...",'
+        f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...","Reason":"...",'
         f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
     )
 
@@ -478,6 +497,7 @@ def create_sft_data(
     max_recent_events=DEFAULT_MAX_RECENT_EVENTS,
     max_products=DEFAULT_MAX_PRODUCTS,
     min_products=DEFAULT_MIN_PRODUCTS,
+    min_avg_products=DEFAULT_MIN_AVG_PRODUCTS,
     min_journeys=DEFAULT_MIN_JOURNEYS,
     max_journeys=DEFAULT_MAX_JOURNEYS,
     keep_empty_ratio=DEFAULT_KEEP_EMPTY_RATIO,
@@ -528,6 +548,10 @@ def create_sft_data(
     total_dedup_removed = 0
     products_before_diversity = []
     products_after_diversity = []
+    users_low_avg_products = 0  # users dropped by avg product filter
+    # Norm TID statistics
+    total_norm_tids = 0
+    total_resolved_tids = 0
 
     for user_id, entry in tqdm(
         shopping_journey_data.items(),
@@ -545,6 +569,24 @@ def create_sft_data(
             user_profile = entry.get("user_profile", "")
             if not user_profile:
                 skip_reasons["no_profile"] += 1
+                continue
+
+        # ---- User-level pre-filter: average resolvable products per journey ----
+        # Quickly estimate avg product quality BEFORE expensive diversity ops.
+        # If a user's journeys have too few resolvable products on average,
+        # skip the entire user early — saves time and removes low-quality data.
+        if journeys:
+            resolvable_counts = []
+            for j in journeys:
+                n_resolvable = sum(
+                    1 for pid in j.get("product_ids", [])
+                    if get_item_tid(pid, id2meta)[0] is not None
+                )
+                resolvable_counts.append(n_resolvable)
+            avg_resolvable = sum(resolvable_counts) / len(resolvable_counts)
+            if avg_resolvable < min_avg_products:
+                users_low_avg_products += 1
+                skip_reasons["low_avg_products"] += 1
                 continue
 
         # Resolve all journeys' product IDs to TIDs, then diversify
@@ -576,6 +618,8 @@ def create_sft_data(
                 continue
             original_products_per_journey.append(orig_count)
             resolved_products_per_journey.append(len(resolved["product_tids"]))
+            total_norm_tids += resolved.get("norm_count", 0)
+            total_resolved_tids += len(resolved["product_tids"])
             resolved_journeys.append(resolved)
 
         # Check if >= 50% of this user's journeys were filtered out
@@ -708,6 +752,7 @@ def create_sft_data(
     # User-level filtering
     print(f"\n  --- User-Level Filtering ---")
     print(f"  Users dropped (>= 50% journeys filtered): {users_half_filtered:>10,}")
+    print(f"  Users dropped (low avg products < {min_avg_products}): {users_low_avg_products:>10,}")
     print(f"  Users dropped (< {min_journeys} journey after filter): {users_below_min_journeys:>10,}")
 
     # Empty journey handling
@@ -823,6 +868,14 @@ def create_sft_data(
             print(f"    Reduction per journey:            "
                   f"Mean={reduced.mean():.1f}, Max={reduced.max()}")
 
+    # summary_words_norm usage statistics
+    print(f"\n  --- Summary Words Norm Usage ---")
+    print(f"  Total resolved TIDs (kept journeys): {total_resolved_tids:>10,}")
+    print(f"  Using summary_words_norm:            {total_norm_tids:>10,} "
+          f"({total_norm_tids / max(total_resolved_tids, 1) * 100:.1f}%)")
+    print(f"  Using summary_words (fallback):      {total_resolved_tids - total_norm_tids:>10,} "
+          f"({(total_resolved_tids - total_norm_tids) / max(total_resolved_tids, 1) * 100:.1f}%)")
+
     return sft_data
 
 
@@ -848,7 +901,7 @@ def parse_args():
         "--shopping_journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/raw_data/shopping_journeys.json",
+                "Data/LLMTrainingData/20260406/raw_data/profile2journey.json",
         help="Path to shopping_journeys.json. For profile2journey, each entry "
              "must contain a 'user_profile' key.",
     )
@@ -856,14 +909,14 @@ def parse_args():
         "--id2meta_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/processed/id2meta.json",
+                "Data/LLMTrainingData/20260324/processed/id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/sft_data_v3_new",
+                "Data/LLMTrainingData/20260406/sft_data",
         help="Output directory",
     )
 
@@ -895,6 +948,13 @@ def parse_args():
         default=DEFAULT_MIN_PRODUCTS,
         help=f"Min products per journey; journeys with fewer are dropped "
              f"(default: {DEFAULT_MIN_PRODUCTS})",
+    )
+    parser.add_argument(
+        "--min_avg_products",
+        type=int,
+        default=DEFAULT_MIN_AVG_PRODUCTS,
+        help=f"Min average resolvable products across all journeys for a user; "
+             f"users below this are skipped entirely (default: {DEFAULT_MIN_AVG_PRODUCTS})",
     )
     parser.add_argument(
         "--min_journeys",
@@ -944,12 +1004,6 @@ def main():
 
     task = args.task
 
-    # Validate profile2journey requirements
-    if task == "profile2journey":
-        # Quick check: at least some entries should have user_profile
-        # (actual per-user check happens in create_sft_data)
-        pass
-
     # =========================================================================
     # Step 1: Load input files
     # =========================================================================
@@ -969,8 +1023,8 @@ def main():
         )
         print(f"    Entries with user_profile: {profile_count:,}")
         if profile_count == 0:
-            print("ERROR: No entries have 'user_profile' in shopping_journeys.json. "
-                  "Run pre_s2 with input files that contain UserProfile column.",
+            print("ERROR: No entries have 'user_profile'. "
+                  "Run pre_s2 with --task profile2journey to require Profile column.",
                   file=sys.stderr)
             sys.exit(1)
 
@@ -985,12 +1039,21 @@ def main():
         for j in entry.get("journeys", []):
             all_pids.update(j.get("product_ids", []))
     found = sum(1 for pid in all_pids if pid in id2meta)
-    has_tid = sum(1 for pid in all_pids if get_item_tid(pid, id2meta) is not None)
+    has_tid = 0
+    has_norm = 0
+    for pid in all_pids:
+        tid, used_norm = get_item_tid(pid, id2meta)
+        if tid is not None:
+            has_tid += 1
+            if used_norm:
+                has_norm += 1
     print(f"    Distinct product IDs in journeys: {len(all_pids):,}")
     print(f"    Found in id2meta: {found:,} "
           f"({found / max(len(all_pids), 1) * 100:.1f}%)")
     print(f"    With valid TID: {has_tid:,} "
           f"({has_tid / max(len(all_pids), 1) * 100:.1f}%)")
+    print(f"    Using summary_words_norm: {has_norm:,} "
+          f"({has_norm / max(has_tid, 1) * 100:.1f}% of valid TIDs)")
 
     # =========================================================================
     # Step 2: Build SFT data
@@ -1003,6 +1066,7 @@ def main():
         print(f"  max_recent_events = {args.max_recent_events}")
     print(f"  max_products_per_journey = {args.max_products_per_journey}")
     print(f"  min_products_per_journey = {args.min_products_per_journey}")
+    print(f"  min_avg_products = {args.min_avg_products}")
     print(f"  min_journeys = {args.min_journeys}")
     print(f"  max_journeys = {args.max_journeys}")
     print(f"  keep_empty_ratio = {args.keep_empty_ratio}")
@@ -1018,6 +1082,7 @@ def main():
         max_recent_events=args.max_recent_events,
         max_products=args.max_products_per_journey,
         min_products=args.min_products_per_journey,
+        min_avg_products=args.min_avg_products,
         min_journeys=args.min_journeys,
         max_journeys=args.max_journeys,
         keep_empty_ratio=args.keep_empty_ratio,

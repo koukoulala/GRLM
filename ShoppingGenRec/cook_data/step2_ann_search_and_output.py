@@ -177,20 +177,20 @@ def generate_output(query_to_products: Dict[str, List[dict]],
         idx_events = col_map["ReadableUserEvents"]
         idx_time = col_map.get("RequestTime")
         idx_history = col_map.get("UserHistory")
-        idx_profile = col_map.get("UserProfile")
+        idx_profile = col_map.get("Profile") or col_map.get("UserProfile")
         idx_output = col_map["OUTPUT"]
         has_profile = idx_profile is not None
 
         # Build headers dynamically based on available columns
         output_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
         if has_profile:
-            output_header.append("UserProfile")
+            output_header.append("Profile")
         output_header.extend(["ShoppingJourney", "JourneyWithAllProducts", "JourneyWithProducts"])
         f_out.write("\t".join(output_header) + "\n")
         if jwp_output:
             jwp_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
             if has_profile:
-                jwp_header.append("UserProfile")
+                jwp_header.append("Profile")
             jwp_header.append("JourneyWithProducts")
             f_jwp.write("\t".join(jwp_header) + "\n")
 

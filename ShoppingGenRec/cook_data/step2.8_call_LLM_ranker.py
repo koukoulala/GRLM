@@ -89,7 +89,9 @@ def read_jwp_tsv(filepath, max_users=0):
     has_profile = False
     with open(filepath, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
-        has_profile = "UserProfile" in (reader.fieldnames or [])
+        fieldnames = reader.fieldnames or []
+        has_profile = "Profile" in fieldnames or "UserProfile" in fieldnames
+        profile_col = "Profile" if "Profile" in fieldnames else "UserProfile"
 
         for row in reader:
             user_id = row.get("UserId", "").strip()
@@ -101,7 +103,7 @@ def read_jwp_tsv(filepath, max_users=0):
                 continue
 
             user_history = row.get("UserHistory", "").strip()
-            user_profile = row.get("UserProfile", "").strip() if has_profile else ""
+            user_profile = row.get(profile_col, "").strip() if has_profile else ""
 
             # Replace "#N#" separator with newlines
             events_text = events_raw.replace("#N#", "\n")
@@ -243,8 +245,13 @@ def parse_args():
         help="Debug mode: process only first 50 users",
     )
     parser.add_argument(
-        "--debug_rows", type=int, default=50,
-        help="Number of users in debug mode (default: 50)",
+        "--debug_rows", type=int, default=100,
+        help="Number of users in debug mode (default: 100)",
+    )
+    parser.add_argument(
+        "--save_intermediate_only", action="store_true", default=False,
+        help="Load all checkpoint results and save the output TSV without "
+             "running inference. Useful when step2.8 was interrupted.",
     )
     return parser.parse_args()
 
@@ -323,23 +330,49 @@ def main():
     input_base = os.path.splitext(os.path.basename(args.input_file))[0]
     checkpoint_dir = os.path.join(output_dir, f"_ranker_checkpoint_{input_base}")
 
-    print(f"\nCalling LLM ranker ({args.copilot_model}) ...")
-    start_time = time.time()
+    # ---- Save intermediate only mode ----
+    if args.save_intermediate_only:
+        from llm_utils import load_checkpoint as _load_ckpt
+        print(f"\n[SAVE-INTERMEDIATE] Loading checkpoint from: {checkpoint_dir}")
+        ckpt = _load_ckpt(checkpoint_dir)
+        if not ckpt:
+            print("  No checkpoint found. Nothing to save.")
+            return
+        print(f"  Loaded {len(ckpt):,} completed items")
 
-    results = run_llm_parallel_with_checkpoint(
-        inputs=inputs,
-        token_file=args.token_file,
-        checkpoint_dir=checkpoint_dir,
-        num_workers=args.num_workers,
-        model=args.copilot_model,
-        temperature=0,
-        max_tokens=args.max_tokens,
-        chunk_size=args.chunk_size,
-    )
+        # Build results list aligned with users
+        results = []
+        found = 0
+        for u in users:
+            uid = u["user_id"]
+            if uid in ckpt:
+                results.append((uid, ckpt[uid]))
+                found += 1
+            else:
+                results.append((uid, ""))
+        print(f"  Matched {found:,}/{len(users):,} users")
 
-    elapsed = time.time() - start_time
-    throughput = len(users) / elapsed if elapsed > 0 else 0
-    print(f"\nLLM calls done: {elapsed:.1f}s ({throughput:.1f} users/s)")
+        # Fall through to save results
+        # (reuse the same save logic below)
+        pass
+    else:
+        print(f"\nCalling LLM ranker ({args.copilot_model}) ...")
+        start_time = time.time()
+
+        results = run_llm_parallel_with_checkpoint(
+            inputs=inputs,
+            token_file=args.token_file,
+            checkpoint_dir=checkpoint_dir,
+            num_workers=args.num_workers,
+            model=args.copilot_model,
+            temperature=0,
+            max_tokens=args.max_tokens,
+            chunk_size=args.chunk_size,
+        )
+
+        elapsed = time.time() - start_time
+        throughput = len(users) / elapsed if elapsed > 0 else 0
+        print(f"\nLLM calls done: {elapsed:.1f}s ({throughput:.1f} users/s)")
 
     # ---- Save results ----
     # Derive output file name from input file base
@@ -361,7 +394,7 @@ def main():
                             escapechar="\\")
         out_header = ["UserId", "ReadableUserEvents", "RequestTime", "UserHistory"]
         if has_profile:
-            out_header.append("UserProfile")
+            out_header.append("Profile")
         out_header.extend(["JourneyWithProducts", "OUTPUT"])
         writer.writerow(out_header)
 
@@ -419,6 +452,110 @@ def main():
 
     # ---- Cleanup ----
     cleanup_checkpoint(checkpoint_dir)
+
+    # ---- Before/After Ranker Statistics ----
+    print(f"\n{'=' * 70}")
+    print("Ranker Before/After Statistics")
+    print(f"{'=' * 70}")
+
+    # Collect before (JWP) and after (OUTPUT) stats
+    jwp_journey_counts = []
+    jwp_products_per_journey = []
+    ranker_journey_counts = []
+    ranker_products_per_journey = []
+
+    for user_id, raw_result in results:
+        u = user_map[user_id]
+        # Before: from JWP
+        try:
+            jwp = json.loads(u["jwp_str"])
+            jj = jwp.get("ContinuedJourneys", [])
+            jwp_journey_counts.append(len(jj))
+            for j in jj:
+                n = sum(len(q.get("Products", [])) for q in j.get("Queries", []))
+                jwp_products_per_journey.append(n)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # After: from OUTPUT
+        clean = extract_output_json(raw_result)
+        if clean:
+            try:
+                obj = json.loads(clean)
+                cj = obj.get("ContinuedJourneys", [])
+                ranker_journey_counts.append(len(cj))
+                for j in cj:
+                    ranker_products_per_journey.append(len(j.get("Products", [])))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    def _print_dist(label, arr):
+        if not arr:
+            print(f"  {label}: (no data)")
+            return
+        s = sorted(arr)
+        n = len(s)
+        avg = sum(s) / n
+        p25 = s[int(n * 0.25)]
+        p50 = s[int(n * 0.5)]
+        p75 = s[int(n * 0.75)]
+        p90 = s[min(int(n * 0.9), n - 1)]
+        print(f"  {label}:")
+        print(f"    N={n:,}  Min={s[0]}  P25={p25}  P50={p50}  "
+              f"P75={p75}  P90={p90}  Max={s[-1]}  Mean={avg:.1f}")
+
+    print(f"\n--- Before Ranker (JWP input) ---")
+    _print_dist("Journeys per User", jwp_journey_counts)
+    _print_dist("Products per Journey", jwp_products_per_journey)
+    if jwp_products_per_journey:
+        print(f"    Total journeys: {len(jwp_products_per_journey):,}  "
+              f"Total products: {sum(jwp_products_per_journey):,}")
+
+    print(f"\n--- After Ranker (OUTPUT) ---")
+    _print_dist("Journeys per User", ranker_journey_counts)
+    _print_dist("Products per Journey", ranker_products_per_journey)
+    if ranker_products_per_journey:
+        print(f"    Total journeys: {len(ranker_products_per_journey):,}  "
+              f"Total products: {sum(ranker_products_per_journey):,}")
+
+    # Reduction summary
+    if jwp_products_per_journey and ranker_products_per_journey:
+        jwp_tj = len(jwp_products_per_journey)
+        ranker_tj = len(ranker_products_per_journey)
+        jwp_tp = sum(jwp_products_per_journey)
+        ranker_tp = sum(ranker_products_per_journey)
+        print(f"\n--- Ranker Reduction ---")
+        print(f"  Journeys: {jwp_tj:,} -> {ranker_tj:,} "
+              f"({ranker_tj / max(jwp_tj, 1) * 100:.1f}% retained)")
+        print(f"  Products: {jwp_tp:,} -> {ranker_tp:,} "
+              f"({ranker_tp / max(jwp_tp, 1) * 100:.1f}% retained)")
+        avg_before = jwp_tp / jwp_tj if jwp_tj else 0
+        avg_after = ranker_tp / ranker_tj if ranker_tj else 0
+        print(f"  Avg products/journey: {avg_before:.1f} -> {avg_after:.1f}")
+
+        # Product count buckets for after-ranker
+        buckets = {}
+        for c in ranker_products_per_journey:
+            if c <= 3:
+                b = "1-3"
+            elif c <= 5:
+                b = "4-5"
+            elif c <= 10:
+                b = "6-10"
+            elif c <= 15:
+                b = "11-15"
+            elif c <= 20:
+                b = "16-20"
+            elif c <= 30:
+                b = "21-30"
+            else:
+                b = "31+"
+            buckets[b] = buckets.get(b, 0) + 1
+        print(f"\n  After-ranker product count distribution:")
+        for b in ["1-3", "4-5", "6-10", "11-15", "16-20", "21-30", "31+"]:
+            cnt = buckets.get(b, 0)
+            pct = cnt / len(ranker_products_per_journey) * 100
+            print(f"    {b:>6s} products: {cnt:>6,} journeys ({pct:5.1f}%)")
 
     print(f"\nDone! {json_valid_count}/{len(results)} valid ranked results.")
 
