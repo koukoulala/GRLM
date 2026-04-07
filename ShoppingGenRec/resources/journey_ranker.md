@@ -21,6 +21,24 @@ Before applying any ranking gates, analyze <USER-EVENTS> to build an implicit us
 
 This user profile is used as a **soft ranking signal** (not a hard filter) throughout all gates below. It should boost products that align with the user's demonstrated preferences, but never override hard filters like safety, gender matching, or seller exclusions.
 
+## Pre-Gate: Safety and Category Enforcement (Non-Negotiable)
+
+Before applying any ranking gates, exclude ALL candidate products that fall into the following categories. This is the very first step — no exceptions:
+- Weapons or firearms (knives, guns, ammunition, accessories)
+- Medical treatments, prescriptions, supplements, controlled substances
+- Tobacco, vaping, age-restricted products
+- Alcohol, alcoholic beverages and related products
+- Adult or racy content
+- Drugs or controlled substances
+- Harmful, offensive, or discriminatory products
+- Non-purchasable items (services, experiences, digital goods)
+- Ultra-commodity or everyday replenishment items
+- Funeral and memorial products (caskets, urns, memorial stones)
+- Content derogatory toward disability status (mental or physical)
+- Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+
+Safety exclusions are absolute. Products removed here do not enter any gate.
+
 ## Ranking Scope
 
 For each journey, pool ALL candidate products from ALL queries together into a single candidate set. Apply the gates below to this unified pool and produce ONE ranked list per journey. Do NOT rank products separately per query — the ranking is at the journey level.
@@ -49,17 +67,25 @@ Gate 1 — Relevance (most critical): Evaluate every candidate product on two su
   Scoring:
   - **Keep** (strong): Product fully matches all relevant journey constraints with no contradictions.
   - **Demote** (partial): Product satisfies core intent and category but one or more secondary attributes are missing or loosely matched — not a direct contradiction.
-  - **Exclude** (misaligned): Explicit contradiction in a core attribute, product lacks required evidence for a central journey attribute, or clearly wrong subcategory.
-  - **Missing attribute handling**: If the journey requires an attribute and the product provides no evidence → exclude. If the journey is broad with no explicit attribute required → accept when reasonable.
+  - **Exclude** (misaligned): Explicit contradiction in a core attribute, or clearly wrong subcategory.
+  - **Missing attribute handling**: If a product provides no evidence for a journey attribute, keep the product but rank it lower (demote). Only exclude when there is an explicit contradiction. If the journey is broad with no explicit attribute required, accept the product.
 
-  ### Relevance Boosting Signals (soft — for reranking, not filtering)
-  - **User-event boost**: Among products that pass relevance, rank higher those that align with brands, styles, or features the user has previously engaged with in <USER-EVENTS>.
-  - **Seasonal relevance boost**: Boost products that are seasonally appropriate based on <SYSTEM-TIME>. Never exclude an otherwise relevant product solely for being off-season.
+  ### Demote Handling
+  - **Excluded** products are removed from the candidate pool entirely.
+  - **Demoted** products are retained but placed below ALL **Keep**-level products in the relevance ranking.
+  - Demoted products may still be selected into the final list if (a) there are not enough Keep-level candidates to reach the 15-product target, or (b) a Demoted product contributes meaningfully to diversity (different brand/style/subcategory) that no Keep-level product covers.
+  - When choosing between two Demoted products, prefer the one with stronger intent alignment over attribute alignment.
 
 Gate 2 — Gender and Attribute Consistency (hard filter — zero tolerance — MANDATORY):
 
   ### Gender Determination for Product Ranking
-  Extract gender from ALL available journey context — reason, title, AND the user's history events. Use every signal available, not just the search query.
+  Extract gender from ALL available context using the following priority chain:
+  1. **Recipient gender** stated in events (wife/girlfriend/mother/daughter → women; husband/boyfriend/father/son → men)
+  2. **Journey context** (title, reason, queries — e.g., "women's running shoes" → women)
+  3. **Implicit signals** from <USER-EVENTS> (browsed product categories, e.g., mostly women's clothing → women)
+  4. Default to **"unisex"** if undetermined
+
+  Use the highest-priority signal available. Do not rely solely on the search query.
   Gender-sensitive categories (MUST apply this gate): clothing, shoes, accessories, jewelry, bags, watches, fragrance, beauty, underwear, swimwear, dresses, suits, ties, bras, lingerie.
   Gender-neutral categories (skip this gate): electronics, appliances, home decor, kitchen, tools, sports equipment.
 
@@ -104,7 +130,7 @@ Exclude (hard filter — zero tolerance): eBay, Alibaba, AliExpress, Temu, Wish,
 
 **Important**: Seller filtering should remove bad actors, NOT aggressively filter legitimate retailers. When in doubt about a seller, check if it appears to be a real brand or specialty store — if so, keep the product and rank it accordingly.
 
-Gate 4 — Price Coherence: Remove products priced >±30% from the average. Max price ≤ 150% of min price. Reject extreme tier mixes.
+Gate 4 — Price Coherence: Remove products priced >±50% from the average. Max price ≤ 150% of min price. Reject extreme tier mixes.
 - **User-event calibration**: Cross-reference the user's typical spending range from <USER-EVENTS>. If the user consistently browses premium products (e.g., $200+ headphones), do not penalize higher-priced candidates that would otherwise be filtered by the ±30% rule — instead, adjust the acceptable range to reflect the user's demonstrated price comfort zone. Conversely, if the user is budget-oriented, prefer lower-priced options when breaking ties.
 
 Gate 5 — Diversity (systematic product grouping + diversified selection):
@@ -136,34 +162,30 @@ Diversity is enforced through a two-stage process: first group near-duplicate pr
   ### Diversity Validation
   Before finalizing, review the selected list and ask: "Would a user see meaningful variety here?" If multiple products are functionally interchangeable (same type, same brand, similar price), keep only the best one and replace the rest with products from underrepresented styles, brands, or subcategories.
 
-Select up to 30 products per journey. Fewer is fine if quality or diversity cannot be maintained.
+**Product count target**: Aim to select **15 to 30 products** per journey. Try to retain at least 15 products whenever possible. Only go below 15 if there are genuinely fewer than 15 candidates that are relevant to the journey after applying the hard filters (safety exclusions, explicit seller blacklist, clear gender contradictions and attribute mismatch). The goal is to provide a rich, diverse selection — do not be overly aggressive in filtering.
 
-**Final ranking tiebreaker**: When two products are equal across all gates, use the user profile extracted from <USER-EVENTS> to break the tie — prefer the product whose brand, style, price point, or seller better matches the user's demonstrated shopping behavior.
+## Post-Gate Reranking Signals
 
-## Safety and Category Enforcement (Non-Negotiable)
-I MUST NOT select or rank products from any of the following categories, regardless of what appears in the candidate list:
-- Weapons or firearms (knives, guns, ammunition, accessories)
-- Medical treatments, prescriptions, supplements, controlled substances
-- Tobacco, vaping, age-restricted products
-- Alcohol, alcoholic beverages and related products
-- Adult or racy content
-- Drugs or controlled substances
-- Harmful, offensive, or discriminatory products
-- Non-purchasable items (services, experiences, digital goods)
-- Ultra-commodity or everyday replenishment items
-- Funeral and memorial products (caskets, urns, memorial stones)
-- Content derogatory toward disability status (mental or physical)
-- Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+After all gates (1–5) have been applied, use the following soft signals to rerank the surviving products within each journey. These signals adjust ordering but NEVER override gate decisions (i.e., they do not re-include excluded products).
 
-If any candidate product falls into these categories, it must be excluded immediately before any ranking gates are applied.
+- **User-event boost**: Rank higher those products that align with brands, styles, or features the user has previously engaged with in <USER-EVENTS>. Recent event signals carry stronger weight.
+- **Seasonal relevance boost**: Boost products that are seasonally appropriate based on <SYSTEM-TIME>. Never exclude an otherwise relevant product solely for being off-season.
+
+**Final ranking tiebreaker**: When two products are equal across all gates and reranking signals, use the user profile extracted from <USER-EVENTS> to break the tie — prefer the product whose brand, style, price point, or seller better matches the user's demonstrated shopping behavior.
+
+## Safety and Category Enforcement
+
+(Moved to Pre-Gate section above. See "Pre-Gate: Safety and Category Enforcement" for the full exclusion list.)
 
 ## Critical Rules
-- Safety exclusions are absolute and applied before all other filters
-- Relevance is paramount: evaluate both intent alignment and attribute alignment
+- Safety exclusions are absolute and applied before all gates (Pre-Gate step)
+- Relevance is paramount: evaluate both intent alignment and attribute alignment; Keep > Demote > Exclude
+- Demoted products rank below Keep-level products but may fill gaps for diversity or insufficient candidates
+- Post-gate reranking signals (event boost, seasonal boost) adjust ordering but never override gate decisions
 - Diversity through product grouping: collapse near-duplicates, then select across groups
 - Zero duplicates, brand diversity, seller diversity
 - Gender: explicit → match; none → unisex
-- Price coherence enforced
+- Price coherence: soft ranking signal, not hard filter
 - Quality, relevance, and diversity over quantity
 - If ALL journeys have zero qualifying products after filtering, return an empty result
 - **Data integrity (non-negotiable)**: Do NOT modify any input data. Journey Titles, Journey Reasons, JourneyType, and product attributes (OfferId, Title, Seller, Price) must be copied exactly as provided in the input. Do not rewrite, paraphrase, correct spelling, or alter any field values. The ranker's job is to filter and reorder, never to edit.

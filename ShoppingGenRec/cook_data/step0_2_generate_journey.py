@@ -676,7 +676,8 @@ def main():
 
     # ---- Step 0d: Setup output ----
     os.makedirs(args.output_dir, exist_ok=True)
-    checkpoint_dir = os.path.join(args.output_dir, "_journey_checkpoint")
+    input_base = os.path.splitext(os.path.basename(args.input_file))[0]
+    checkpoint_dir = os.path.join(args.output_dir, f"_journey_checkpoint_{input_base}")
 
     # ---- Step 0e: Run LLM inference ----
     print(f"\nStarting journey generation ({len(rows):,} users) ...")

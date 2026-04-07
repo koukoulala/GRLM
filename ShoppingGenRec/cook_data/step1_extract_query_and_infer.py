@@ -63,7 +63,12 @@ def extract_queries(input_file, col_output, max_rows=0):
                 valid_count += 1
                 for journey in journeys:
                     for q in journey.get("Queries", []):
-                        query_text = q.get("Query", "").strip()
+                        if not isinstance(q, dict):
+                            continue
+                        query_val = q.get("Query", "")
+                        if not isinstance(query_val, str):
+                            continue
+                        query_text = query_val.strip()
                         if query_text:
                             queries.add(query_text)
             except json.JSONDecodeError:
@@ -260,7 +265,8 @@ def main():
                         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/ShoppingJourney_Input_80K_1_results.tsv",
                         help="Path to Journey_Results TSV from step0")
     parser.add_argument("--input_folder", type=str, 
-                        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
+                        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
+                        default=None,
                         help="Path to a folder; processes all *_results.tsv / *_Results.tsv files inside it")
     parser.add_argument("--work_dir", type=str, 
                         default=None,
