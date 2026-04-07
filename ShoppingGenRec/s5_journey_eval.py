@@ -516,7 +516,7 @@ def read_test_tsv(filepath):
 # =============================================================================
 # Prompt Construction for Journey Tasks
 # =============================================================================
-
+'''
 def make_event2journey_instruction(num_journeys, min_products=5):
     """Create event2journey instruction matching s3 training format."""
     jword = "journey" if num_journeys == 1 else "journeys"
@@ -527,7 +527,7 @@ def make_event2journey_instruction(num_journeys, min_products=5):
         "Each journey represents a different product category. "
         "Each journey has a short, engaging title, "
         "a brief user-centric reason referencing the user's history, "
-        f"and at least {min_products} recommended products as text IDs (7 slots each). "
+        f"and at least {min_products + 4} recommended products as text IDs (7 slots each). "
         "Products within each journey should cover different brands, styles, use cases "
         "and subcategories — avoid recommending near-identical items. "
         "If no meaningful journeys can be inferred, output an empty list. "
@@ -546,17 +546,60 @@ def make_profile2journey_instruction(num_journeys, min_products=5):
         "Each journey represents a different product category. "
         "Each journey has a short, engaging title, "
         "a brief user-centric reason referencing the user's history, "
-        f"and at least {min_products} recommended products as text IDs (7 slots each). "
+        f"and at least {min_products + 4} recommended products as text IDs (7 slots each). "
         "Products within each journey should cover different brands, styles, use cases "
         "and subcategories — avoid recommending near-identical items. "
         "If no meaningful journeys can be inferred, output an empty list. "
         'Output JSON: {"ContinuedJourneys":[{"Title":"...","Reason":"...",'
         '"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]},...]}.'
     )
+'''
 
+# --- v3: matching s3_build_journey_sft_data.py create_instruction exactly ---
 
-def build_event2journey_input(events, max_events=50):
+def make_journey_instruction(task, num_journeys, min_products):
+    """Create instruction + prompt_line matching s3's create_instruction.
+
+    Args:
+        task: "event2journey" or "profile2journey".
+        num_journeys: Number of journeys to predict.
+        min_products: Minimum products per journey (from ground truth).
+
+    Returns:
+        Tuple of (instruction_text, prompt_line).
+    """
+    if task == "event2journey":
+        opening = (f"Based on the user's shopping event history, predict "
+                   f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+    else:
+        opening = (f"Based on the user's shopping profile and shopping event history, predict "
+                   f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+
+    product_text = f"at least {min_products}"
+
+    instruction = (
+        f"{opening}"
+        f" Each journey represents a different product category."
+        f" Each journey has a short, engaging title, a brief user-centric reason"
+        f" referencing the user's history, and {product_text} recommended products"
+        f" as text IDs (7 slots each)."
+        f" Products within each journey should cover different brands, styles, use cases"
+        f" and subcategories -- avoid recommending near-identical items."
+        f' Output JSON:'
+        f' {{"ContinuedJourneys":[{{"Title":"...","Reason":"...",'
+        f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
+    )
+
+    jword = "journey" if num_journeys == 1 else "journeys"
+    prompt_line = (f"Predict the user's shopping journeys, "
+                   f"exactly {num_journeys} {jword}, "
+                   f"at least {min_products} products in each journey:")
+
+    return instruction, prompt_line
+
+def build_event2journey_input(events, max_events=50, prompt_line=None):
     """Build event2journey input text from event list."""
+    final_prompt = prompt_line or "Predict the user's shopping journeys:"
     truncated = events[:max_events]
     lines = ["User Event History:"]
     for idx, event in enumerate(truncated, 1):
@@ -564,12 +607,13 @@ def build_event2journey_input(events, max_events=50):
             event = event[:150] + "..."
         lines.append(f"{idx} | {event}")
     lines.append("")
-    lines.append("Predict the user's shopping journeys:")
+    lines.append(final_prompt)
     return "\n".join(lines)
 
 
-def build_profile2journey_input(profile_text, events, max_recent_events=10):
+def build_profile2journey_input(profile_text, events, max_recent_events=10, prompt_line=None):
     """Build profile2journey input text from profile and events."""
+    final_prompt = prompt_line or "Predict the user's shopping journeys:"
     recent = events[:max_recent_events]
     lines = ["User Shopping Profile:", profile_text, ""]
     lines.append("Recent Shopping Events:")
@@ -578,7 +622,7 @@ def build_profile2journey_input(profile_text, events, max_recent_events=10):
             event = event[:150] + "..."
         lines.append(f"{idx} | {event}")
     lines.append("")
-    lines.append("Predict the user's shopping journeys:")
+    lines.append(final_prompt)
     return "\n".join(lines)
 
 
@@ -1067,7 +1111,9 @@ def parse_args():
     parser.add_argument(
         "--model_path", type=str, 
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_fsdp_qlora/merged_ying_checkpoint_14932",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v2/merged_checkpoint_7000",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v3_new/merged_checkpoint_960",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_checkpoint-1200/merged_checkpoint/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_27B_checkpoint-300/merged_checkpoint/",
         help="Path to the trained SFT model checkpoint",
     )
     parser.add_argument(
@@ -1085,8 +1131,8 @@ def parse_args():
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v2_checkpoint_7000/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_27B_checkpoint-300/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v3_new/",
         help="Directory to save evaluation output files",
     )
     parser.add_argument(
@@ -1126,6 +1172,11 @@ def parse_args():
         "--enable_thinking", action="store_true", default=False,
         help="Enable thinking/reasoning mode in chat template",
     )
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None,
+        help="Path to tokenizer (default: same as model_path). Use this when "
+             "the checkpoint's tokenizer_config.json is broken.",
+    )
     # Profile generation args (Copilot API)
     parser.add_argument(
         "--prompts_file", type=str,
@@ -1160,8 +1211,8 @@ def parse_args():
         help="Path to item JSON for looking up product titles",
     )
     parser.add_argument(
-        "--fuzzy_score_threshold", type=float, default=1.0,
-        help="Minimum fuzzy match score to keep a product (default: 1.0). "
+        "--fuzzy_score_threshold", type=float, default=7.0,
+        help="Minimum fuzzy match score to keep a product (default: 5.0). "
              "Products below this are dropped. Set to 0 to keep all.",
     )
     parser.add_argument(
@@ -1171,6 +1222,18 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/ying_checkpoint_14932/llm_output.tsv",
         help="Path to a previous llm_output.tsv. If provided, skip data reading, "
              "sampling, and profile generation; reuse this file directly.",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", default=False,
+        help="Debug mode: only output two TSV files (event2journey_debug.tsv and "
+             "profile2journey_debug.tsv) with columns UserId, Prompt, ModelOutput. "
+             "Skips TID mapping, fuzzy matching, and all post-processing.",
+    )
+    parser.add_argument(
+        "--debug_prompt_file", type=str, default=None,
+        help="Path to a file with one prompt per line. When set with --debug, "
+             "skips all data loading and directly runs vLLM on these prompts. "
+             "Results are saved to debug_prompt_output.tsv in output_dir.",
     )
     return parser.parse_args()
 
@@ -1203,6 +1266,77 @@ def main():
     print(f"  Seed: {args.seed}")
 
     # =========================================================================
+    # Debug prompt file mode: read prompts from file, run vLLM, save results
+    # =========================================================================
+    if args.debug and args.debug_prompt_file:
+        print()
+        print("=" * 70)
+        print("Debug prompt file mode")
+        print("=" * 70)
+
+        print(f"  Reading prompts from: {args.debug_prompt_file}")
+        with open(args.debug_prompt_file, "r", encoding="utf-8") as f:
+            raw_prompts = [line.rstrip("\n") for line in f if line.strip()]
+        # Restore literal \n and \r to real newlines
+        raw_prompts = [p.replace("\\n", "\n").replace("\\r", "\r") for p in raw_prompts]
+        print(f"  Loaded {len(raw_prompts)} prompts")
+
+        if not raw_prompts:
+            print("ERROR: No prompts found in file.")
+            return
+
+        # Wrap each prompt with chat template via tokenizer
+        from transformers import AutoTokenizer
+        tokenizer_path = args.tokenizer_path or args.model_path
+        tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_path, trust_remote_code=True
+        )
+        formatted_prompts = []
+        for p in raw_prompts:
+            messages = [{"role": "user", "content": p}]
+            formatted = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=args.enable_thinking,
+            )
+            formatted_prompts.append(formatted)
+        print(f"  Wrapped {len(formatted_prompts)} prompts with chat template")
+
+        outputs = run_vllm_inference(
+            prompts=formatted_prompts,
+            model_path=args.model_path,
+            num_gpus=num_gpus,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            max_model_len=args.max_model_len,
+            max_tokens=args.max_tokens,
+        )
+
+        # Print results
+        for i, (prompt, output) in enumerate(zip(raw_prompts, outputs)):
+            print(f"\n{'='*60}")
+            print(f"Prompt {i+1}/{len(raw_prompts)}:")
+            print(prompt[:500] + ("..." if len(prompt) > 500 else ""))
+            print(f"-"*60)
+            print(f"Output:")
+            print(output)
+
+        # Save to TSV
+        os.makedirs(args.output_dir, exist_ok=True)
+        debug_rows = []
+        for i, (prompt, output) in enumerate(zip(raw_prompts, outputs)):
+            debug_rows.append({
+                "PromptIndex": str(i + 1),
+                "Prompt": prompt,
+                "ModelOutput": output,
+            })
+        debug_file = os.path.join(args.output_dir, "debug_prompt_output.tsv")
+        save_tsv(debug_rows, debug_file, ["PromptIndex", "Prompt", "ModelOutput"])
+
+        print(f"\nDebug prompt file mode done. Saved {len(debug_rows)} results to {debug_file}")
+        return
+
+    # =========================================================================
     # Check if we can reuse a previous llm_output file
     # =========================================================================
     if args.llm_output_file and os.path.isfile(args.llm_output_file):
@@ -1221,17 +1355,18 @@ def main():
             return
 
         # Still need TID mapping for slm output post-processing
-        print(f"\n  Loading TID mapping: {args.tid2item_id_file}")
-        with open(args.tid2item_id_file, "r", encoding="utf-8") as f:
-            tid2item_id = json.load(f)
-        reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id)
-        print(f"    Unique TIDs: {len(tid2item_id):,}")
-        print(f"    Unique words in index: {len(word_to_keys):,}")
+        if not args.debug:
+            print(f"\n  Loading TID mapping: {args.tid2item_id_file}")
+            with open(args.tid2item_id_file, "r", encoding="utf-8") as f:
+                tid2item_id = json.load(f)
+            reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id)
+            print(f"    Unique TIDs: {len(tid2item_id):,}")
+            print(f"    Unique words in index: {len(word_to_keys):,}")
 
-        # Load item titles for debug
-        id2title = None
-        if args.item_file and os.path.isfile(args.item_file):
-            id2title = load_item_titles(args.item_file)
+            # Load item titles for debug
+            id2title = None
+            if args.item_file and os.path.isfile(args.item_file):
+                id2title = load_item_titles(args.item_file)
 
     else:
         # =====================================================================
@@ -1481,17 +1616,15 @@ def main():
 
     from transformers import AutoTokenizer
 
+    tokenizer_path = args.tokenizer_path or args.model_path
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_path, trust_remote_code=True
+        tokenizer_path, trust_remote_code=True
     )
 
     # --- 7a: event2journey prompts ---
     print("\n  Building event2journey prompts ...")
     e2j_instr_inputs = []
     for ud in users_with_profile:
-        input_text = build_event2journey_input(
-            ud["events_list"], max_events=args.max_events
-        )
         # Compute min_products from ground truth journeys (matching s3 training)
         gt_j = ud.get("ground_truth_journeys", [])
         if gt_j:
@@ -1499,7 +1632,13 @@ def main():
             min_prods = max(min_prods, 5)  # floor at 5
         else:
             min_prods = 5
-        instruction = make_event2journey_instruction(ud["num_journeys"], min_prods)
+        instruction, prompt_line = make_journey_instruction(
+            "event2journey", ud["num_journeys"], min_prods
+        )
+        input_text = build_event2journey_input(
+            ud["events_list"], max_events=args.max_events,
+            prompt_line=prompt_line,
+        )
         e2j_instr_inputs.append((instruction, input_text))
 
     e2j_prompts = build_chat_prompts(
@@ -1511,17 +1650,20 @@ def main():
     print("  Building profile2journey prompts ...")
     p2j_instr_inputs = []
     for ud in users_with_profile:
-        input_text = build_profile2journey_input(
-            ud["UserProfile"], ud["events_list"],
-            max_recent_events=args.max_recent_events,
-        )
         gt_j = ud.get("ground_truth_journeys", [])
         if gt_j:
             min_prods = min(len(j.get("product_ids", [])) for j in gt_j)
             min_prods = max(min_prods, 5)
         else:
             min_prods = 5
-        instruction = make_profile2journey_instruction(ud["num_journeys"], min_prods)
+        instruction, prompt_line = make_journey_instruction(
+            "profile2journey", ud["num_journeys"], min_prods
+        )
+        input_text = build_profile2journey_input(
+            ud["UserProfile"], ud["events_list"],
+            max_recent_events=args.max_recent_events,
+            prompt_line=prompt_line,
+        )
         p2j_instr_inputs.append((instruction, input_text))
 
     p2j_prompts = build_chat_prompts(
@@ -1548,6 +1690,43 @@ def main():
 
     print(f"  event2journey outputs: {len(e2j_outputs)}")
     print(f"  profile2journey outputs: {len(p2j_outputs)}")
+
+    # =========================================================================
+    # Debug mode: save prompt + output only, then exit
+    # =========================================================================
+    if args.debug:
+        print()
+        print("=" * 70)
+        print("Debug mode: saving prompt/output TSV files")
+        print("=" * 70)
+
+        os.makedirs(args.output_dir, exist_ok=True)
+        debug_columns = ["UserId", "Prompt", "ModelOutput"]
+
+        # event2journey debug
+        e2j_debug_rows = []
+        for i, ud in enumerate(users_with_profile):
+            e2j_debug_rows.append({
+                "UserId": ud["UserId"],
+                "Prompt": e2j_prompts[i],
+                "ModelOutput": e2j_outputs[i],
+            })
+        e2j_debug_file = os.path.join(args.output_dir, "event2journey_debug.tsv")
+        save_tsv(e2j_debug_rows, e2j_debug_file, debug_columns)
+
+        # profile2journey debug
+        p2j_debug_rows = []
+        for i, ud in enumerate(users_with_profile):
+            p2j_debug_rows.append({
+                "UserId": ud["UserId"],
+                "Prompt": p2j_prompts[i],
+                "ModelOutput": p2j_outputs[i],
+            })
+        p2j_debug_file = os.path.join(args.output_dir, "profile2journey_debug.tsv")
+        save_tsv(p2j_debug_rows, p2j_debug_file, debug_columns)
+
+        print(f"\nDebug mode done. Saved 2 files to {args.output_dir}")
+        return
 
     # =========================================================================
     # Step 8: Build slm_output (event2journey predictions)
