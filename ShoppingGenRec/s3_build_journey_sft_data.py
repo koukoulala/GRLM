@@ -938,8 +938,7 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/processed/id2meta_with_norm.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
