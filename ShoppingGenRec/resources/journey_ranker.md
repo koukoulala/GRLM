@@ -68,7 +68,7 @@ Gate 1 — Relevance (most critical): Evaluate every candidate product on two su
   - **Keep** (strong): Product fully matches all relevant journey constraints with no contradictions.
   - **Demote** (partial): Product satisfies core intent and category but one or more secondary attributes are missing or loosely matched — not a direct contradiction.
   - **Exclude** (misaligned): Explicit contradiction in a core attribute, or clearly wrong subcategory.
-  - **Missing attribute handling**: If a product provides no evidence for a journey attribute, keep the product but rank it lower (demote). Only exclude when there is an explicit contradiction. If the journey is broad with no explicit attribute required, accept the product.
+  - **Missing attribute handling**: If a product provides no evidence for a journey attribute, keep the product but rank it lower (demote). Only exclude when there is an explicit contradiction. If the journey is broad with no explicit attribute required → accept when reasonable.
 
   ### Demote Handling
   - **Excluded** products are removed from the candidate pool entirely.
