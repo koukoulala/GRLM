@@ -600,6 +600,20 @@ def run_profile_generation_vllm(users_with_events, profile_model_path,
     print(f"    Model: {profile_model_path}")
     print(f"    GPUs: {num_gpus}, mem: {gpu_memory_utilization}")
 
+    # Auto-fix broken tokenizer_class in tokenizer_config.json if needed
+    tok_cfg_path = os.path.join(profile_model_path, "tokenizer_config.json")
+    if os.path.isfile(tok_cfg_path):
+        with open(tok_cfg_path, "r", encoding="utf-8") as _f:
+            _tok_cfg = json.load(_f)
+        if _tok_cfg.get("tokenizer_class") not in (
+            "Qwen2Tokenizer", "PreTrainedTokenizerFast", None,
+        ):
+            print(f"    [FIX] tokenizer_class='{_tok_cfg['tokenizer_class']}' "
+                  f"-> 'Qwen2Tokenizer'")
+            _tok_cfg["tokenizer_class"] = "Qwen2Tokenizer"
+            with open(tok_cfg_path, "w", encoding="utf-8") as _f:
+                json.dump(_tok_cfg, _f, indent=2, ensure_ascii=False)
+
     tokenizer = AutoTokenizer.from_pretrained(
         profile_model_path, trust_remote_code=True,
     )
@@ -1283,10 +1297,8 @@ def parse_args():
     )
     parser.add_argument(
         "--model_path", type=str,
-        default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/"
-                "journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_"
-                "gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/"
-                "checkpoint-8000-merged",
+        default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-8000-merged",
+        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank64_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged"
         help="Path to the trained journey SFT model checkpoint",
     )
     parser.add_argument(
@@ -1304,7 +1316,7 @@ def parse_args():
     parser.add_argument(
         "--tid2item_id_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/sft_data_v4/item_id2tid/tid2item_id.json",
+                "Data/LLMTrainingData/20260324/sft_data/item_id2tid/tid2item_id.json",
         help="Path to tid2item_id.json",
     )
     parser.add_argument(

@@ -1114,7 +1114,10 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v3_new/merged_checkpoint_960",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_checkpoint-1200/merged_checkpoint/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_27B_checkpoint-300/merged_checkpoint/",
-        default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-8000-merged",
+        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-8000-merged",
+        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank64_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
+        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/qwen3-5-9b/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank32_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_500",
         help="Path to the trained SFT model checkpoint",
     )
     parser.add_argument(
@@ -1126,14 +1129,14 @@ def parse_args():
     )
     parser.add_argument(
         "--tid2item_id_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260324/sft_data/item_id2tid/tid2item_id.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/sft_data/item_id2tid/tid2item_id.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/sft_data_v4/item_id2tid/tid2item_id.json",
         help="Path to tid2item_id.json for TID -> GlobalOfferId mapping",
     )
     parser.add_argument(
         "--output_dir", type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_27B_checkpoint-300/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v3_ying_9B_checkpoint-8000/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-500/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-1000_termid_pretrained/",
         help="Directory to save evaluation output files",
     )
     parser.add_argument(
@@ -1618,6 +1621,21 @@ def main():
     from transformers import AutoTokenizer
 
     tokenizer_path = args.tokenizer_path or args.model_path
+
+    # Auto-fix broken tokenizer_class in tokenizer_config.json if needed
+    tok_cfg_path = os.path.join(tokenizer_path, "tokenizer_config.json")
+    if os.path.isfile(tok_cfg_path):
+        with open(tok_cfg_path, "r", encoding="utf-8") as _f:
+            _tok_cfg = json.load(_f)
+        if _tok_cfg.get("tokenizer_class") not in (
+            "Qwen2Tokenizer", "PreTrainedTokenizerFast", None,
+        ):
+            print(f"    [FIX] tokenizer_class='{_tok_cfg['tokenizer_class']}' "
+                  f"-> 'Qwen2Tokenizer'")
+            _tok_cfg["tokenizer_class"] = "Qwen2Tokenizer"
+            with open(tok_cfg_path, "w", encoding="utf-8") as _f:
+                json.dump(_tok_cfg, _f, indent=2, ensure_ascii=False)
+
     tokenizer = AutoTokenizer.from_pretrained(
         tokenizer_path, trust_remote_code=True
     )
