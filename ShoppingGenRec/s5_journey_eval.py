@@ -73,6 +73,7 @@ from pre_s1_construct_shopping_profile import (
     extract_and_validate_json,
 )
 from llm_utils import load_prompts, cleanup_checkpoint
+from term_normalizer import normalize_term
 
 
 # =============================================================================
@@ -130,6 +131,9 @@ def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys, normal
     Returns:
         Tuple of (list_of_iids, match_type, matched_word_count, best_score).
     """
+    # Normalize LLM-generated terms (dict is already normalized)
+    tid_words = [normalize_term(w) for w in tid_words]
+
     tid_key = ",".join(tid_words)
 
     if tid_key in tid2item_id:

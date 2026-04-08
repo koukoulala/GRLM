@@ -47,6 +47,11 @@ from collections import defaultdict
 
 import numpy as np
 
+# Import term normalizer for LLM output normalization
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, "resources"))
+from term_normalizer import normalize_term
+
 # Handle very large fields in TSV
 csv.field_size_limit(sys.maxsize)
 
@@ -340,6 +345,9 @@ def create_reverse_mapping(original_dict):
 def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys,
                    normalized_key_map, sorted_key_map):
     """Map a single TID (list of 7 words) to GlobalOfferIds."""
+    # Normalize LLM-generated terms (dict is already normalized)
+    tid_words = [normalize_term(w) for w in tid_words]
+
     tid_key = ",".join(tid_words)
 
     if tid_key in tid2item_id:
