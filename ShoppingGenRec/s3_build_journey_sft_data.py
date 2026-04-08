@@ -931,7 +931,7 @@ def parse_args():
         "--shopping_journey_file",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260406/raw_data/profile2journey.json",
+                "Data/LLMTrainingData/20260407/raw_data/event2journey.json",
         help="Path to shopping_journeys.json. For profile2journey, each entry "
              "must contain a 'user_profile' key.",
     )
@@ -946,7 +946,7 @@ def parse_args():
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260406/sft_data",
+                "Data/LLMTrainingData/20260407/sft_data",
         help="Output directory",
     )
     # Event/input controls

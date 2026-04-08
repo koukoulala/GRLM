@@ -210,7 +210,7 @@ def parse_args():
     parser.add_argument(
         "--event2journey_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260406/sft_data/"
+                "OneRec/Data/LLMTrainingData/20260407/sft_data/"
                 "event2journey_sft_full.json",
         help="Path to event2journey *_full.json (with metadata.user_id)",
     )
@@ -254,7 +254,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260406/sft_data",
+                "OneRec/Data/LLMTrainingData/20260407/sft_data",
         help="Output directory",
     )
     parser.add_argument(
@@ -526,16 +526,15 @@ def main():
     # Print per-bucket sampling stats
     for label, bucket in [("event2journey", e2j_bucket),
                           ("profile2journey", p2j_bucket)]:
-        print(f"\n    [{label}] per-bucket stats:")
-        print(f"      {'Journeys':>8s}  {'Total':>8s}  {'Kept':>8s}  {'Rate':>6s}  {'Prob':>6s}")
-        for jc in sorted(bucket.keys()):
-            total, kept, prob = bucket[jc]
-            rate = kept / max(total, 1) * 100
-            print(f"      {jc:>8d}  {total:>8,}  {kept:>8,}  {rate:>5.1f}%  {prob:>.3f}")
         total_all = sum(v[0] for v in bucket.values())
         kept_all = sum(v[1] for v in bucket.values())
-        print(f"      {'ALL':>8s}  {total_all:>8,}  {kept_all:>8,}  "
-              f"{kept_all / max(total_all, 1) * 100:>5.1f}%")
+        print(f"\n    [{label}] per-bucket stats:")
+        print(f"      {'Journeys':>8s}  {'Total':>8s}  {'Kept':>8s}  {'Pct':>6s}")
+        for jc in sorted(bucket.keys()):
+            total, kept, prob = bucket[jc]
+            pct = total / max(total_all, 1) * 100
+            print(f"      {jc:>8d}  {total:>8,}  {kept:>8,}  {pct:>5.1f}%")
+        print(f"      {'ALL':>8s}  {total_all:>8,}  {kept_all:>8,}  100.0%")
 
     combined_journey = len(e2j_train) + len(p2j_train)
     print(f"\n    Combined journey train: {combined_journey:,} "
@@ -545,6 +544,75 @@ def main():
     stats["profile2journey"] = (len(p2j_final_uids), len(p2j_train))
     all_training.extend(e2j_train)
     all_training.extend(p2j_train)
+
+    # --- Explicit vs Related journey distribution ---
+    print(f"\n  Explicit vs Related journey distribution:")
+    for label, by_user, final_uids in [
+        ("event2journey", e2j_by_user, e2j_final_uids),
+        ("profile2journey", p2j_by_user, p2j_final_uids),
+    ]:
+        all_explicit = []        # per-user explicit counts
+        all_related = []         # per-user related counts
+        all_explicit_pct = []    # per-user explicit percentage
+        all_related_pct = []     # per-user related percentage
+        total_explicit = 0
+        total_related = 0
+
+        for uid in final_uids:
+            if uid not in by_user:
+                continue
+            sample = by_user[uid]
+            try:
+                out = json.loads(sample["output"])
+                types = [j.get("JourneyType", "explicit")
+                         for j in out.get("ContinuedJourneys", [])]
+            except (json.JSONDecodeError, KeyError):
+                continue
+            n_exp = types.count("explicit")
+            n_rel = types.count("related")
+            n_total = n_exp + n_rel
+            if n_total == 0:
+                continue
+            total_explicit += n_exp
+            total_related += n_rel
+            all_explicit.append(n_exp)
+            all_related.append(n_rel)
+            all_explicit_pct.append(n_exp / n_total * 100)
+            all_related_pct.append(n_rel / n_total * 100)
+
+        n_users = len(all_explicit)
+        if n_users == 0:
+            print(f"\n    [{label}] No data")
+            continue
+
+        grand_total = total_explicit + total_related
+        sorted_exp = sorted(all_explicit)
+        sorted_rel = sorted(all_related)
+        sorted_exp_pct = sorted(all_explicit_pct)
+        sorted_rel_pct = sorted(all_related_pct)
+
+        print(f"\n    [{label}] ({n_users:,} users, "
+              f"{grand_total:,} total journeys)")
+        print(f"      Overall: explicit {total_explicit:,} "
+              f"({total_explicit / grand_total * 100:.1f}%), "
+              f"related {total_related:,} "
+              f"({total_related / grand_total * 100:.1f}%)")
+        print(f"      Per-user explicit:  "
+              f"count  min={sorted_exp[0]}, max={sorted_exp[-1]}, "
+              f"mean={sum(sorted_exp)/n_users:.1f}, "
+              f"median={percentile(sorted_exp, 50)}  |  "
+              f"pct  min={sorted_exp_pct[0]:.1f}%, "
+              f"max={sorted_exp_pct[-1]:.1f}%, "
+              f"mean={sum(sorted_exp_pct)/n_users:.1f}%, "
+              f"median={percentile(sorted_exp_pct, 50):.1f}%")
+        print(f"      Per-user related:   "
+              f"count  min={sorted_rel[0]}, max={sorted_rel[-1]}, "
+              f"mean={sum(sorted_rel)/n_users:.1f}, "
+              f"median={percentile(sorted_rel, 50)}  |  "
+              f"pct  min={sorted_rel_pct[0]:.1f}%, "
+              f"max={sorted_rel_pct[-1]:.1f}%, "
+              f"mean={sum(sorted_rel_pct)/n_users:.1f}%, "
+              f"median={percentile(sorted_rel_pct, 50):.1f}%")
 
     # =========================================================================
     # 3. Shuffle
