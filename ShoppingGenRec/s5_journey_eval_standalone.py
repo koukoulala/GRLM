@@ -1291,7 +1291,7 @@ def parse_args():
     )
     parser.add_argument(
         "--profile_model_path", type=str,
-        default="/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/"
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/"
                 "Model/UserProfile_keppsuggestionBrandScore1_Ckpt1834/",
         help="Path to the profile generation model checkpoint",
     )
