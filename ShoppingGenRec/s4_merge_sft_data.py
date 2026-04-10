@@ -310,27 +310,39 @@ def _read_test_uids(jsonl_path):
 def _filter_tsv_by_uids(tsv_path, uids, out_path):
     """Read a TSV, keep only rows whose UserId is in uids, write to out_path.
 
+    Optimization: reads raw lines and extracts only the first tab-field
+    (UserId) for matching, avoiding full CSV parsing of huge fields
+    (UserHistory, FinalJourney can be 100KB+ per row).
+
     Returns (total_rows, matched_rows).
     """
-    csv.field_size_limit(sys.maxsize)
     total = 0
     matched = 0
-    with open(tsv_path, "r", encoding="utf-8") as fin, \
-         open(out_path, "w", encoding="utf-8", newline="") as fout:
-        reader = csv.reader(fin, delimiter="\t")
-        header = next(reader, None)
-        if header is None:
-            return 0, 0
-        writer = csv.writer(fout, delimiter="\t", quoting=csv.QUOTE_NONE,
-                            escapechar="\\")
-        writer.writerow(header)
+    remaining = set(uids)  # early exit when all found
 
-        uid_idx = header.index("UserId") if "UserId" in header else 0
-        for row in reader:
+    with open(tsv_path, "r", encoding="utf-8") as fin, \
+         open(out_path, "w", encoding="utf-8") as fout:
+        # Copy header
+        header_line = fin.readline()
+        if not header_line:
+            return 0, 0
+        fout.write(header_line)
+
+        for line in fin:
             total += 1
-            if len(row) > uid_idx and row[uid_idx].strip() in uids:
-                writer.writerow(row)
+            # Fast: extract UserId before first tab (no full parse)
+            tab_pos = line.find("\t")
+            uid = line[:tab_pos].strip() if tab_pos > 0 else line.strip()
+            if uid in remaining:
+                fout.write(line)
                 matched += 1
+                remaining.discard(uid)
+                if not remaining:
+                    break  # all test users found
+            if total % 100_000 == 0:
+                print(f"      Scanned {total:>10,} rows, "
+                      f"matched {matched:,}/{len(uids):,} ...")
+
     return total, matched
 
 
