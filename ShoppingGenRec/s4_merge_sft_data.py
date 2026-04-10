@@ -32,9 +32,11 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import os
 import random
+import sys
 from collections import defaultdict
 
 
@@ -261,7 +263,121 @@ def parse_args():
         "--seed", type=int, default=42,
         help="Random seed (default: 42)",
     )
+
+    # --- Build test TSV mode ---
+    parser.add_argument(
+        "--build_test_tsv", action="store_true", default=False,
+        help="Build *_full_cleaned_test.tsv files from test JSONL + merged TSV. "
+             "Skips the normal merge/train pipeline.",
+    )
+    parser.add_argument(
+        "--event2journey_tsv", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260407/raw_data/"
+                "event2journey_full_cleaned.tsv",
+        help="Path to merged event2journey TSV (from pre_s2)",
+    )
+    parser.add_argument(
+        "--profile2journey_tsv", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260407/raw_data/"
+                "profile2journey_full_cleaned.tsv",
+        help="Path to merged profile2journey TSV (from pre_s2)",
+    )
+
     return parser.parse_args()
+
+
+# =============================================================================
+# Build test TSV from test JSONL + merged full_cleaned TSV
+# =============================================================================
+
+def _read_test_uids(jsonl_path):
+    """Read UserId values from a test JSONL file."""
+    uids = set()
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            uid = d.get("UserId", "").strip()
+            if uid:
+                uids.add(uid)
+    return uids
+
+
+def _filter_tsv_by_uids(tsv_path, uids, out_path):
+    """Read a TSV, keep only rows whose UserId is in uids, write to out_path.
+
+    Returns (total_rows, matched_rows).
+    """
+    csv.field_size_limit(sys.maxsize)
+    total = 0
+    matched = 0
+    with open(tsv_path, "r", encoding="utf-8") as fin, \
+         open(out_path, "w", encoding="utf-8", newline="") as fout:
+        reader = csv.reader(fin, delimiter="\t")
+        header = next(reader, None)
+        if header is None:
+            return 0, 0
+        writer = csv.writer(fout, delimiter="\t", quoting=csv.QUOTE_NONE,
+                            escapechar="\\")
+        writer.writerow(header)
+
+        uid_idx = header.index("UserId") if "UserId" in header else 0
+        for row in reader:
+            total += 1
+            if len(row) > uid_idx and row[uid_idx].strip() in uids:
+                writer.writerow(row)
+                matched += 1
+    return total, matched
+
+
+def build_test_tsv(args):
+    """Build *_full_cleaned_test.tsv for evaluation."""
+    print("=" * 70)
+    print("Build Test TSV Mode")
+    print("=" * 70)
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    tasks = [
+        (
+            "event2journey",
+            os.path.join(args.output_dir, "event2journey_test.jsonl"),
+            args.event2journey_tsv,
+        ),
+        (
+            "profile2journey",
+            os.path.join(args.output_dir, "profile2journey_test.jsonl"),
+            args.profile2journey_tsv,
+        ),
+    ]
+
+    for task_name, test_jsonl, full_tsv in tasks:
+        print(f"\n  [{task_name}]")
+        if not os.path.exists(test_jsonl):
+            print(f"    SKIP: test JSONL not found: {test_jsonl}")
+            continue
+        if not os.path.exists(full_tsv):
+            print(f"    SKIP: full TSV not found: {full_tsv}")
+            continue
+
+        uids = _read_test_uids(test_jsonl)
+        print(f"    Test users from JSONL: {len(uids):,}")
+
+        out_path = os.path.join(
+            args.output_dir, f"{task_name}_full_cleaned_test.tsv")
+        total, matched = _filter_tsv_by_uids(full_tsv, uids, out_path)
+
+        file_mb = os.path.getsize(out_path) / (1024 * 1024)
+        print(f"    TSV rows scanned: {total:,}")
+        print(f"    Matched:          {matched:,}")
+        print(f"    Missing:          {len(uids) - matched:,}")
+        print(f"    Output: {out_path} ({file_mb:.1f} MB)")
+
+    print("\nDone!")
 
 
 # =============================================================================
@@ -272,6 +388,11 @@ def main():
     args = parse_args()
     random.seed(args.seed)
     rng = random.Random(args.seed)
+
+    # --build_test_tsv: fast path
+    if args.build_test_tsv:
+        build_test_tsv(args)
+        return
 
     all_training = []
     stats = {}

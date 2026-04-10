@@ -297,6 +297,17 @@ def _process_row(row_tuple):
 # Data Loading — yields lightweight tuples with only needed columns
 # =============================================================================
 
+# Canonical column order for merged TSV output.
+_MERGED_TSV_COLS_BASE = [
+    "UserId", "ReadableUserEvents",
+    "UserHistory", "FinalJourney",
+]
+_MERGED_TSV_COLS_PROFILE = [
+    "UserId", "ReadableUserEvents",
+    "UserHistory", "Profile", "FinalJourney",
+]
+
+
 def _load_journey_rows_from_dir(prompt_results_dir, require_profile=False):
     """Load step3 *_cleaned.tsv files, yielding only needed columns as tuples.
 
@@ -353,6 +364,70 @@ def _load_journey_rows_from_dir(prompt_results_dir, require_profile=False):
                     row[journey_idx],
                     row[profile_idx] if profile_idx >= 0 else "",
                 )
+                file_rows += 1
+                total_rows += 1
+
+            print(f"    Loaded {file_rows:>10,} rows from: {fname}")
+
+    print(f"  Total merged rows: {total_rows:,}")
+
+
+def _load_full_rows_from_dir(prompt_results_dir, require_profile=False):
+    """Load *_cleaned.tsv files, yielding all columns for TSV merge.
+
+    Yields:
+        (user_id_str, {col_name: value, ...}) dicts.
+        Missing columns are set to empty string.
+    """
+    base_required = {"UserId", "ReadableUserEvents", "FinalJourney"}
+    if require_profile:
+        base_required.add("Profile")
+
+    out_cols = _MERGED_TSV_COLS_PROFILE if require_profile else _MERGED_TSV_COLS_BASE
+
+    tsv_files = sorted(
+        f for f in os.listdir(prompt_results_dir)
+        if f.endswith("_cleaned.tsv") or f.endswith("_clean.tsv")
+    )
+    if not tsv_files:
+        print(f"  ERROR: No *_cleaned.tsv or *_clean.tsv files found in {prompt_results_dir}")
+        sys.exit(1)
+
+    print(f"  Found {len(tsv_files)} TSV file(s) in: {prompt_results_dir}")
+
+    total_rows = 0
+    for fname in tsv_files:
+        fpath = os.path.join(prompt_results_dir, fname)
+        with open(fpath, "r", encoding="utf-8") as f:
+            reader = csv.reader(f, delimiter="\t")
+            header = next(reader, None)
+            if header is None:
+                print(f"    SKIP (empty): {fname}")
+                continue
+
+            header_set = set(header)
+            if not base_required.issubset(header_set):
+                print(f"    SKIP (missing columns): {fname}")
+                continue
+
+            # Build index map: output_col -> source_col_idx (or -1)
+            col_idx_map = {}
+            for col in out_cols:
+                col_idx_map[col] = header.index(col) if col in header_set else -1
+            max_idx = max(i for i in col_idx_map.values() if i >= 0)
+
+            file_rows = 0
+            for row in reader:
+                if len(row) <= max_idx:
+                    continue
+                uid = row[col_idx_map["UserId"]].strip()
+                if not uid:
+                    continue
+                row_dict = {}
+                for col in out_cols:
+                    idx = col_idx_map[col]
+                    row_dict[col] = row[idx].strip() if idx >= 0 else ""
+                yield uid, row_dict
                 file_rows += 1
                 total_rows += 1
 
@@ -422,6 +497,7 @@ def parse_args():
         type=str,
         #default=None,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/",
         help="Directory containing step3 *_cleaned.tsv files to merge. "
              "Only files ending with '_cleaned.tsv' are loaded. "
              "When set, overrides --journey_file.",
@@ -451,7 +527,124 @@ def parse_args():
         default=5000,
         help="Chunk size for multiprocessing pool dispatch (default: 5000)",
     )
+    parser.add_argument(
+        "--save_merged_tsv",
+        action="store_true",
+        default=True,
+        help="Also write a merged & deduped {task}_full_cleaned.tsv "
+             "(default: True)",
+    )
+    parser.add_argument(
+        "--no_save_merged_tsv",
+        dest="save_merged_tsv",
+        action="store_false",
+        help="Disable merged TSV output",
+    )
+    parser.add_argument(
+        "--merge_tsv_only",
+        action="store_true",
+        default=False,
+        help="Only generate the merged {task}_full_cleaned.tsv, skip "
+             "item validation and shopping_journeys.json generation",
+    )
+    parser.add_argument(
+        "--user_his_file",
+        type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/1225_0325/Step1_All_EnUs_UserReadableHis.tsv",
+        help="TSV with UserId and UserHistory columns. "
+             "Used to supplement missing UserHistory in merged TSV "
+             "(especially for profile2journey). Set to empty to disable.",
+    )
     return parser.parse_args()
+
+
+# =============================================================================
+# Merged TSV Writer
+# =============================================================================
+
+def _write_merged_tsv(prompt_results_dir, output_dir, task, require_profile,
+                      user_his_file=None):
+    """Merge, deduplicate by UserId, and write a single TSV file.
+
+    Output: {output_dir}/{task}_full_cleaned.tsv
+    Columns: UserId, ReadableUserEvents, UserHistory,
+             [Profile,] FinalJourney.
+
+    If user_his_file is given, missing UserHistory is filled from that
+    file (keyed by UserId).  This is needed for profile2journey where
+    the source *_clean.tsv files have empty UserHistory.
+    """
+    out_cols = _MERGED_TSV_COLS_PROFILE if require_profile else _MERGED_TSV_COLS_BASE
+
+    # --- Optionally load supplementary UserHistory ---
+    uid2his = {}  # uid -> {"UserHistory": ...}
+    if user_his_file and os.path.exists(user_his_file):
+        print(f"  Loading supplementary UserHistory from: {user_his_file}")
+        with open(user_his_file, "r", encoding="utf-8", errors="replace") as fh:
+            # Strip NUL bytes that cause csv.Error
+            clean_lines = (line.replace("\x00", "") for line in fh)
+            reader = csv.reader(clean_lines, delimiter="\t")
+            his_header = next(reader, None)
+            if his_header:
+                his_set = set(his_header)
+                uid_i = his_header.index("UserId") if "UserId" in his_set else 0
+                uh_i = his_header.index("UserHistory") if "UserHistory" in his_set else -1
+                max_i = max(idx for idx in [uid_i, uh_i] if idx >= 0)
+                loaded = 0
+                for row in reader:
+                    if len(row) <= max_i:
+                        continue
+                    u = row[uid_i].strip()
+                    if not u:
+                        continue
+                    if uh_i >= 0 and row[uh_i].strip():
+                        uid2his[u] = {"UserHistory": row[uh_i].strip()}
+                        loaded += 1
+                print(f"  Loaded {loaded:,} users with UserHistory")
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, f"{task}_full_cleaned.tsv")
+
+    seen_uids = set()
+    written = 0
+    duplicates = 0
+    total_read = 0
+    supplemented = 0
+
+    with open(out_path, "w", encoding="utf-8", newline="") as fout:
+        writer = csv.writer(fout, delimiter="\t", quoting=csv.QUOTE_NONE,
+                            escapechar="\\")
+        writer.writerow(out_cols)
+
+        for uid, row_dict in _load_full_rows_from_dir(
+            prompt_results_dir, require_profile=require_profile,
+        ):
+            total_read += 1
+            if uid in seen_uids:
+                duplicates += 1
+                continue
+            seen_uids.add(uid)
+
+            # Supplement missing UserHistory
+            if uid in uid2his:
+                sup = uid2his[uid]
+                if not row_dict.get("UserHistory") and "UserHistory" in sup:
+                    row_dict["UserHistory"] = sup["UserHistory"]
+                    supplemented += 1
+
+            writer.writerow([row_dict.get(col, "") for col in out_cols])
+            written += 1
+
+    file_mb = os.path.getsize(out_path) / (1024 * 1024)
+    print(f"  Merged TSV: {out_path}")
+    print(f"  Columns: {out_cols}")
+    print(f"  Rows read:        {total_read:>12,}")
+    print(f"  Duplicates:       {duplicates:>12,}")
+    print(f"  Rows written:     {written:>12,}")
+    if uid2his:
+        print(f"  Supplemented UH:  {supplemented:>12,}")
+    print(f"  File size:        {file_mb:>11.1f} MB")
 
 
 # =============================================================================
@@ -460,6 +653,24 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    require_profile = (args.task == "profile2journey")
+
+    # =========================================================================
+    # --merge_tsv_only: fast path — merge & dedup TSV only, skip item loading
+    # =========================================================================
+    if args.merge_tsv_only:
+        if not args.prompt_results_dir:
+            print("ERROR: --merge_tsv_only requires --prompt_results_dir")
+            sys.exit(1)
+        print("=" * 70)
+        print(f"Merge TSV Only Mode (task={args.task})")
+        print("=" * 70)
+        _write_merged_tsv(args.prompt_results_dir, args.output_dir, args.task,
+                          require_profile,
+                          user_his_file=args.user_his_file)
+        print("\nDone!")
+        return
 
     # =========================================================================
     # Step 1: Load item metadata to build valid OfferId set
@@ -494,7 +705,6 @@ def main():
     print("Step 2: Reading journey prediction file (selective columns)")
     print("=" * 70)
 
-    require_profile = (args.task == "profile2journey")
     if require_profile:
         print(f"  Task: profile2journey (Profile column required)")
     else:
@@ -802,6 +1012,19 @@ def main():
     print(f"    Entries:                          {len(results):>12,}")
     print(f"    Entries with journeys:            {entries_with_journeys:>12,}")
     print(f"    Journeys (kept with products):    {agg_kept_journeys:>12,}")
+
+    # =========================================================================
+    # Optional: Write merged & deduped TSV
+    # =========================================================================
+    if args.save_merged_tsv and args.prompt_results_dir:
+        print()
+        print("=" * 70)
+        print("Writing merged & deduped TSV")
+        print("=" * 70)
+        _write_merged_tsv(args.prompt_results_dir, args.output_dir, args.task,
+                          require_profile,
+                          user_his_file=args.user_his_file)
+
     print()
     print("Done!")
 

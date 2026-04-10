@@ -1,7 +1,8 @@
 """
 TermID Normalization
 
-Three-stage normalization for shopping recommendation term IDs:
+Four-stage normalization for shopping recommendation term IDs:
+  Stage 0: Special Character Cleaning (control chars, box-drawing, BOM, etc.)
   Stage 1: Text Formatting (HTML entities, symbols, smart hyphen)
   Stage 2: Unit Normalization (full names to abbreviation, add number-unit join)
   Stage 3: Dictionary Normalization (singular/plural, spelling, synonyms)
@@ -20,6 +21,26 @@ import html
 import re
 import time
 from collections import Counter
+
+
+# ===========================================================================
+# Stage 0: Special Character Cleaning
+# ===========================================================================
+
+# Control chars, zero-width spaces, BOM, box-drawing, block elements
+_CLEAN_CHARS_RE = re.compile(
+    r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f'
+    r'\u200b-\u200f\u2028-\u202f\ufeff'
+    r'\u25a0-\u25ff'
+    r'\u2500-\u257f'
+    r'\u2580-\u259f]'
+)
+
+
+def _stage0(term: str) -> str:
+    """Strip control characters, zero-width spaces, BOM, box-drawing symbols."""
+    term = _CLEAN_CHARS_RE.sub('', term)
+    return term.strip()
 
 
 # ===========================================================================
@@ -156,14 +177,7 @@ _NORMALIZE_DICT = {
     "kid's": "kids", "kid\u2019s": "kids",
     "children's": "children", "children\u2019s": "children",
     "mens": "men", "womens": "women",
-    # Product nouns (→ higher frequency form)
-    "shoe": "shoes", "boot": "boots", "heel": "heels",
-    "sock": "socks", "earring": "earrings", "girl": "girls",
-    "boy": "boys", "kid": "kids", "cleat": "cleats",
-    "glove": "gloves", "blind": "blinds", "headphone": "headphones",
-    "bead": "beads", "goggle": "goggles", "lady": "ladies",
-    "sweatpant": "sweatpants", "wipe": "wipes",
-    "rail": "rails", "pant": "pants", "short": "shorts",
+    # --- Product nouns: plural → singular (higher-freq form) ---
     "sandals": "sandal", "sneakers": "sneaker", "loafers": "loafer",
     "flats": "flat", "pumps": "pump", "slippers": "slipper",
     "slides": "slide", "rings": "ring", "necklaces": "necklace",
@@ -192,6 +206,59 @@ _NORMALIZE_DICT = {
     "organizers": "organizer", "baskets": "basket", "crates": "crate",
     "clogs": "clog", "booties": "bootie", "mules": "mule",
     "oxfords": "oxford", "wedges": "wedge", "studs": "stud",
+    # --- Product nouns: singular → plural (higher-freq form) ---
+    "shoe": "shoes", "boot": "boots", "heel": "heels",
+    "sock": "socks", "earring": "earrings", "girl": "girls",
+    "boy": "boys", "kid": "kids", "cleat": "cleats",
+    "glove": "gloves", "blind": "blinds", "headphone": "headphones",
+    "bead": "beads", "goggle": "goggles", "lady": "ladies",
+    "sweatpant": "sweatpants", "wipe": "wipes",
+    "rail": "rails", "pant": "pants", "short": "shorts",
+    "jean": "jeans", "sunglass": "sunglasses",
+    # --- Additional plural → singular (from active vocab analysis) ---
+    "leathers": "leather", "dresses": "dress", "jackets": "jacket",
+    "t-shirts": "t-shirt", "florals": "floral", "shirts": "shirt",
+    "sweaters": "sweater", "gowns": "gown", "sofas": "sofa",
+    "sweatshirts": "sweatshirt", "cardigans": "cardigan",
+    "skirts": "skirt", "helmets": "helmet", "motorcycles": "motorcycle",
+    "cabinets": "cabinet", "sectionals": "sectional",
+    "slingbacks": "slingback", "totes": "tote", "tees": "tee",
+    "kits": "kit", "tops": "top", "sets": "set",
+    "tables": "table", "tiles": "tile",
+    "platforms": "platform", "diamonds": "diamond", "squares": "square",
+    "minis": "mini", "ceramics": "ceramic", "plastics": "plastic",
+    "classics": "classic", "fabrics": "fabric", "textiles": "textile",
+    "linens": "linen", "metals": "metal", "electrics": "electric",
+    "synthetics": "synthetic", "durables": "durable",
+    "replacements": "replacement", "graphics": "graphic",
+    "athletics": "athletic", "basketballs": "basketball",
+    "jerseys": "jersey", "leds": "led", "swivels": "swivel",
+    "mattes": "matte", "mediums": "medium", "smalls": "small",
+    # --- Multi-word plural → singular ---
+    "slip ons": "slip on", "low tops": "low top",
+    "long sleeves": "long sleeve", "short sleeves": "short sleeve",
+    "plus sizes": "plus size",
+    # --- Color plurals ---
+    "whites": "white", "blacks": "black", "grays": "gray",
+    "blues": "blue", "greens": "green", "reds": "red",
+    "browns": "brown", "pinks": "pink", "silvers": "silver",
+    # --- Scene/context ---
+    "outdoors": "outdoor", "indoors": "indoor",
+    "toddlers": "toddler", "petites": "petite",
+    "kitchens": "kitchen", "bathrooms": "bathroom",
+    "weddings": "wedding", "chairs": "chair",
+    "others": "other",
+    # --- -ies → -y ---
+    "vanities": "vanity", "batteries": "battery", "parties": "party",
+    "accessories": "accessory", "utilities": "utility",
+    "assemblies": "assembly", "safeties": "safety",
+    "babies": "baby", "candies": "candy", "butterflies": "butterfly",
+    "derbies": "derby", "bunnies": "bunny", "cherries": "cherry",
+    "canopies": "canopy", "novelties": "novelty", "families": "family",
+    "strawberries": "strawberry", "nurseries": "nursery",
+    "skinnies": "skinny", "baggies": "baggy",
+    # --- Glasses special case (glasses > glass in product context) ---
+    "glass": "glasses",
     # British → American spelling
     "grey": "gray", "colour": "color", "colourful": "colorful",
     "colourblock": "colorblock", "colour-block": "color block",
@@ -216,12 +283,14 @@ _WORD_PATTERN = re.compile(r"^[a-zA-Z''\u2019]+(?:\s+[a-zA-Z''\u2019]+)*$")
 
 
 def _stage3(term: str) -> str:
-    """Dictionary-based normalization. Single-word only. Lookup by lowercase."""
+    """Dictionary-based normalization. Lookup by lowercase.
+
+    Handles both single-word and multi-word terms (e.g., 'slip ons' → 'slip on').
+    Skips terms containing digits or <=2 chars.
+    """
     if _SKIP_PATTERN.search(term):
         return term
     if not _WORD_PATTERN.match(term):
-        return term
-    if ' ' in term:
         return term
     lower = term.lower()
     if lower in _NORMALIZE_LOOKUP:
@@ -234,8 +303,8 @@ def _stage3(term: str) -> str:
 # ===========================================================================
 
 def normalize_term(term: str) -> str:
-    """Normalize a single TermID string through all 3 stages."""
-    return _stage3(_stage2(_stage1(term)))
+    """Normalize a single TermID string through all 4 stages."""
+    return _stage3(_stage2(_stage1(_stage0(term))))
 
 
 def normalize_file(input_path: str, output_path: str, mapping_path: str = None) -> dict:
