@@ -46,6 +46,62 @@ _RE_EVENT_NUMBER = re.compile(r"^\d+\s*\|\s*(.*)")
 _RE_NON_ALNUM = re.compile(r"[^a-z0-9\s|]")
 _RE_MULTI_SPACE = re.compile(r"\s+")
 
+
+# === Time normalization (must match s3_build_journey_sft_data.py) ===
+
+def _normalize_time_expr(match):
+    """Normalize a single time expression to days or hours."""
+    text = match.group(0)
+    parts = re.findall(r'(\d+)\s*(month|week|day|hour|minute|second)s?', text,
+                       re.IGNORECASE)
+    if not parts:
+        return text
+    total_hours = 0; total_minutes = 0
+    for num_str, unit in parts:
+        num = int(num_str)
+        u = unit.lower()
+        if u == 'month': total_hours += num * 30 * 24
+        elif u == 'week': total_hours += num * 7 * 24
+        elif u == 'day': total_hours += num * 24
+        elif u == 'hour': total_hours += num
+        elif u == 'minute': total_minutes += num
+    total_days = total_hours // 24
+    if total_days > 0: return f"{total_days} days ago"
+    elif total_hours > 0: return f"{total_hours} hours ago"
+    elif total_minutes > 0: return f"{total_minutes} minutes ago"
+    return "0 minutes ago"
+
+def normalize_event_times(text):
+    """Normalize all time expressions (weeks/months -> days) in event text."""
+    return re.sub(r'(?:\d+\s*(?:month|week|day|hour|minute|second)s?\s*)+ago',
+                  _normalize_time_expr, text, flags=re.IGNORECASE)
+
+
+# === Profile JSON cleaning (must match s3_build_journey_sft_data.py) ===
+
+def _clean_profile_json(raw):
+    """Unescape multi-layer escaped profile JSON."""
+    if not raw or not raw.strip():
+        return raw
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, (dict, list)):
+            return json.dumps(obj, ensure_ascii=False, separators=(',', ': '))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    text = raw
+    for _ in range(3):
+        text = text.replace('\\\\', '\x00__BS__\x00')
+        text = text.replace('\\"', '"')
+        text = text.replace('\x00__BS__\x00', '\\')
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, (dict, list)):
+                return json.dumps(obj, ensure_ascii=False, separators=(',', ': '))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return raw
+
 def _normalize_event_key(event):
     key = event.lower()
     key = _RE_NON_ALNUM.sub(" ", key)
@@ -335,15 +391,20 @@ def build_e2j_input(events, max_events=100, prompt_line=None):
     fp = prompt_line or "Predict the user's shopping journeys:"
     lines = ["User Event History:"]
     for i, e in enumerate(events[:max_events], 1):
-        lines.append(f"{i} | {(e[:150]+'...' if len(e)>150 else e)}")
+        e = normalize_event_times(e)
+        if len(e) > 150: e = e[:150] + "..."
+        lines.append(f"{i} | {e}")
     lines += ["", fp]
     return "\n".join(lines)
 
 def build_p2j_input(profile, events, max_recent=100, prompt_line=None):
     fp = prompt_line or "Predict the user's shopping journeys:"
-    lines = ["User Shopping Profile:", profile, "", "Recent Shopping Events:"]
+    clean_profile = _clean_profile_json(profile)
+    lines = ["User Shopping Profile:", clean_profile, "", "Recent Shopping Events:"]
     for i, e in enumerate(events[:max_recent], 1):
-        lines.append(f"{i} | {(e[:150]+'...' if len(e)>150 else e)}")
+        e = normalize_event_times(e)
+        if len(e) > 150: e = e[:150] + "..."
+        lines.append(f"{i} | {e}")
     lines += ["", fp]
     return "\n".join(lines)
 
@@ -453,6 +514,7 @@ def save_tsv(rows, fp, cols):
 def _compute_row_stats(rows):
     """Compute diversity/size stats from output rows."""
     j_per_user, p_per_j, rp_per_j, u_prods = [], [], [], []
+    rj_per_user = []  # raw journeys per user (from model output, before match)
     u_j_prods = []  # list of per-user [products_per_journey] lists
     dup_per_j = []   # per-journey duplicate TID count (from raw output)
     dup_ratio_per_j = []  # per-journey duplicate ratio
@@ -476,12 +538,14 @@ def _compute_row_stats(rows):
                 if gids: ugids.append(gids[0])
         u_j_prods.append(cnts)
         u_prods.append(len(set(ugids)))
-        # raw products + duplicate TID stats
+        # raw products + duplicate TID stats + raw journeys count
         raw = r.get("RawShoppingJourneys","")
         if raw:
             rd = parse_journey_json(raw)
             if rd:
-                for rj in rd.get("ContinuedJourneys",[]):
+                raw_js = rd.get("ContinuedJourneys",[])
+                rj_per_user.append(len(raw_js))
+                for rj in raw_js:
                     tids = rj.get("ProductTIDs",[])
                     rp_per_j.append(len(tids))
                     # Count duplicates: TIDs that appear more than once
@@ -491,22 +555,23 @@ def _compute_row_stats(rows):
                     n_dup = n_total - n_unique
                     dup_per_j.append(n_dup)
                     dup_ratio_per_j.append(n_dup / n_total if n_total > 0 else 0.0)
-    return {"j_per_user":j_per_user,"p_per_j":p_per_j,"rp_per_j":rp_per_j,
+    return {"j_per_user":j_per_user,"rj_per_user":rj_per_user,
+            "p_per_j":p_per_j,"rp_per_j":rp_per_j,
             "u_prods":u_prods,"u_j_prods":u_j_prods,"n_users":len(j_per_user),
             "dup_per_j":dup_per_j,"dup_ratio_per_j":dup_ratio_per_j}
 
 def print_side_by_side(task, ls, ss, llm_rows, slm_rows):
-    print(f"\n  {'='*70}")
+    print(f"\n  {'='*80}")
     print(f"  {task} - LLM vs SLM")
-    print(f"  {'='*70}")
+    print(f"  {'='*80}")
     def _pk(s): return s["exact_matches"]+s["fuzzy_matches"]-s.get("fuzzy_filtered",0)-s.get("products_deduped",0)
 
-    print(f"\n  {'Metric':<45s} {'LLM':>15s} {'SLM':>15s}")
-    print(f"  {'-'*45} {'-'*15} {'-'*15}")
+    print(f"\n  {'Metric':<45s} {'LLM':>20s} {'SLM':>20s}")
+    print(f"  {'-'*45} {'-'*20} {'-'*20}")
     for lb, k in [("Total users","total_users"),("JSON parse success","json_parse_success"),
                   ("JSON parse fail","json_parse_fail"),
                   ("Total products (model output)","total_products")]:
-        print(f"  {lb:<45s} {ls.get(k,0):>15,} {ss.get(k,0):>15,}")
+        print(f"  {lb:<45s} {ls.get(k,0):>20,} {ss.get(k,0):>20,}")
 
     # Rows with percentage relative to total_products
     lt = max(ls.get("total_products",0), 1)
@@ -514,39 +579,39 @@ def print_side_by_side(task, ls, ss, llm_rows, slm_rows):
     def _vp(s, k, tot):
         v = s.get(k, 0)
         return f"{v:,} ({v/tot*100:.1f}%)"
-    print(f"  {'Exact matches':<45s} {_vp(ls,'exact_matches',lt):>15s} {_vp(ss,'exact_matches',st):>15s}")
+    print(f"  {'Exact matches':<45s} {_vp(ls,'exact_matches',lt):>20s} {_vp(ss,'exact_matches',st):>20s}")
     sfk = ss.get("fuzzy_matches",0) - ss.get("fuzzy_filtered",0)
-    print(f"  {'Fuzzy matches (kept)':<45s} {_vp(ls,'fuzzy_matches',lt):>15s} {f'{sfk:,} ({sfk/st*100:.1f}%)':>15s}")
-    print(f"  {'Fuzzy matches (all)':<45s} {_vp(ls,'fuzzy_matches',lt):>15s} {_vp(ss,'fuzzy_matches',st):>15s}")
-    print(f"  {'No matches':<45s} {_vp(ls,'no_matches',lt):>15s} {_vp(ss,'no_matches',st):>15s}")
-    print(f"  {'Fuzzy filtered (< threshold)':<45s} {_vp(ls,'fuzzy_filtered',lt):>15s} {_vp(ss,'fuzzy_filtered',st):>15s}")
-    print(f"  {'Products deduped (by GID)':<45s} {_vp(ls,'products_deduped',lt):>15s} {_vp(ss,'products_deduped',st):>15s}")
-    print(f"  {'Journeys dropped (empty)':<45s} {ls.get('journeys_dropped',0):>15,} {ss.get('journeys_dropped',0):>15,}")
+    print(f"  {'Fuzzy matches (kept)':<45s} {_vp(ls,'fuzzy_matches',lt):>20s} {f'{sfk:,} ({sfk/st*100:.1f}%)':>20s}")
+    print(f"  {'No matches':<45s} {_vp(ls,'no_matches',lt):>20s} {_vp(ss,'no_matches',st):>20s}")
+    print(f"  {'Fuzzy filtered (< threshold)':<45s} {_vp(ls,'fuzzy_filtered',lt):>20s} {_vp(ss,'fuzzy_filtered',st):>20s}")
+    print(f"  {'Products deduped (by GID)':<45s} {_vp(ls,'products_deduped',lt):>20s} {_vp(ss,'products_deduped',st):>20s}")
+    print(f"  {'Journeys dropped (empty)':<45s} {ls.get('journeys_dropped',0):>20,} {ss.get('journeys_dropped',0):>20,}")
     lpk = _pk(ls); spk = _pk(ss)
-    print(f"  {'Products kept (after filtering)':<45s} {f'{lpk:,} ({lpk/lt*100:.1f}%)':>15s} {f'{spk:,} ({spk/st*100:.1f}%)':>15s}")
-    print(f"  {'Users with all fields':<45s} {ls['users_with_all_fields']:>15,} {ss['users_with_all_fields']:>15,}")
+    print(f"  {'Products kept (after filtering)':<45s} {f'{lpk:,} ({lpk/lt*100:.1f}%)':>20s} {f'{spk:,} ({spk/st*100:.1f}%)':>20s}")
+    print(f"  {'Users with all fields':<45s} {ls['users_with_all_fields']:>20,} {ss['users_with_all_fields']:>20,}")
 
     # Diversity & Size stats (side by side)
     ld = _compute_row_stats(llm_rows)
     sd = _compute_row_stats(slm_rows)
-    print(f"\n  {'--- Diversity & Size ---':<45s} {'LLM':>15s} {'SLM':>15s}")
-    print(f"  {'Users with data':<45s} {ld['n_users']:>15,} {sd['n_users']:>15,}")
+    print(f"\n  {'--- Diversity & Size ---':<45s} {'LLM':>20s} {'SLM':>20s}")
+    print(f"  {'Users with data':<45s} {ld['n_users']:>20,} {sd['n_users']:>20,}")
 
     def _fmt(arr):
         if not arr: return "N/A"
         return f"{np.array(arr).mean():.2f}"
 
-    print(f"  {'Journeys/user (mean)':<45s} {_fmt(ld['j_per_user']):>15s} {_fmt(sd['j_per_user']):>15s}")
-    print(f"  {'Products/journey after match (mean)':<45s} {_fmt(ld['p_per_j']):>15s} {_fmt(sd['p_per_j']):>15s}")
-    print(f"  {'Products/journey before match (mean)':<45s} {_fmt(ld['rp_per_j']):>15s} {_fmt(sd['rp_per_j']):>15s}")
-    print(f"  {'Unique products/user (mean)':<45s} {_fmt(ld['u_prods']):>15s} {_fmt(sd['u_prods']):>15s}")
+    print(f"  {'Journeys/user after match (mean)':<45s} {_fmt(ld['j_per_user']):>20s} {_fmt(sd['j_per_user']):>20s}")
+    print(f"  {'Journeys/user before match (mean)':<45s} {_fmt(ld['rj_per_user']):>20s} {_fmt(sd['rj_per_user']):>20s}")
+    print(f"  {'Products/journey after match (mean)':<45s} {_fmt(ld['p_per_j']):>20s} {_fmt(sd['p_per_j']):>20s}")
+    print(f"  {'Products/journey before match (mean)':<45s} {_fmt(ld['rp_per_j']):>20s} {_fmt(sd['rp_per_j']):>20s}")
+    print(f"  {'Unique products/user (mean)':<45s} {_fmt(ld['u_prods']):>20s} {_fmt(sd['u_prods']):>20s}")
 
     # Duplicate TIDs per journey
     def _fmt_dup(darr, rarr):
         if not darr: return "N/A"
         da = np.array(darr); ra = np.array(rarr)
         return f"{da.mean():.1f} ({ra.mean():.1%})"
-    print(f"  {'Dup TIDs/journey (mean, ratio)':<45s} {_fmt_dup(ld['dup_per_j'],ld['dup_ratio_per_j']):>15s} {_fmt_dup(sd['dup_per_j'],sd['dup_ratio_per_j']):>15s}")
+    print(f"  {'Dup TIDs/journey (mean, ratio)':<45s} {_fmt_dup(ld['dup_per_j'],ld['dup_ratio_per_j']):>20s} {_fmt_dup(sd['dup_per_j'],sd['dup_ratio_per_j']):>20s}")
 
     # Coverage with percentages
     for min_p in [5, 8, 10]:
@@ -557,14 +622,14 @@ def print_side_by_side(task, ls, ss, llm_rows, slm_rows):
         lt2 = max(len(lj), 1); st2 = max(len(sj), 1)
         lp = f"{lj_ok}/{len(lj)} ({lj_ok/lt2*100:.1f}%)" if len(lj) else "N/A"
         sp = f"{sj_ok}/{len(sj)} ({sj_ok/st2*100:.1f}%)" if len(sj) else "N/A"
-        print(f"  {'Journeys >= '+str(min_p)+' products':<45s} {lp:>15s} {sp:>15s}")
+        print(f"  {'Journeys >= '+str(min_p)+' products':<45s} {lp:>20s} {sp:>20s}")
     for min_p in [5, 8, 10]:
         lu = sum(1 for c in ld['u_j_prods'] if any(x>=min_p for x in c))
         su = sum(1 for c in sd['u_j_prods'] if any(x>=min_p for x in c))
         lt2 = max(len(ld['u_j_prods']), 1); st2 = max(len(sd['u_j_prods']), 1)
         lp = f"{lu}/{len(ld['u_j_prods'])} ({lu/lt2*100:.1f}%)" if ld['u_j_prods'] else "N/A"
         sp = f"{su}/{len(sd['u_j_prods'])} ({su/st2*100:.1f}%)" if sd['u_j_prods'] else "N/A"
-        print(f"  {'Users w/ any journey >= '+str(min_p)+' prods':<45s} {lp:>15s} {sp:>15s}")
+        print(f"  {'Users w/ any journey >= '+str(min_p)+' prods':<45s} {lp:>20s} {sp:>20s}")
 
     return {"llm":{k:v for k,v in ls.items() if k not in ("per_user_exact_ratios","fuzzy_matched_words","fuzzy_best_scores")},
             "slm":{k:v for k,v in ss.items() if k not in ("per_user_exact_ratios","fuzzy_matched_words","fuzzy_best_scores")}}
@@ -583,7 +648,7 @@ def parse_args():
         help="Path to the trained SFT model checkpoint",
     )
     p.add_argument("--test_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/sft_data")
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260406/sft_data")
     p.add_argument(
         "--output_dir", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-1250/",
@@ -599,15 +664,15 @@ def parse_args():
     p.add_argument("--max_events", type=int, default=500)
     p.add_argument("--max_recent_events", type=int, default=500)
     p.add_argument("--num_gpus", type=int, default=None)
-    p.add_argument("--gpu_memory_utilization", type=float, default=0.70)
+    p.add_argument("--gpu_memory_utilization", type=float, default=0.80)
     p.add_argument("--max_model_len", type=int, default=32000)
-    p.add_argument("--max_tokens", type=int, default=8192)
+    p.add_argument("--max_tokens", type=int, default=12000)
     p.add_argument("--item_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json")
     p.add_argument("--fuzzy_score_threshold", type=float, default=6.0)
     p.add_argument("--reorder_tid_pos", type=int, default=3)
     p.add_argument("--instruction_version", type=str, default="v4", choices=["v3","v4"])
-    p.add_argument("--min_products_override", type=int, default=15)
+    p.add_argument("--min_products_override", type=int, default=10)
     return p.parse_args()
 
 # === Main ===
@@ -651,6 +716,15 @@ def main():
     print(f"\n{'='*70}\nStep 3: Processing user data\n{'='*70}")
     e2j_data = process_task_data("event2journey", e2j_sampled, has_profile=False)
     p2j_data = process_task_data("profile2journey", p2j_sampled, has_profile=True)
+
+    # Event count statistics
+    for name, data in [("event2journey", e2j_data), ("profile2journey", p2j_data)]:
+        ec = np.array([len(ud.get("events_list", [])) for ud in data])
+        if len(ec):
+            print(f"    [{name}] Events per user: "
+                  f"Mean={ec.mean():.1f}, Min={ec.min()}, "
+                  f"P25={int(np.percentile(ec,25))}, P50={int(np.percentile(ec,50))}, "
+                  f"P75={int(np.percentile(ec,75))}, Max={ec.max()}")
 
     # Step 4: TID mapping
     print(f"\n{'='*70}\nStep 4: Loading TID mapping\n{'='*70}")
