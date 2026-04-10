@@ -1,8 +1,11 @@
 """Step 5 Journey: Evaluate Journey Prediction Tasks
 
 Reads a test TSV file (same format as pre_s3's journey_file), samples N
-users, generates shopping profiles via Copilot API, then evaluates the
-trained SFT model on event2journey and profile2journey tasks using vLLM.
+users, generates shopping profiles via vLLM (using a dedicated profile
+model), then evaluates the trained SFT journey model on event2journey
+and profile2journey tasks using vLLM.
+
+Standalone: no external imports from preprocess_raw_data.
 
 Produces three TSV output files:
 
@@ -21,7 +24,7 @@ Pipeline:
   1. Read test TSV file (UserId, ReadableUserEvents, UserHistory,
      JourneyWithProducts, FinalJourney).
   2. Sample N user_ids.
-  3. Generate shopping profiles via Copilot API (profile_pre_construct).
+  3. Generate shopping profiles via vLLM (profile model).
   4. Filter to users with valid profiles.
   5. Build ground truth from FinalJourney (llm_output).
   6. Run trained model on event2journey prompts -> slm_output.
@@ -30,13 +33,13 @@ Pipeline:
   9. Output three TSV files with statistics.
 
 Usage:
-    python s5_journey_eval.py \\
+    python s5_1_journey_eval.py \\
         --model_path /path/to/sft_checkpoint \\
+        --profile_model_path /path/to/profile_checkpoint \\
         --test_file /path/to/journey_test.tsv \\
         --tid2item_id_file ./sft_data/item_id2tid/tid2item_id.json \\
         --output_dir ./eval_results/journey \\
-        --sample_n 500 \\
-        --token_file ./resources/tokens.txt
+        --sample_n 500
 """
 
 import os
@@ -46,6 +49,7 @@ import json
 import random
 import argparse
 import sys
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -57,23 +61,280 @@ SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 
-# Add preprocess_raw_data and resources to path for imports
+# Add resources to path for imports
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PREPROCESS_DIR = os.path.join(SCRIPT_DIR, "preprocess_raw_data")
 RESOURCES_DIR = os.path.join(SCRIPT_DIR, "resources")
-sys.path.insert(0, PREPROCESS_DIR)
 sys.path.insert(0, RESOURCES_DIR)
 
-from pre_s2_construct_shopping_journey import (
-    parse_readable_user_events,
-    parse_final_journey,
-)
-from pre_s1_construct_shopping_profile import (
-    run_profile_generation_copilot as run_profile_generation,
-    extract_and_validate_json,
-)
-from llm_utils import load_prompts, cleanup_checkpoint
 from term_normalizer import normalize_term
+
+
+# =============================================================================
+# Inlined from pre_s2_construct_shopping_journey & pre_s1_construct_shopping_profile
+# =============================================================================
+
+_RE_EVENT_NUMBER = re.compile(r"^\d+\s*\|\s*(.*)")
+_RE_NON_ALNUM = re.compile(r"[^a-z0-9\s|]")
+_RE_MULTI_SPACE = re.compile(r"\s+")
+
+
+def _normalize_event_key(event):
+    """Normalize an event string for deduplication."""
+    key = event.lower()
+    key = _RE_NON_ALNUM.sub(" ", key)
+    key = _RE_MULTI_SPACE.sub(" ", key)
+    return key.strip()
+
+
+def parse_readable_user_events(events_text):
+    """Parse ReadableUserEvents text (#N# separated) into list of events."""
+    if not events_text or not events_text.strip():
+        return [], 0
+    text = events_text.replace("#N#", "\n")
+    lines = text.strip().split("\n")
+    raw_events = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        match = _RE_EVENT_NUMBER.match(line)
+        if match:
+            event = match.group(1).strip()
+            if event:
+                raw_events.append(event)
+    seen_keys = set()
+    deduped = []
+    for event in raw_events:
+        key = _normalize_event_key(event)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped.append(event)
+    return deduped, len(raw_events)
+
+
+def parse_final_journey(journey_text, valid_offer_ids):
+    """Parse FinalJourney JSON and extract journeys with validated OfferIds."""
+    stats = {
+        "total_offer_ids": 0, "found_offer_ids": 0, "missing_offer_ids": 0,
+        "total_journeys": 0, "kept_journeys": 0, "empty_product_journeys": 0,
+    }
+    missing_ids = set()
+    if not journey_text or not journey_text.strip():
+        return [], stats, missing_ids
+    data = None
+    for attempt_text in [journey_text, journey_text.replace('\\"', '"')]:
+        try:
+            data = json.loads(attempt_text)
+            break
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    if data is None:
+        return [], stats, missing_ids
+    journeys = []
+    for j_raw in data.get("ContinuedJourneys", []):
+        title = j_raw.get("Title", "").strip()
+        reason = j_raw.get("Reason", "").strip()
+        products = j_raw.get("Products", [])
+        stats["total_journeys"] += 1
+        product_ids = []
+        for product in products:
+            offer_id = str(product.get("OfferId", "")).strip()
+            if not offer_id:
+                continue
+            stats["total_offer_ids"] += 1
+            if offer_id in valid_offer_ids:
+                product_ids.append(offer_id)
+                stats["found_offer_ids"] += 1
+            else:
+                stats["missing_offer_ids"] += 1
+                missing_ids.add(offer_id)
+        if not product_ids:
+            stats["empty_product_journeys"] += 1
+            continue
+        journey_entry = {"title": title, "reason": reason, "product_ids": product_ids}
+        journey_type = j_raw.get("JourneyType", "").strip()
+        if journey_type:
+            journey_entry["journey_type"] = journey_type
+        journeys.append(journey_entry)
+        stats["kept_journeys"] += 1
+    return journeys, stats, missing_ids
+
+
+def extract_and_validate_json(raw_text):
+    """Extract and validate JSON from LLM output."""
+    if not raw_text or not raw_text.strip():
+        return ""
+    text = raw_text.strip()
+    # Strip thinking tags
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    # Strip markdown fences
+    fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    try:
+        parsed = json.loads(text)
+        return json.dumps(parsed, ensure_ascii=False, separators=(',', ':'))
+    except json.JSONDecodeError:
+        pass
+    brace_start = text.find('{')
+    brace_end = text.rfind('}')
+    if brace_start != -1 and brace_end > brace_start:
+        candidate = text[brace_start:brace_end + 1]
+        try:
+            parsed = json.loads(candidate)
+            return json.dumps(parsed, ensure_ascii=False, separators=(',', ':'))
+        except json.JSONDecodeError:
+            pass
+    return ""
+
+
+# =============================================================================
+# Profile Generation via vLLM
+# =============================================================================
+
+PROFILE_INSTRUCTION = (
+    "\nAnalyze the user's shopping event history and generate a JSON shopping "
+    "profile capturing their medium-to-long-term personal preferences.\n\n"
+    "## Rules\n"
+    "- Extract preferences ONLY from the user's own repeated patterns "
+    "(2+ events in same category/brand). Ignore isolated single events.\n"
+    "- Ignore: gifts/purchases for others, one-time needs, non-product pages "
+    "(sale banners, cart pages, homepage, navigation elements).\n"
+    "- Exclude categories: digital/software, apps, subscriptions, "
+    "medical/health/vitamin supplements,"
+    "weapons, firearms, hunting gear, alcohol, tobacco, vaping, "
+    "vehicles (car accessories OK), services,"
+    "restaurants, raw food, everyday commodities (batteries, cables, trash bags), "
+    "funeral products.\n"
+    "- Signal strength: Clicked > Browsed > Searched.\n"
+    "- When evidence is weak or unclear, return \"general\" (for string fields) "
+    "or empty list (for array fields).\n\n"
+    "## Output\n"
+    "Return ONLY a JSON object, no explanation:\n"
+    '{"userShoppingProfile": {"shoppingGenderPreference": "", '
+    '"categoryPreferences": [], "brandPreferences": [], '
+    '"retailerPreferences": [], "priceSensitivity": "", '
+    '"fashionStyle": [], "fashionFit": [], "shoppingValues": [], '
+    '"contextualShoppingInterests": [], "suggestedRelatedBrands": []}}\n\n'
+    "## User Shopping Events\n"
+    "Each event: index | time_ago | action_type | product_description\n"
+)
+
+
+def build_profile_input(events_list, max_events=100):
+    """Build profile generation input from event list."""
+    truncated = events_list[:max_events]
+    lines = []
+    for idx, event in enumerate(truncated, 1):
+        if len(event) > 150:
+            event = event[:150] + "..."
+        lines.append(f"{idx} | {event}")
+    lines.append("")
+    lines.append("Generate the user's shopping profile:")
+    return "\n".join(lines)
+
+
+def run_profile_generation_vllm(users_with_events, profile_model_path,
+                                num_gpus, gpu_memory_utilization,
+                                max_model_len, max_tokens):
+    """Generate shopping profiles for all users using vLLM.
+
+    Args:
+        users_with_events: List of dicts with "UserId" and "events_list".
+
+    Returns:
+        Dict mapping UserId -> profile JSON string (or "").
+    """
+    from vllm import LLM, SamplingParams
+    from transformers import AutoTokenizer
+
+    print(f"\n  Initializing vLLM for profile generation ...")
+    print(f"    Model: {profile_model_path}")
+    print(f"    GPUs: {num_gpus}, mem: {gpu_memory_utilization}")
+
+    # Auto-fix broken tokenizer_class in tokenizer_config.json if needed
+    tok_cfg_path = os.path.join(profile_model_path, "tokenizer_config.json")
+    if os.path.isfile(tok_cfg_path):
+        with open(tok_cfg_path, "r", encoding="utf-8") as _f:
+            _tok_cfg = json.load(_f)
+        if _tok_cfg.get("tokenizer_class") not in (
+            "Qwen2Tokenizer", "PreTrainedTokenizerFast", None,
+        ):
+            print(f"    [FIX] tokenizer_class='{_tok_cfg['tokenizer_class']}' "
+                  f"-> 'Qwen2Tokenizer'")
+            _tok_cfg["tokenizer_class"] = "Qwen2Tokenizer"
+            with open(tok_cfg_path, "w", encoding="utf-8") as _f:
+                json.dump(_tok_cfg, _f, indent=2, ensure_ascii=False)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        profile_model_path, trust_remote_code=True,
+    )
+
+    # Build prompts
+    prompts = []
+    uids = []
+    for ud in users_with_events:
+        instruction = PROFILE_INSTRUCTION
+        input_text = build_profile_input(ud["events_list"], max_events=100)
+        content = instruction + "\n" + input_text
+        messages = [{"role": "user", "content": content}]
+        formatted = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        prompts.append(formatted)
+        uids.append(ud["UserId"])
+
+    print(f"    Built {len(prompts)} profile prompts")
+
+    llm = LLM(
+        model=profile_model_path,
+        tensor_parallel_size=num_gpus,
+        gpu_memory_utilization=gpu_memory_utilization,
+        max_model_len=max_model_len,
+        trust_remote_code=True,
+        seed=SEED,
+    )
+
+    sampling_params = SamplingParams(
+        max_tokens=max_tokens,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+    )
+
+    start_time = time.time()
+    outputs = llm.generate(prompts, sampling_params)
+    elapsed = time.time() - start_time
+    throughput = len(prompts) / elapsed if elapsed > 0 else 0
+    print(f"    Inference done in {elapsed:.1f}s ({throughput:.1f} items/s)")
+
+    # Parse results
+    profile_map = {}
+    valid = 0
+    invalid = 0
+    for uid, output in zip(uids, outputs):
+        raw = output.outputs[0].text.strip()
+        clean = extract_and_validate_json(raw)
+        if clean:
+            profile_map[uid] = clean
+            valid += 1
+        else:
+            invalid += 1
+
+    print(f"    Valid profiles: {valid:,}")
+    print(f"    Invalid/empty:  {invalid:,}")
+
+    # Free GPU memory before loading journey model
+    del llm
+    import gc
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+    return profile_map
 
 
 # =============================================================================
@@ -100,17 +361,41 @@ def load_item_titles(item_file):
     return id2title
 
 
-def create_reverse_mapping(original_dict):
-    """Create reverse mapping and word-level index for fuzzy matching."""
+def _reorder_tid_words(words, pos):
+    """Move the word at *pos* to the end of the list.
+
+    Used to deprioritise the least-important slot (e.g. slot 4) so that
+    prefix-based fuzzy matching focuses on the more informative slots
+    first.  Returns a new list; the original is not modified.
+
+    Args:
+        words: list of strings (typically length 7).
+        pos: 0-based index to move to the end.  If *pos* is negative or
+             >= len(words), return the list unchanged.
+    """
+    if pos < 0 or pos >= len(words):
+        return list(words)
+    return words[:pos] + words[pos + 1:] + [words[pos]]
+
+
+def create_reverse_mapping(original_dict, reorder_pos=-1):
+    """Create reverse mapping and word-level index for fuzzy matching.
+
+    Args:
+        reorder_pos: If >= 0, reorder each TID key by moving slot
+            *reorder_pos* to the end before building the fuzzy index.
+    """
     reverse_mapping = {}
     word_to_keys = defaultdict(list)
     normalized_key_map = {}  # "lower,stripped,words" -> original key_str
     sorted_key_map = {}      # "sorted,lower,words" -> original key_str
 
     for key_str, ids in original_dict.items():
-        words = [word.strip().lower() for word in key_str.split(",")]
-        reverse_mapping[key_str] = {"words": words, "ids": ids}
-        for word in words:
+        words = [normalize_term(word.strip()).lower() for word in key_str.split(",")]
+        # Reorder for fuzzy index: move least-important slot to end
+        reordered = _reorder_tid_words(words, reorder_pos)
+        reverse_mapping[key_str] = {"words": reordered, "ids": ids}
+        for word in reordered:
             word_to_keys[word].append(key_str)
         norm_key = ",".join(words)
         if norm_key not in normalized_key_map:
@@ -123,24 +408,27 @@ def create_reverse_mapping(original_dict):
     return reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map
 
 
-def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map):
+def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys,
+                   normalized_key_map, sorted_key_map, reorder_pos=-1,
+                   fuzzy_score_threshold=0):
     """Map a single TID (list of 7 words) to GlobalOfferIds.
 
     Tries exact, normalized (case/space), sorted (order-invariant), then fuzzy.
+    For fuzzy matching the words are reordered (slot *reorder_pos* moved to
+    end) so that prefix matching focuses on the most important slots.
+
+    When fuzzy_score_threshold > 0, uses the first N reordered words
+    (N = threshold) to intersect candidate sets, so only TIDs containing
+    all N words are considered.  This avoids scanning huge candidate lists
+    for common first-words like "women" (734K candidates).
 
     Returns:
         Tuple of (list_of_iids, match_type, matched_word_count, best_score).
     """
-    # Normalize LLM-generated terms (dict is already normalized)
-    tid_words = [normalize_term(w) for w in tid_words]
+    # Normalize + lowercase (same pipeline as create_reverse_mapping)
+    words_lower = [normalize_term(w).strip().lower() for w in tid_words]
 
-    tid_key = ",".join(tid_words)
-
-    if tid_key in tid2item_id:
-        return list(tid2item_id[tid_key]), "exact", len(tid_words), 0.0
-
-    # Normalized exact match: lowercase + strip
-    words_lower = [w.strip().lower() for w in tid_words]
+    # Exact match against normalized_key_map
     tid_key_normalized = ",".join(words_lower)
     if tid_key_normalized in normalized_key_map:
         orig_key = normalized_key_map[tid_key_normalized]
@@ -152,25 +440,31 @@ def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys, normal
         orig_key = sorted_key_map[tid_key_sorted]
         return list(tid2item_id[orig_key]), "exact", len(tid_words), 0.0
 
-    # Prefix-based fuzzy matching: find candidates sharing the longest
-    # common prefix with the query TID words.  A candidate that matches
-    # the first 5 words beats one that only matches the first 3, which
-    # naturally prioritises earlier (more important) positions.
-    #
-    # Step 1: collect all candidates that share *at least* word-0.
-    first_word = words_lower[0]
-    if first_word not in word_to_keys:
-        return [], "none", 0, 0.0
+    # Reorder query words for fuzzy matching (same reorder as candidates)
+    words_reordered = _reorder_tid_words(words_lower, reorder_pos)
 
-    # Step 2: for every candidate that contains word-0, compute the
-    # length of the matching prefix (how many of word-0, word-1, …
-    # appear consecutively at the corresponding positions).
+    # Use first min_prefix reordered words to narrow candidates via set
+    # intersection.  E.g. threshold=6 → intersect w2k for words[0..5],
+    # reducing candidates from hundreds of thousands to tens.
+    min_prefix = max(int(fuzzy_score_threshold), 1)
+    n_filter = min(min_prefix, len(words_reordered))
+    candidates = None
+    for i in range(n_filter):
+        w = words_reordered[i]
+        if w not in word_to_keys:
+            return [], "none", 0, 0.0
+        wset = set(word_to_keys[w])
+        candidates = wset if candidates is None else (candidates & wset)
+        if not candidates:
+            return [], "none", 0, 0.0
+
+    # Verify prefix order among narrowed candidates
     best_prefix_len = 0
     best_key = None
-    for candidate_key in word_to_keys[first_word]:
+    for candidate_key in candidates:
         cand_words = reverse_mapping[candidate_key]["words"]
         prefix_len = 0
-        for qi, qw in enumerate(words_lower):
+        for qi, qw in enumerate(words_reordered):
             if qi < len(cand_words) and cand_words[qi] == qw:
                 prefix_len += 1
             else:
@@ -179,7 +473,7 @@ def get_iid_by_tid(tid_words, tid2item_id, reverse_mapping, word_to_keys, normal
             best_prefix_len = prefix_len
             best_key = candidate_key
 
-    if best_key is not None and best_prefix_len > 0:
+    if best_key is not None and best_prefix_len >= min_prefix:
         iids = reverse_mapping[best_key]["ids"]
         return iids[:1], "fuzzy", best_prefix_len, float(best_prefix_len)
 
@@ -244,12 +538,13 @@ def parse_journey_json(raw_output):
     return None
 
 
-def map_journey_products(journey_data, tid2item_id, reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map, id2title=None, fuzzy_score_threshold=0.0):
+def map_journey_products(journey_data, tid2item_id, reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map, id2title=None, fuzzy_score_threshold=0.0, reorder_pos=-1):
     """Map all ProductTIDs in a parsed journey to GlobalOfferIds.
 
     Args:
         fuzzy_score_threshold: Minimum fuzzy score to keep a product.
             Products below this threshold are dropped.
+        reorder_pos: Passed to get_iid_by_tid for TID word reordering.
 
     Returns:
         Tuple of (mapped_journey_data, mapping_stats).
@@ -286,7 +581,9 @@ def map_journey_products(journey_data, tid2item_id, reverse_mapping, word_to_key
                 continue
 
             iids, match_type, matched_words, best_score = get_iid_by_tid(
-                tid_words, tid2item_id, reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map
+                tid_words, tid2item_id, reverse_mapping, word_to_keys,
+                normalized_key_map, sorted_key_map, reorder_pos=reorder_pos,
+                fuzzy_score_threshold=fuzzy_score_threshold,
             )
 
             if match_type == "exact":
@@ -561,17 +858,26 @@ def make_profile2journey_instruction(num_journeys, min_products=5):
 
 # --- v3: matching s3_build_journey_sft_data.py create_instruction exactly ---
 
-def make_journey_instruction(task, num_journeys, min_products):
-    """Create instruction + prompt_line matching s3's create_instruction.
+def make_journey_instruction(task, num_journeys, min_products, version="v4"):
+    """Create instruction + prompt_line for journey prediction.
 
     Args:
         task: "event2journey" or "profile2journey".
         num_journeys: Number of journeys to predict.
-        min_products: Minimum products per journey (from ground truth).
+        min_products: Minimum products per journey.
+        version: "v3" or "v4". v4 adds JourneyType and matches s3 training.
 
     Returns:
         Tuple of (instruction_text, prompt_line).
     """
+    if version == "v4":
+        return _make_journey_instruction_v4(task, num_journeys, min_products)
+    else:
+        return _make_journey_instruction_v3(task, num_journeys, min_products)
+
+
+def _make_journey_instruction_v3(task, num_journeys, min_products):
+    """v3 instruction: no JourneyType field."""
     if task == "event2journey":
         opening = (f"Based on the user's shopping event history, predict "
                    f"{num_journeys} shopping journey(s) the user is likely to pursue.")
@@ -591,6 +897,37 @@ def make_journey_instruction(task, num_journeys, min_products):
         f" and subcategories -- avoid recommending near-identical items."
         f' Output JSON:'
         f' {{"ContinuedJourneys":[{{"Title":"...","Reason":"...",'
+        f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
+    )
+
+    jword = "journey" if num_journeys == 1 else "journeys"
+    prompt_line = (f"Predict the user's shopping journeys, "
+                   f"exactly {num_journeys} {jword}, "
+                   f"at least {min_products} products in each journey:")
+
+    return instruction, prompt_line
+
+
+def _make_journey_instruction_v4(task, num_journeys, min_products):
+    """v4 instruction: adds JourneyType, matches s3 training format."""
+    if task == "event2journey":
+        opening = (f"Based on the user's shopping event history, predict "
+                   f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+    else:
+        opening = (f"Based on the user's shopping profile and shopping event history, predict "
+                   f"{num_journeys} shopping journey(s) the user is likely to pursue.")
+
+    product_text = f"at least {min_products}"
+
+    instruction = (
+        f"{opening}"
+        f" Each journey has a JourneyType ('explicit' or 'related'),"
+        f" a short engaging title, a user-centric reason,"
+        f" and {product_text} recommended products as text IDs (7 slots each)."
+        f" Products within each journey must be diverse:"
+        f" cover different brands, styles, use cases, and subcategories."
+        f' Output JSON:'
+        f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...","Reason":"...",'
         f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
     )
 
@@ -676,8 +1013,7 @@ def run_vllm_inference(prompts, model_path, num_gpus, gpu_memory_utilization,
     return [output.outputs[0].text.strip() for output in outputs]
 
 
-def build_chat_prompts(instructions_and_inputs, tokenizer, task_type,
-                       enable_thinking=False):
+def build_chat_prompts(instructions_and_inputs, tokenizer, task_type):
     """Build chat-formatted prompts for vLLM.
 
     Args:
@@ -691,7 +1027,6 @@ def build_chat_prompts(instructions_and_inputs, tokenizer, task_type,
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=enable_thinking,
         )
         prompts.append(formatted)
 
@@ -752,6 +1087,7 @@ def build_output_rows(
     is_ground_truth=False,
     id2title=None,
     fuzzy_score_threshold=0.0,
+    reorder_pos=-1,
 ):
     """Build output rows for one output file.
 
@@ -850,6 +1186,7 @@ def build_output_rows(
                 journey_data, tid2item_id, reverse_mapping, word_to_keys,
                 normalized_key_map, sorted_key_map, id2title,
                 fuzzy_score_threshold=fuzzy_score_threshold,
+                reorder_pos=reorder_pos,
             )
             agg_stats["total_products"] += map_stats["total_products"]
             agg_stats["exact_matches"] += map_stats["exact_matches"]
@@ -897,6 +1234,7 @@ def compute_diversity_stats(rows, label):
 
     all_journeys_per_user = []
     all_products_per_journey = []
+    all_raw_products_per_journey = []  # before match/filter
     all_unique_products_per_user = []
     all_unique_titles_per_user = []
     all_journey_titles = []
@@ -949,6 +1287,15 @@ def compute_diversity_stats(rows, label):
         unique_journey_titles = len(set(journey_titles_this_user))
         all_unique_titles_per_user.append(unique_journey_titles)
 
+        # Count raw ProductTIDs from model output (before match/filter)
+        raw_output = row.get("RawShoppingJourneys", "")
+        if raw_output:
+            raw_data = parse_journey_json(raw_output)
+            if raw_data:
+                for rj in raw_data.get("ContinuedJourneys", []):
+                    tids = rj.get("ProductTIDs", [])
+                    all_raw_products_per_journey.append(len(tids))
+
     if not total_users_with_data:
         print(f"    No users with valid data.")
         return {}
@@ -967,12 +1314,58 @@ def compute_diversity_stats(rows, label):
     print(f"      Mean: {jt_arr.mean():.2f}  Median: {np.median(jt_arr):.1f}  "
           f"Min: {jt_arr.min()}  Max: {jt_arr.max()}")
 
-    # Products per journey
+    # Products per journey (after match/filter)
     if all_products_per_journey:
         p_arr = np.array(all_products_per_journey)
-        print(f"    Products per journey:")
+        print(f"    Products per journey (after match):")
         print(f"      Mean: {p_arr.mean():.2f}  Median: {np.median(p_arr):.1f}  "
               f"Min: {p_arr.min()}  Max: {p_arr.max()}")
+
+    # Products per journey (before match, from raw model output)
+    if all_raw_products_per_journey:
+        rp_arr = np.array(all_raw_products_per_journey)
+        print(f"    Products per journey (before match, model output):")
+        print(f"      Mean: {rp_arr.mean():.2f}  Median: {np.median(rp_arr):.1f}  "
+              f"Min: {rp_arr.min()}  Max: {rp_arr.max()}")
+
+    # Min-products coverage: how many journeys/users meet various thresholds
+    if all_products_per_journey:
+        p_arr = np.array(all_products_per_journey)
+        print(f"    Journey coverage by min products (after match):")
+        for min_p in [5, 8, 10]:
+            j_ok = int((p_arr >= min_p).sum())
+            print(f"      >= {min_p} products: {j_ok:>8,} / {len(p_arr):,} journeys "
+                  f"({j_ok / len(p_arr) * 100:.1f}%)")
+        # Per-user: count users where ALL journeys have >= threshold products
+        # We need per-user journey product counts
+        print(f"    User coverage (any journey >= N products, after match):")
+        # Rebuild per-user journey product counts
+        user_journey_prods = []  # list of lists
+        for row in rows:
+            joined = row.get("ShoppingJourneys", "")
+            if not joined:
+                continue
+            try:
+                data = json.loads(joined)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            journeys = data.get("ContinuedJourneys", [])
+            if not journeys:
+                continue
+            counts = []
+            for j in journeys:
+                products = j.get("Products", [])
+                product_ids = j.get("ProductIds", [])
+                if product_ids and not products:
+                    counts.append(len(product_ids))
+                else:
+                    counts.append(len(products))
+            user_journey_prods.append(counts)
+        for min_p in [5, 8, 10]:
+            u_ok = sum(1 for cnts in user_journey_prods
+                       if any(c >= min_p for c in cnts))
+            print(f"      >= {min_p} products: {u_ok:>8,} / {len(user_journey_prods):,} users "
+                  f"({u_ok / max(len(user_journey_prods), 1) * 100:.1f}%)")
 
     # Unique products per user
     if all_unique_products_per_user:
@@ -1040,7 +1433,10 @@ def print_stats(label, stats):
     print(f"    Total products:           {stats['total_products']:>10,}")
     print(f"    Exact matches:            {stats['exact_matches']:>10,} "
           f"({stats['exact_matches'] / max(stats['total_products'], 1) * 100:.1f}%)")
-    print(f"    Fuzzy matches:            {stats['fuzzy_matches']:>10,} "
+    fuzzy_kept = stats['fuzzy_matches'] - stats.get('fuzzy_filtered', 0)
+    print(f"    Fuzzy matches (kept):     {fuzzy_kept:>10,} "
+          f"({fuzzy_kept / max(stats['total_products'], 1) * 100:.1f}%)")
+    print(f"    Fuzzy matches (all):      {stats['fuzzy_matches']:>10,} "
           f"({stats['fuzzy_matches'] / max(stats['total_products'], 1) * 100:.1f}%)")
     print(f"    No matches:               {stats['no_matches']:>10,} "
           f"({stats['no_matches'] / max(stats['total_products'], 1) * 100:.1f}%)")
@@ -1118,18 +1514,13 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v3_new/merged_checkpoint_960",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_checkpoint-1200/merged_checkpoint/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/v3_ying_27B_checkpoint-300/merged_checkpoint/",
-        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-8000-merged",
+        #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-9000-merged", # demo ckpt
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank64_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/qwen3-5-9b/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank32_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_500",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_1250",
+        #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4_step1_le4096/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank64_cut4096_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-4768-merged",
+        default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4_step1_le4096/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank64_cut4096_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-2500-merged",
         help="Path to the trained SFT model checkpoint",
-    )
-    parser.add_argument(
-        "--test_file", type=str, 
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/TestData/ranker_results_5000_cleaned.tsv",
-        help="Path to test TSV file (same format as pre_s3 journey_file: "
-             "UserId, ReadableUserEvents, UserHistory, JourneyWithProducts, "
-             "FinalJourney)",
     )
     parser.add_argument(
         "--tid2item_id_file", type=str,
@@ -1139,9 +1530,18 @@ def parse_args():
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-500/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-1250/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-1000_termid_pretrained/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/demo_ckpt/match_6_reorder_tid/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-2500_two_step/",
         help="Directory to save evaluation output files",
+    )
+    parser.add_argument(
+        "--test_file", type=str, 
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/TestData/ranker_results_5000_cleaned.tsv",
+        help="Path to test TSV file (same format as pre_s3 journey_file: "
+             "UserId, ReadableUserEvents, UserHistory, JourneyWithProducts, "
+             "FinalJourney)",
     )
     parser.add_argument(
         "--sample_n", type=int, default=1000,
@@ -1169,48 +1569,35 @@ def parse_args():
         help="Fraction of GPU memory for vLLM (default: 0.90)",
     )
     parser.add_argument(
-        "--max_model_len", type=int, default=8192,
-        help="Maximum model context length (default: 8192)",
+        "--max_model_len", type=int, default=10000,
+        help="Maximum model context length (default: 10000)",
     )
     parser.add_argument(
-        "--max_tokens", type=int, default=8192,
+        "--max_tokens", type=int, default=4096,
         help="Maximum output tokens per sample",
     )
+    # Profile model args (vLLM)
     parser.add_argument(
-        "--enable_thinking", action="store_true", default=False,
-        help="Enable thinking/reasoning mode in chat template",
+        "--profile_model_path", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/"
+                "Model/UserProfile_keppsuggestionBrandScore1_Ckpt1834/",
+        help="Path to the profile generation model checkpoint",
     )
     parser.add_argument(
-        "--tokenizer_path", type=str, default=None,
-        help="Path to tokenizer (default: same as model_path). Use this when "
-             "the checkpoint's tokenizer_config.json is broken.",
-    )
-    # Profile generation args (Copilot API)
-    parser.add_argument(
-        "--prompts_file", type=str,
-        default="./resources/prompts.yaml",
-        help="Path to prompts.yaml (for profile generation template)",
+        "--profile_num_gpus", type=int, default=None,
+        help="GPUs for profile model (default: same as --num_gpus)",
     )
     parser.add_argument(
-        "--token_file", type=str,
-        default="./resources/tokens.txt",
-        help="Path to tokens.txt for Copilot API authentication",
+        "--profile_gpu_memory_utilization", type=float, default=0.70,
+        help="GPU memory utilization for profile model (default: 0.70)",
     )
     parser.add_argument(
-        "--copilot_model", type=str, default="gpt-5.2",
-        help="Copilot model name for profile generation (default: gpt-5.2)",
+        "--profile_max_model_len", type=int, default=10000,
+        help="Max model context length for profile model (default: 10000)",
     )
     parser.add_argument(
-        "--profile_workers", type=int, default=20,
-        help="Number of parallel workers for profile generation (default: 20)",
-    )
-    parser.add_argument(
-        "--profile_max_tokens", type=int, default=2000,
-        help="Max tokens for profile generation API calls (default: 2000)",
-    )
-    parser.add_argument(
-        "--profile_chunk_size", type=int, default=1000,
-        help="Chunk size for profile generation checkpoints (default: 1000)",
+        "--profile_max_tokens", type=int, default=4096,
+        help="Max output tokens for profile generation (default: 4096)",
     )
     parser.add_argument(
         "--item_file", type=str,
@@ -1219,9 +1606,27 @@ def parse_args():
         help="Path to item JSON for looking up product titles",
     )
     parser.add_argument(
-        "--fuzzy_score_threshold", type=float, default=7.0,
-        help="Minimum fuzzy match score to keep a product (default: 5.0). "
+        "--fuzzy_score_threshold", type=float, default=6.0,
+        help="Minimum fuzzy match score to keep a product (default: 6.0). "
              "Products below this are dropped. Set to 0 to keep all.",
+    )
+    parser.add_argument(
+        "--reorder_tid_pos", type=int, default=3,
+        help="0-based position of the least-important TID slot to move to "
+             "the end before prefix-based fuzzy matching (default: 3). "
+             "Set to -1 to disable reordering.",
+    )
+    parser.add_argument(
+        "--instruction_version", type=str, default="v4",
+        choices=["v3", "v4"],
+        help="Instruction template version (default: v4). "
+             "v3: original format without JourneyType. "
+             "v4: matches s3 training format with JourneyType.",
+    )
+    parser.add_argument(
+        "--min_products_override", type=int, default=10,
+        help="Override min products per journey in instruction (default: 10). "
+             "If <= 0, use ground truth min product count (original behavior).",
     )
     parser.add_argument(
         "--llm_output_file", type=str, 
@@ -1263,15 +1668,18 @@ def main():
 
     available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
+    profile_num_gpus = args.profile_num_gpus if args.profile_num_gpus is not None else num_gpus
 
     print("=" * 70)
     print("Step 5 Journey: Evaluate Journey Prediction Tasks")
     print("=" * 70)
-    print(f"  Model: {args.model_path}")
-    print(f"  Test file: {args.test_file}")
-    print(f"  GPUs: {num_gpus}")
-    print(f"  Sample N: {args.sample_n}")
-    print(f"  Seed: {args.seed}")
+    print(f"  Journey model:  {args.model_path}")
+    print(f"  Profile model:  {args.profile_model_path}")
+    print(f"  Test file:      {args.test_file}")
+    print(f"  GPUs (journey): {num_gpus}")
+    print(f"  GPUs (profile): {profile_num_gpus}")
+    print(f"  Sample N:       {args.sample_n}")
+    print(f"  Seed:           {args.seed}")
 
     # =========================================================================
     # Debug prompt file mode: read prompts from file, run vLLM, save results
@@ -1295,9 +1703,8 @@ def main():
 
         # Wrap each prompt with chat template via tokenizer
         from transformers import AutoTokenizer
-        tokenizer_path = args.tokenizer_path or args.model_path
         tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_path, trust_remote_code=True
+            args.model_path, trust_remote_code=True
         )
         formatted_prompts = []
         for p in raw_prompts:
@@ -1306,7 +1713,6 @@ def main():
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
-                enable_thinking=args.enable_thinking,
             )
             formatted_prompts.append(formatted)
         print(f"  Wrapped {len(formatted_prompts)} prompts with chat template")
@@ -1367,9 +1773,11 @@ def main():
             print(f"\n  Loading TID mapping: {args.tid2item_id_file}")
             with open(args.tid2item_id_file, "r", encoding="utf-8") as f:
                 tid2item_id = json.load(f)
-            reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id)
+            reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id, reorder_pos=args.reorder_tid_pos)
             print(f"    Unique TIDs: {len(tid2item_id):,}")
             print(f"    Unique words in index: {len(word_to_keys):,}")
+            if args.reorder_tid_pos >= 0:
+                print(f"    TID reorder: slot {args.reorder_tid_pos} moved to end")
 
             # Load item titles for debug
             id2title = None
@@ -1467,71 +1875,25 @@ def main():
         print(f"    No FinalJourney column: {no_final_journey:,}")
 
         # =====================================================================
-        # Step 4: Generate shopping profiles via Copilot API
+        # Step 4: Generate shopping profiles via vLLM
         # =====================================================================
         print()
         print("=" * 70)
-        print("Step 4: Generating shopping profiles via Copilot API")
+        print("Step 4: Generating shopping profiles via vLLM")
         print("=" * 70)
 
-        print(f"  Loading prompt template from: {args.prompts_file}")
-        prompts_config = load_prompts(args.prompts_file)
-        profile_prompt_template = prompts_config["generate_shopping_profile_from_events"]["user"]
-
-        # Prepare inputs: (user_id, events_text) where events_text is
-        # newline-separated event strings
-        profile_inputs = []
-        for ud in user_data:
-            uid = ud["UserId"]
-            events_text = "\n".join(ud["events_list"])
-            profile_inputs.append((uid, events_text))
-
-        os.makedirs(args.output_dir, exist_ok=True)
-        profile_checkpoint_dir = os.path.join(args.output_dir, "_profile_checkpoint")
-
-        print(f"  Generating profiles for {len(profile_inputs)} users ...")
-        print(f"    Copilot model: {args.copilot_model}")
-        print(f"    Workers: {args.profile_workers}")
-
-        profile_results = run_profile_generation(
-            users=profile_inputs,
-            prompt_template=profile_prompt_template,
-            token_file=args.token_file,
-            copilot_model=args.copilot_model,
-            num_workers=args.profile_workers,
+        profile_map = run_profile_generation_vllm(
+            users_with_events=user_data,
+            profile_model_path=args.profile_model_path,
+            num_gpus=profile_num_gpus,
+            gpu_memory_utilization=args.profile_gpu_memory_utilization,
+            max_model_len=args.profile_max_model_len,
             max_tokens=args.profile_max_tokens,
-            checkpoint_dir=profile_checkpoint_dir,
-            chunk_size=args.profile_chunk_size,
         )
-
-        # Parse and validate profiles
-        profile_map = {}
-        profile_valid = 0
-        profile_invalid = 0
-        profile_empty = 0
-
-        for uid, raw_profile in profile_results:
-            if not raw_profile:
-                profile_empty += 1
-                continue
-            clean_json = extract_and_validate_json(raw_profile)
-            if clean_json:
-                profile_map[uid] = clean_json
-                profile_valid += 1
-            else:
-                profile_invalid += 1
-
-        print(f"\n  Profile generation results:")
-        print(f"    Total users:    {len(profile_results):>10,}")
-        print(f"    Valid profiles: {profile_valid:>10,}")
-        print(f"    Invalid JSON:   {profile_invalid:>10,}")
-        print(f"    Empty response: {profile_empty:>10,}")
 
         # Attach profiles to user_data
         for ud in user_data:
             ud["UserProfile"] = profile_map.get(ud["UserId"], "")
-
-        cleanup_checkpoint(profile_checkpoint_dir)
 
         # Filter to users with valid profiles
         users_with_profile = [ud for ud in user_data if ud["UserProfile"]]
@@ -1554,9 +1916,11 @@ def main():
         print(f"  Loading: {args.tid2item_id_file}")
         with open(args.tid2item_id_file, "r", encoding="utf-8") as f:
             tid2item_id = json.load(f)
-        reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id)
+        reverse_mapping, word_to_keys, normalized_key_map, sorted_key_map = create_reverse_mapping(tid2item_id, reorder_pos=args.reorder_tid_pos)
         print(f"    Unique TIDs: {len(tid2item_id):,}")
         print(f"    Unique words in index: {len(word_to_keys):,}")
+        if args.reorder_tid_pos >= 0:
+            print(f"    TID reorder: slot {args.reorder_tid_pos} moved to end")
 
         # Load item titles for debug
         id2title = None
@@ -1624,10 +1988,8 @@ def main():
 
     from transformers import AutoTokenizer
 
-    tokenizer_path = args.tokenizer_path or args.model_path
-
     # Auto-fix broken tokenizer_class in tokenizer_config.json if needed
-    tok_cfg_path = os.path.join(tokenizer_path, "tokenizer_config.json")
+    tok_cfg_path = os.path.join(args.model_path, "tokenizer_config.json")
     if os.path.isfile(tok_cfg_path):
         with open(tok_cfg_path, "r", encoding="utf-8") as _f:
             _tok_cfg = json.load(_f)
@@ -1641,22 +2003,33 @@ def main():
                 json.dump(_tok_cfg, _f, indent=2, ensure_ascii=False)
 
     tokenizer = AutoTokenizer.from_pretrained(
-        tokenizer_path, trust_remote_code=True
+        args.model_path, trust_remote_code=True
     )
+
+    # --- Helper: compute min_products for a user ---
+    def _get_min_prods(ud):
+        if args.min_products_override > 0:
+            return args.min_products_override
+        gt_j = ud.get("ground_truth_journeys", [])
+        if gt_j:
+            return max(min(len(j.get("product_ids", [])) for j in gt_j), 5)
+        return 5
+
+    instr_ver = args.instruction_version
+    print(f"  Instruction version: {instr_ver}")
+    if args.min_products_override > 0:
+        print(f"  Min products override: {args.min_products_override}")
+    else:
+        print(f"  Min products: from ground truth (per user)")
 
     # --- 7a: event2journey prompts ---
     print("\n  Building event2journey prompts ...")
     e2j_instr_inputs = []
     for ud in users_with_profile:
-        # Compute min_products from ground truth journeys (matching s3 training)
-        gt_j = ud.get("ground_truth_journeys", [])
-        if gt_j:
-            min_prods = min(len(j.get("product_ids", [])) for j in gt_j)
-            min_prods = max(min_prods, 5)  # floor at 5
-        else:
-            min_prods = 5
+        min_prods = _get_min_prods(ud)
         instruction, prompt_line = make_journey_instruction(
-            "event2journey", ud["num_journeys"], min_prods
+            "event2journey", ud["num_journeys"], min_prods,
+            version=instr_ver,
         )
         input_text = build_event2journey_input(
             ud["events_list"], max_events=args.max_events,
@@ -1666,21 +2039,16 @@ def main():
 
     e2j_prompts = build_chat_prompts(
         e2j_instr_inputs, tokenizer, "event2journey",
-        enable_thinking=args.enable_thinking,
     )
 
     # --- 7b: profile2journey prompts ---
     print("  Building profile2journey prompts ...")
     p2j_instr_inputs = []
     for ud in users_with_profile:
-        gt_j = ud.get("ground_truth_journeys", [])
-        if gt_j:
-            min_prods = min(len(j.get("product_ids", [])) for j in gt_j)
-            min_prods = max(min_prods, 5)
-        else:
-            min_prods = 5
+        min_prods = _get_min_prods(ud)
         instruction, prompt_line = make_journey_instruction(
-            "profile2journey", ud["num_journeys"], min_prods
+            "profile2journey", ud["num_journeys"], min_prods,
+            version=instr_ver,
         )
         input_text = build_profile2journey_input(
             ud["UserProfile"], ud["events_list"],
@@ -1691,7 +2059,6 @@ def main():
 
     p2j_prompts = build_chat_prompts(
         p2j_instr_inputs, tokenizer, "profile2journey",
-        enable_thinking=args.enable_thinking,
     )
 
     # --- 7c: Run all prompts ---
@@ -1771,6 +2138,7 @@ def main():
         is_ground_truth=False,
         id2title=id2title,
         fuzzy_score_threshold=args.fuzzy_score_threshold,
+        reorder_pos=args.reorder_tid_pos,
     )
     print_stats("slm_output (event2journey)", slm_stats)
 
@@ -1794,6 +2162,7 @@ def main():
         is_ground_truth=False,
         id2title=id2title,
         fuzzy_score_threshold=args.fuzzy_score_threshold,
+        reorder_pos=args.reorder_tid_pos,
     )
     print_stats("slm_output_w_profile (profile2journey)", slm_profile_stats)
 
@@ -1865,23 +2234,44 @@ def main():
     else:
         print(f"  Total users in test file:       {len(test_rows):>10,}")
         print(f"  Sampled users:                  {len(sampled_rows):>10,}")
-        print(f"  Valid profiles generated:       {profile_valid:>10,}")
-        print(f"  Invalid/empty profiles:         {profile_invalid + profile_empty:>10,}")
+        print(f"  Valid profiles (vLLM):          {len(profile_map):>10,}")
     print(f"  Users evaluated (with profile): {len(users_with_profile):>10,}")
+
+    # Compute products kept after all filtering for each stats dict
+    def _products_kept(st):
+        return (st["exact_matches"]
+                + st["fuzzy_matches"]
+                - st.get("fuzzy_filtered", 0)
+                - st.get("products_deduped", 0))
 
     print(f"\n  {'Metric':<40s} {'GT':>10s} {'SLM':>10s} {'SLM+Prof':>10s}")
     print(f"  {'-'*40} {'-'*10} {'-'*10} {'-'*10}")
     for label, st in [
         ("JSON parse success", "json_parse_success"),
         ("JSON parse fail", "json_parse_fail"),
-        ("Total products", "total_products"),
+        ("Total products (model output)", "total_products"),
         ("Exact matches", "exact_matches"),
-        ("Fuzzy matches", "fuzzy_matches"),
+        ("Fuzzy matches (all)", "fuzzy_matches"),
         ("No matches", "no_matches"),
-        ("Users with all fields", "users_with_all_fields"),
     ]:
         print(f"  {label:<40s} {llm_stats[st]:>10,} "
               f"{slm_stats[st]:>10,} {slm_profile_stats[st]:>10,}")
+    # Fuzzy filtered + deduped + kept
+    for label, st in [
+        ("Fuzzy filtered (< threshold)", "fuzzy_filtered"),
+        ("Products deduped (by GID)", "products_deduped"),
+        ("Journeys dropped (empty)", "journeys_dropped"),
+    ]:
+        print(f"  {label:<40s} {llm_stats.get(st, 0):>10,} "
+              f"{slm_stats.get(st, 0):>10,} {slm_profile_stats.get(st, 0):>10,}")
+    # Products kept (final)
+    print(f"  {'Products kept (after filtering)':<40s} "
+          f"{_products_kept(llm_stats):>10,} "
+          f"{_products_kept(slm_stats):>10,} "
+          f"{_products_kept(slm_profile_stats):>10,}")
+    print(f"  {'Users with all fields':<40s} {llm_stats['users_with_all_fields']:>10,} "
+          f"{slm_stats['users_with_all_fields']:>10,} "
+          f"{slm_profile_stats['users_with_all_fields']:>10,}")
 
     for name, stats in [
         ("GT", llm_stats), ("SLM", slm_stats), ("SLM+Profile", slm_profile_stats),
@@ -1912,9 +2302,8 @@ def main():
             "test_file": args.test_file,
             "total_test_users": len(test_rows),
             "sample_n": len(sampled_rows),
-            "valid_profiles": profile_valid,
-            "invalid_profiles": profile_invalid,
-            "empty_profiles": profile_empty,
+            "valid_profiles_vllm": len(profile_map),
+            "profile_model_path": args.profile_model_path,
         })
     summary_file = os.path.join(args.output_dir, "eval_summary.json")
     with open(summary_file, "w", encoding="utf-8") as f:
