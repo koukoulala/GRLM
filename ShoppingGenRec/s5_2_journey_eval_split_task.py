@@ -439,7 +439,7 @@ def build_chat_prompts(ii, tokenizer, task):
     for instr, inp in ii:
         msgs = [{"role":"user","content":instr+"\n"+inp}]
         prompts.append(tokenizer.apply_chat_template(msgs, tokenize=False,
-            add_generation_prompt=True))
+            add_generation_prompt=True, enable_thinking=False))
     print(f"  Built {len(prompts)} prompts for {task}")
     return prompts
 
@@ -643,18 +643,20 @@ def parse_args():
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-9000-merged", # demo ckpt
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank64_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/qwen3-5-9b/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank32_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_1250",
-        default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4_step1_le4096/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank64_cut4096_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-4768-merged",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_final",
+        #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journeyv4_step1_le4096_ckpt4768/lora_journey_v4_step2_v1sample/sft_4gpus_lr2e-5_batch8_gradacc2_lorarank64_cut32768_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-475-merged",
+        #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journeyv4_step1_le4096_ckpt4768/lora_journey_v4_step2_v1sample/sft_4gpus_lr2e-5_batch8_gradacc2_lorarank64_cut32768_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse_epoch3.0/checkpoint-800-merged",
+        #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4_step1_le4096/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank64_cut4096_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-4768-merged",
         help="Path to the trained SFT model checkpoint",
     )
     p.add_argument("--test_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260406/sft_data")
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/sft_data")
     p.add_argument(
         "--output_dir", type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-1250/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-final/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-1000_termid_pretrained/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/demo_ckpt/match_6_reorder_tid/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-4768_two_step/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-800/",
         help="Directory to save evaluation output files",
     )
     p.add_argument("--tid2item_id_file", type=str,
@@ -664,7 +666,7 @@ def parse_args():
     p.add_argument("--max_events", type=int, default=500)
     p.add_argument("--max_recent_events", type=int, default=500)
     p.add_argument("--num_gpus", type=int, default=None)
-    p.add_argument("--gpu_memory_utilization", type=float, default=0.80)
+    p.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     p.add_argument("--max_model_len", type=int, default=32000)
     p.add_argument("--max_tokens", type=int, default=12000)
     p.add_argument("--item_file", type=str,
@@ -787,10 +789,10 @@ def main():
     print(f"\n{'='*70}\nStep 7: Building SLM outputs + TID matching\n{'='*70}")
     e2j_sr, e2j_ss = build_output_rows(e2j_data, e2j_out, is_gt=False, task_type="event2journey",
         fuzzy_score_threshold=args.fuzzy_score_threshold, reorder_pos=args.reorder_tid_pos, **ma)
+    e2j_sum = print_side_by_side("event2journey", e2j_ls, e2j_ss, e2j_lr, e2j_sr)
+
     p2j_sr, p2j_ss = build_output_rows(p2j_data, p2j_out, is_gt=False, task_type="profile2journey",
         fuzzy_score_threshold=args.fuzzy_score_threshold, reorder_pos=args.reorder_tid_pos, **ma)
-
-    e2j_sum = print_side_by_side("event2journey", e2j_ls, e2j_ss, e2j_lr, e2j_sr)
     p2j_sum = print_side_by_side("profile2journey", p2j_ls, p2j_ss, p2j_lr, p2j_sr)
 
     # Step 8: Save output files + summary

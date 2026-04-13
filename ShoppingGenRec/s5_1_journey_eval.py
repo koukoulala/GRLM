@@ -279,7 +279,7 @@ def run_profile_generation_vllm(users_with_events, profile_model_path,
         content = instruction + "\n" + input_text
         messages = [{"role": "user", "content": content}]
         formatted = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
         prompts.append(formatted)
         uids.append(ud["UserId"])
@@ -1027,6 +1027,7 @@ def build_chat_prompts(instructions_and_inputs, tokenizer, task_type):
             messages,
             tokenize=False,
             add_generation_prompt=True,
+            enable_thinking=False
         )
         prompts.append(formatted)
 
@@ -1713,6 +1714,7 @@ def main():
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
+                enable_thinking=False
             )
             formatted_prompts.append(formatted)
         print(f"  Wrapped {len(formatted_prompts)} prompts with chat template")
