@@ -88,14 +88,15 @@ def _clean_profile_json(raw):
 # =============================================================================
 
 DEFAULT_MAX_EVENTS = 500
-DEFAULT_MAX_RECENT_EVENTS = 200
+DEFAULT_MAX_RECENT_EVENTS = 500
 DEFAULT_MAX_PRODUCTS = 20
-DEFAULT_MIN_PRODUCTS = 5
-DEFAULT_MIN_AVG_PRODUCTS = 5
+DEFAULT_MIN_PRODUCTS = 8
+DEFAULT_MIN_AVG_PRODUCTS = 8
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 20
 DEFAULT_KEEP_EMPTY_RATIO = 0
 DEFAULT_COUNT_RATIO = 0.7
+DEFAULT_DUP_THRESHOLD = 5
 
 # =============================================================================
 # Time Normalization
@@ -233,14 +234,16 @@ def _get_brand_seller(pid, id2meta):
 
 
 def diversify_journey_products(product_tids, product_ids, id2meta,
-                               dup_threshold=6, max_products=None):
+                               dup_threshold=DEFAULT_DUP_THRESHOLD,
+                               max_products=None, dynamic_threshold=True):
     """Diversify products within a single journey via dedup + greedy reranking.
 
     Stage 1 — Hard dedup: remove products whose summary words overlap
     >= dup_threshold/7 with any already-selected product.
-    If max_products is given, dup_threshold is set dynamically:
-      - < max_products/2 products → threshold=6 (conservative, fewer products)
-      - >= max_products/2 products → threshold=5 (aggressive, plenty to choose)
+    If dynamic_threshold is True and max_products is given, dup_threshold
+    is set dynamically:
+      - < max_products/2 products → threshold=dup_threshold (conservative)
+      - >= max_products/2 products → threshold=dup_threshold-1 (aggressive)
 
     Stage 2 — Greedy diversity reranking: iteratively pick the candidate
     with the lowest effective score (word overlap + brand/seller penalty)
@@ -265,10 +268,10 @@ def diversify_journey_products(product_tids, product_ids, id2meta,
     if n <= 1:
         return product_tids, product_ids, 0
 
-    # Dynamic dup_threshold: fewer products → conservative (6),
-    # plenty of products → aggressive (5)
-    if max_products is not None:
-        dup_threshold = 6 if n < max_products // 2 else 5
+    # Dynamic dup_threshold: fewer products → conservative (dup_threshold),
+    # plenty of products → aggressive (dup_threshold - 1)
+    if dynamic_threshold and max_products is not None:
+        dup_threshold = dup_threshold if n < max_products // 2 else max(dup_threshold - 1, 1)
 
     # Convert tids to word sets for fast overlap computation
     word_sets = [set(tid) for tid in product_tids]
@@ -531,6 +534,7 @@ def create_sft_data(
     max_journeys=DEFAULT_MAX_JOURNEYS,
     keep_empty_ratio=DEFAULT_KEEP_EMPTY_RATIO,
     count_ratio=DEFAULT_COUNT_RATIO,
+    dup_threshold=DEFAULT_DUP_THRESHOLD,
 ):
     """Create SFT data for the specified task.
 
@@ -634,6 +638,7 @@ def create_sft_data(
             pre_div_count = len(resolved["product_tids"])
             div_tids, div_pids, n_removed = diversify_journey_products(
                 resolved["product_tids"], resolved["product_ids"], id2meta,
+                dup_threshold=dup_threshold,
                 max_products=max_products,
             )
             resolved["product_tids"] = div_tids
@@ -930,8 +935,8 @@ def parse_args():
     parser.add_argument(
         "--shopping_journey_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260407/raw_data/event2journey.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/event2journey.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260415/raw_data/profile2journey.json",
         help="Path to shopping_journeys.json. For profile2journey, each entry "
              "must contain a 'user_profile' key.",
     )
@@ -945,7 +950,7 @@ def parse_args():
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260407/sft_data",
+                "Data/LLMTrainingData/20260415/sft_data",
         help="Output directory",
     )
     # Event/input controls
@@ -1013,9 +1018,18 @@ def parse_args():
              f"instruction (default: {DEFAULT_COUNT_RATIO})",
     )
     parser.add_argument(
+        "--dup_threshold",
+        type=int,
+        default=DEFAULT_DUP_THRESHOLD,
+        help=f"Min word overlap (out of 7) to consider two products as "
+             f"near-duplicates for diversity dedup. Lower = more aggressive "
+             f"dedup. Dynamic mode uses threshold-1 when products are "
+             f"plentiful (default: {DEFAULT_DUP_THRESHOLD})",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
-        default=42,
+        default=43,
         help="Random seed for reproducibility (default: 42)",
     )
     return parser.parse_args()
@@ -1099,6 +1113,7 @@ def main():
     print(f"  max_journeys = {args.max_journeys}")
     print(f"  keep_empty_ratio = {args.keep_empty_ratio}")
     print(f"  count_ratio = {args.count_ratio}")
+    print(f"  dup_threshold = {args.dup_threshold}")
     print(f"  seed = {args.seed}")
     print("=" * 70)
 
@@ -1115,6 +1130,7 @@ def main():
         max_journeys=args.max_journeys,
         keep_empty_ratio=args.keep_empty_ratio,
         count_ratio=args.count_ratio,
+        dup_threshold=args.dup_threshold,
     )
 
     # =========================================================================

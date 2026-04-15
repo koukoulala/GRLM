@@ -452,12 +452,22 @@ def _load_journey_rows_from_file(filepath):
         uid_idx = header.index("UserId") if "UserId" in header_set else 0
         events_idx = (header.index("ReadableUserEvents")
                       if "ReadableUserEvents" in header_set else 1)
-        journey_idx = (header.index("FinalJourney")
-                       if "FinalJourney" in header_set else -1)
+        # Support column name aliases: FinalJourney / OUTPUT
+        journey_idx = -1
+        for col_name in ("FinalJourney", "OUTPUT"):
+            if col_name in header_set:
+                journey_idx = header.index(col_name)
+                break
         if journey_idx < 0:
-            print(f"  WARNING: FinalJourney column not found in {filepath}")
+            print(f"  WARNING: FinalJourney/OUTPUT column not found in {filepath}")
+            print(f"    Available columns: {header}")
             return
-        profile_idx = header.index("Profile") if "Profile" in header_set else -1
+        # Support column name aliases: Profile / ShoppingProfile
+        profile_idx = -1
+        for col_name in ("Profile", "ShoppingProfile"):
+            if col_name in header_set:
+                profile_idx = header.index(col_name)
+                break
         max_idx = max(uid_idx, events_idx, journey_idx,
                       profile_idx if profile_idx >= 0 else 0)
 
@@ -488,8 +498,8 @@ def parse_args():
     parser.add_argument(
         "--journey_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/0128_0301/ShoppingJourney_Input_500K_His50_Final_Training_clean.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/ShoppingJourney_Input_500K_His50_Final_Training_clean.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/Step0_UserProfile_500KEnUsHisRandom0408_Merged_Journey_JWP_Ranker.tsv",
         help="Path to the shopping journey TSV file",
     )
     parser.add_argument(
@@ -511,7 +521,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260415/raw_data/",
         help="Path to the output directory",
     )
     parser.add_argument(

@@ -634,6 +634,265 @@ def print_side_by_side(task, ls, ss, llm_rows, slm_rows):
     return {"llm":{k:v for k,v in ls.items() if k not in ("per_user_exact_ratios","fuzzy_matched_words","fuzzy_best_scores")},
             "slm":{k:v for k,v in ss.items() if k not in ("per_user_exact_ratios","fuzzy_matched_words","fuzzy_best_scores")}}
 
+# === Remap Mode ===
+
+def read_slm_tsv(fp):
+    """Read SLM output TSV, return list of row dicts."""
+    rows = []
+    with open(fp, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader, None)
+        if not header: raise ValueError(f"Empty: {fp}")
+        cm = {n.strip(): i for i, n in enumerate(header)}
+        for row in reader:
+            rd = {}
+            for n, i in cm.items():
+                rd[n] = row[i] if i < len(row) else ""
+            rows.append(rd)
+    return rows
+
+
+def remap_slm_outputs(slm_rows, new_tid2item_id, orig_tid2item_id,
+                      id2title, fuzzy_score_threshold, reorder_pos, task_name):
+    """Re-match ProductTIDs from RawShoppingJourneys using new TID mapping
+    (priority) + original TID mapping (fallback).
+
+    Returns:
+        remapped_rows: list of updated row dicts with new ShoppingJourneys
+        stats: aggregated match statistics
+        comparison: per-user comparison info (old vs new)
+    """
+    # Build reverse mappings for both new and original
+    new_rm, new_w2k, new_nkm, new_skm = create_reverse_mapping(
+        new_tid2item_id, reorder_pos=reorder_pos
+    )
+    orig_rm, orig_w2k, orig_nkm, orig_skm = create_reverse_mapping(
+        orig_tid2item_id, reorder_pos=reorder_pos
+    )
+
+    # Load new item titles if available
+    new_id2title = dict(id2title) if id2title else {}
+
+    stats = {
+        "total_users": len(slm_rows),
+        "total_products": 0,
+        "matched_new_exact": 0, "matched_new_fuzzy": 0,
+        "matched_orig_exact": 0, "matched_orig_fuzzy": 0,
+        "no_matches": 0,
+        "json_parse_success": 0, "json_parse_fail": 0,
+        "users_affected": 0,  # users where at least 1 product changed source
+        "journeys_affected": 0,  # journeys where at least 1 product came from new
+        "products_from_new": 0,  # products matched via new mapping
+        "products_from_orig": 0,  # products matched via original mapping
+        "journeys_dropped": 0, "products_deduped": 0,
+        "users_with_all_fields": 0, "users_no_valid_result": 0,
+    }
+    remapped_rows = []
+
+    total = len(slm_rows)
+    for idx, row in enumerate(slm_rows):
+        if total > 0 and (idx % max(total // 10, 1) == 0 or idx == total - 1):
+            print(f"\r    [remap {task_name}] {idx+1}/{total} ({(idx+1)/total*100:.0f}%)",
+                  end="", flush=True)
+
+        raw = row.get("RawShoppingJourneys", "")
+        # Unescape TSV escapes
+        raw = raw.replace("\\n", "\n").replace("\\r", "\r")
+        uid = row.get("UserId", "")
+        jd = parse_journey_json(raw)
+        if jd:
+            stats["json_parse_success"] += 1
+        else:
+            stats["json_parse_fail"] += 1
+            remapped_rows.append(dict(row, ShoppingJourneys=""))
+            continue
+
+        user_has_new = False
+        mapped = {"ContinuedJourneys": []}
+        for j in jd.get("ContinuedJourneys", []):
+            mj = {"Title": j.get("Title", ""), "Reason": j.get("Reason", ""),
+                  "Products": []}
+            journey_has_new = False
+            used = set()
+            for tw in j.get("ProductTIDs", []):
+                stats["total_products"] += 1
+                if not isinstance(tw, list) or not tw:
+                    stats["no_matches"] += 1
+                    continue
+
+                # Priority 1: try new mapping
+                iids, mt, mw, bs = get_iid_by_tid(
+                    tw, new_tid2item_id, new_rm, new_w2k, new_nkm, new_skm,
+                    reorder_pos=reorder_pos,
+                    fuzzy_score_threshold=fuzzy_score_threshold
+                )
+                source = "new"
+
+                # Priority 2: fallback to original mapping
+                if mt == "none" or (mt == "fuzzy" and fuzzy_score_threshold > 0
+                                    and bs < fuzzy_score_threshold):
+                    iids, mt, mw, bs = get_iid_by_tid(
+                        tw, orig_tid2item_id, orig_rm, orig_w2k, orig_nkm, orig_skm,
+                        reorder_pos=reorder_pos,
+                        fuzzy_score_threshold=fuzzy_score_threshold
+                    )
+                    source = "orig"
+
+                if mt == "exact":
+                    if source == "new":
+                        stats["matched_new_exact"] += 1
+                    else:
+                        stats["matched_orig_exact"] += 1
+                elif mt == "fuzzy":
+                    if fuzzy_score_threshold > 0 and bs < fuzzy_score_threshold:
+                        stats["no_matches"] += 1
+                        continue
+                    if source == "new":
+                        stats["matched_new_fuzzy"] += 1
+                    else:
+                        stats["matched_orig_fuzzy"] += 1
+                else:
+                    stats["no_matches"] += 1
+                    continue
+
+                if source == "new":
+                    stats["products_from_new"] += 1
+                    journey_has_new = True
+                else:
+                    stats["products_from_orig"] += 1
+
+                gid = None
+                for c in (iids or []):
+                    if c not in used:
+                        gid = c; break
+                if gid is None and iids:
+                    gid = iids[0]
+                if gid:
+                    used.add(gid)
+
+                mj["Products"].append({
+                    "TID": tw,
+                    "GlobalOfferIds": [gid] if gid else [],
+                    "match_type": mt,
+                    "source": source,
+                    "title": new_id2title.get(str(gid), "") if gid else "",
+                })
+
+            # Dedup products by GID
+            seen = set(); dp = []
+            for p in mj["Products"]:
+                g = p["GlobalOfferIds"][0] if p["GlobalOfferIds"] else None
+                if g and g in seen:
+                    stats["products_deduped"] += 1
+                    continue
+                if g:
+                    seen.add(g)
+                dp.append(p)
+            mj["Products"] = dp
+
+            if mj["Products"]:
+                mapped["ContinuedJourneys"].append(mj)
+                if journey_has_new:
+                    stats["journeys_affected"] += 1
+            else:
+                stats["journeys_dropped"] += 1
+
+            if journey_has_new:
+                user_has_new = True
+
+        if user_has_new:
+            stats["users_affected"] += 1
+
+        # Dedup journeys by title
+        st = set(); dj = []
+        for j in mapped["ContinuedJourneys"]:
+            tk = j["Title"].strip().lower()
+            if tk in st:
+                continue
+            st.add(tk)
+            dj.append(j)
+        mapped["ContinuedJourneys"] = dj
+
+        if mapped["ContinuedJourneys"]:
+            stats["users_with_all_fields"] += 1
+            jj = json.dumps(mapped, ensure_ascii=False)
+        else:
+            stats["users_no_valid_result"] += 1
+            jj = ""
+
+        new_row = dict(row)
+        new_row["ShoppingJourneys"] = jj
+        remapped_rows.append(new_row)
+
+    print()  # newline after progress
+    return remapped_rows, stats
+
+
+def print_remap_comparison(task, orig_stats, remap_stats):
+    """Print side-by-side comparison of original vs remapped match stats."""
+    print(f"\n  {'='*80}")
+    print(f"  {task} - Original vs Remapped (with new products)")
+    print(f"  {'='*80}")
+
+    print(f"\n  {'Metric':<50s} {'Original':>18s} {'Remapped':>18s}")
+    print(f"  {'-'*50} {'-'*18} {'-'*18}")
+
+    ot = max(orig_stats.get("total_products", 0), 1)
+    rt = max(remap_stats.get("total_products", 0), 1)
+
+    def _vp(s, k, tot):
+        v = s.get(k, 0)
+        return f"{v:,} ({v/tot*100:.1f}%)"
+
+    for lb, k in [
+        ("Total users", "total_users"),
+        ("JSON parse success", "json_parse_success"),
+        ("JSON parse fail", "json_parse_fail"),
+    ]:
+        print(f"  {lb:<50s} {orig_stats.get(k,0):>18,} {remap_stats.get(k,0):>18,}")
+
+    print(f"  {'Total products (TIDs in model output)':<50s} {ot:>18,} {rt:>18,}")
+
+    # Original: exact_matches / fuzzy_matches
+    oe = orig_stats.get("exact_matches", 0)
+    of = orig_stats.get("fuzzy_matches", 0) - orig_stats.get("fuzzy_filtered", 0)
+    on = orig_stats.get("no_matches", 0)
+    print(f"  {'[Orig] Exact matches':<50s} {_vp(orig_stats,'exact_matches',ot):>18s} {'---':>18s}")
+    print(f"  {'[Orig] Fuzzy matches (kept)':<50s} {f'{of:,} ({of/ot*100:.1f}%)':>18s} {'---':>18s}")
+    print(f"  {'[Orig] No matches':<50s} {_vp(orig_stats,'no_matches',ot):>18s} {'---':>18s}")
+
+    # Remapped: breakdown by source
+    rne = remap_stats.get("matched_new_exact", 0)
+    rnf = remap_stats.get("matched_new_fuzzy", 0)
+    roe = remap_stats.get("matched_orig_exact", 0)
+    rof = remap_stats.get("matched_orig_fuzzy", 0)
+    rn = remap_stats.get("no_matches", 0)
+    print(f"  {'[Remap] Matched via NEW exact':<50s} {'---':>18s} {f'{rne:,} ({rne/rt*100:.1f}%)':>18s}")
+    print(f"  {'[Remap] Matched via NEW fuzzy':<50s} {'---':>18s} {f'{rnf:,} ({rnf/rt*100:.1f}%)':>18s}")
+    print(f"  {'[Remap] Matched via ORIG exact':<50s} {'---':>18s} {f'{roe:,} ({roe/rt*100:.1f}%)':>18s}")
+    print(f"  {'[Remap] Matched via ORIG fuzzy':<50s} {'---':>18s} {f'{rof:,} ({rof/rt*100:.1f}%)':>18s}")
+    print(f"  {'[Remap] No matches':<50s} {'---':>18s} {_vp(remap_stats,'no_matches',rt):>18s}")
+
+    # Total matched comparison
+    orig_total_matched = oe + of
+    remap_total_matched = rne + rnf + roe + rof
+    print(f"  {'':<50s} {'-'*18} {'-'*18}")
+    print(f"  {'Total matched products':<50s} {f'{orig_total_matched:,} ({orig_total_matched/ot*100:.1f}%)':>18s} {f'{remap_total_matched:,} ({remap_total_matched/rt*100:.1f}%)':>18s}")
+    delta = remap_total_matched - orig_total_matched
+    sign = "+" if delta >= 0 else ""
+    print(f"  {'Delta (remap - orig)':<50s} {'':>18s} {f'{sign}{delta:,}':>18s}")
+
+    # Impact summary
+    print(f"\n  --- New Product Impact ---")
+    print(f"  {'Products from NEW mapping':<50s} {remap_stats.get('products_from_new',0):>18,}")
+    print(f"  {'Products from ORIG mapping':<50s} {remap_stats.get('products_from_orig',0):>18,}")
+    print(f"  {'Users affected (>= 1 new product)':<50s} {remap_stats.get('users_affected',0):>18,}")
+    print(f"  {'Journeys affected (>= 1 new product)':<50s} {remap_stats.get('journeys_affected',0):>18,}")
+    print(f"  {'Products deduped':<50s} {remap_stats.get('products_deduped',0):>18,}")
+    print(f"  {'Journeys dropped (empty)':<50s} {remap_stats.get('journeys_dropped',0):>18,}")
+    print(f"  {'Users with valid result':<50s} {remap_stats.get('users_with_all_fields',0):>18,}")
+
+
 # === Args ===
 
 def parse_args():
@@ -650,13 +909,14 @@ def parse_args():
         help="Path to the trained SFT model checkpoint",
     )
     p.add_argument("--test_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/sft_data")
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/test_data")
     p.add_argument(
         "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-final/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_lora_v4_checkpoint-final/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-1000_termid_pretrained/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/demo_ckpt/match_6_reorder_tid/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-800/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/journey_v4_stage2_v1sample_epoch3_checkpoint-1425/",
         help="Directory to save evaluation output files",
     )
     p.add_argument("--tid2item_id_file", type=str,
@@ -675,6 +935,23 @@ def parse_args():
     p.add_argument("--reorder_tid_pos", type=int, default=3)
     p.add_argument("--instruction_version", type=str, default="v4", choices=["v3","v4"])
     p.add_argument("--min_products_override", type=int, default=10)
+    # --- Remap mode: re-match existing SLM outputs with new product TIDs ---
+    p.add_argument("--remap_only", action="store_true", default=False,
+        help="Skip inference. Read existing SLM output TSVs from --output_dir, "
+             "re-run TID matching with new product TIDs (priority) + "
+             "original --tid2item_id_file (fallback), and print comparison stats.")
+    p.add_argument("--new_tid2item_id_file", type=str, default=None,
+        help="Path to a single new product tid2item_id.json from s7. "
+             "If set, overrides --new_tid_base_dir / --new_tid_thresholds.")
+    p.add_argument("--new_tid_base_dir", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products",
+        help="Base directory of s7 output (contains threshold_X.XX/ subdirs)")
+    p.add_argument("--new_tid_thresholds", type=float, nargs="+",
+        default=[0.80, 0.85, 0.90],
+        help="Similarity thresholds to evaluate in remap mode. "
+             "For each threshold, reads <new_tid_base_dir>/threshold_X.XX/tid2item_id.json "
+             "and saves results to <output_dir>/remapped_X.XX/. "
+             "Default: 0.80 0.85 0.90")
     return p.parse_args()
 
 # === Main ===
@@ -682,6 +959,135 @@ def parse_args():
 def main():
     args = parse_args()
     random.seed(args.seed); np.random.seed(args.seed)
+
+    # =========================================================================
+    # Remap-only mode: skip inference, re-match existing SLM outputs
+    # =========================================================================
+    if args.remap_only:
+        print("=" * 70)
+        print("REMAP MODE: Re-matching existing SLM outputs with new product TIDs")
+        print("=" * 70)
+        print(f"  Output dir:          {args.output_dir}")
+        print(f"  Original TID file:   {args.tid2item_id_file}")
+        print(f"  Fuzzy threshold:     {args.fuzzy_score_threshold}")
+        print(f"  Reorder pos:         {args.reorder_tid_pos}")
+
+        # Determine which threshold(s) and file(s) to process
+        if args.new_tid2item_id_file:
+            # Single file mode
+            tid_configs = [("custom", args.new_tid2item_id_file)]
+            print(f"  New TID file:        {args.new_tid2item_id_file}")
+        else:
+            # Multi-threshold mode from base dir
+            tid_configs = []
+            for t in sorted(args.new_tid_thresholds):
+                fpath = os.path.join(args.new_tid_base_dir,
+                                     f"threshold_{t:.2f}", "tid2item_id.json")
+                tid_configs.append((f"{t:.2f}", fpath))
+            print(f"  New TID base dir:    {args.new_tid_base_dir}")
+            print(f"  Thresholds:          {[f'{t:.2f}' for t in sorted(args.new_tid_thresholds)]}")
+
+        # Load original TID mapping (shared across thresholds)
+        print(f"\n  Loading original tid2item_id ...")
+        with open(args.tid2item_id_file, "r", encoding="utf-8") as f:
+            orig_tid2item_id = json.load(f)
+        print(f"    Original TIDs: {len(orig_tid2item_id):,}")
+
+        # Load item titles (shared)
+        id2title = load_item_titles(args.item_file) if args.item_file and os.path.isfile(args.item_file) else None
+
+        # Load original eval_summary for comparison (shared)
+        orig_summary_file = os.path.join(args.output_dir, "eval_summary.json")
+        orig_summary = {}
+        if os.path.isfile(orig_summary_file):
+            with open(orig_summary_file, "r", encoding="utf-8") as f:
+                orig_summary = json.load(f)
+            print(f"  Loaded original eval_summary.json")
+
+        # Read SLM TSV files once (shared across thresholds)
+        slm_data = {}  # task_name -> list of row dicts
+        for task_name in ["event2journey", "profile2journey"]:
+            slm_file = os.path.join(args.output_dir, f"{task_name}_slm_output.tsv")
+            if os.path.isfile(slm_file):
+                print(f"  Reading: {slm_file}")
+                slm_data[task_name] = read_slm_tsv(slm_file)
+                print(f"    Loaded {len(slm_data[task_name]):,} rows")
+            else:
+                print(f"  [SKIP] {slm_file} not found")
+
+        # Process each threshold
+        for thresh_label, new_tid_file in tid_configs:
+            print(f"\n{'#'*70}")
+            print(f"  Threshold: {thresh_label}")
+            print(f"  New TID file: {new_tid_file}")
+            print(f"{'#'*70}")
+
+            if not os.path.isfile(new_tid_file):
+                print(f"  [SKIP] File not found: {new_tid_file}")
+                continue
+
+            # Load new TID mapping for this threshold
+            with open(new_tid_file, "r", encoding="utf-8") as f:
+                new_tid2item_id = json.load(f)
+            print(f"    New TIDs: {len(new_tid2item_id):,}")
+
+            remap_output_dir = os.path.join(args.output_dir,
+                                            f"remapped_{thresh_label}")
+            os.makedirs(remap_output_dir, exist_ok=True)
+
+            for task_name in ["event2journey", "profile2journey"]:
+                if task_name not in slm_data:
+                    continue
+
+                print(f"\n{'='*70}")
+                print(f"  {task_name} (threshold={thresh_label})")
+                print(f"{'='*70}")
+
+                remapped_rows, remap_stats = remap_slm_outputs(
+                    slm_data[task_name], new_tid2item_id, orig_tid2item_id,
+                    id2title, args.fuzzy_score_threshold, args.reorder_tid_pos,
+                    task_name,
+                )
+
+                orig_slm_stats = orig_summary.get(task_name, {}).get("slm", {})
+                if not orig_slm_stats:
+                    orig_slm_stats = {"total_products": 0, "exact_matches": 0,
+                                      "fuzzy_matches": 0, "no_matches": 0}
+
+                print_remap_comparison(task_name, orig_slm_stats, remap_stats)
+
+                out_file = os.path.join(remap_output_dir,
+                                        f"{task_name}_slm_output.tsv")
+                cols = ["UserId", "UserSignals", "ReadableUserSignals",
+                        "UserProfile", "RawShoppingJourneys", "ShoppingJourneys"]
+                save_tsv(remapped_rows, out_file, cols)
+
+                rd = _compute_row_stats(remapped_rows)
+                if rd['j_per_user']:
+                    print(f"  Remapped diversity: {rd['n_users']} users, "
+                          f"journeys/user={np.mean(rd['j_per_user']):.2f}, "
+                          f"products/journey={np.mean(rd['p_per_j']):.2f}")
+
+            # Save remap summary for this threshold
+            remap_summary = {
+                "mode": "remap_only",
+                "threshold_label": thresh_label,
+                "new_tid_file": new_tid_file,
+                "original_tid_file": args.tid2item_id_file,
+                "fuzzy_score_threshold": args.fuzzy_score_threshold,
+                "reorder_tid_pos": args.reorder_tid_pos,
+            }
+            sf = os.path.join(remap_output_dir, "remap_summary.json")
+            with open(sf, "w", encoding="utf-8") as f:
+                json.dump(remap_summary, f, ensure_ascii=False, indent=2)
+            print(f"  Remap summary: {sf}")
+
+        print(f"\nDone! Processed {len(tid_configs)} threshold(s)")
+        return
+
+    # =========================================================================
+    # Normal mode: full inference pipeline
+    # =========================================================================
     import torch
     torch.manual_seed(args.seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)

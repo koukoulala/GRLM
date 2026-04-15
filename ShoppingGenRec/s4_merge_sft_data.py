@@ -212,14 +212,14 @@ def parse_args():
     parser.add_argument(
         "--event2journey_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260407/sft_data/"
+                "OneRec/Data/LLMTrainingData/20260415/sft_data/"
                 "event2journey_sft_full.json",
         help="Path to event2journey *_full.json (with metadata.user_id)",
     )
     parser.add_argument(
         "--profile2journey_full_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260406/sft_data/"
+                "OneRec/Data/LLMTrainingData/20260415/sft_data/"
                 "profile2journey_sft_full.json",
         help="Path to profile2journey *_full.json (with metadata.user_id)",
     )
@@ -230,19 +230,19 @@ def parse_args():
         help="Sampling probability for meta2tid training data",
     )
     parser.add_argument(
-        "--meta2tid_max_train", type=int, default=1000000,
+        "--meta2tid_max_train", type=int, default=400000,
         help="Maximum number of meta2tid training samples (default: 500000)",
     )
     parser.add_argument(
-        "--journey_target_total", type=int, default=1000000,
+        "--journey_target_total", type=int, default=400000,
         help="Target total for event2journey + profile2journey combined. "
              "If deduped total is below this, shared users are duplicated "
-             "across both tasks to fill the gap (default: 1000000)",
+             "across both tasks to fill the gap (default: 500000)",
     )
 
     # --- Test set ---
     parser.add_argument(
-        "--journey_keep_threshold", type=int, default=5,
+        "--journey_keep_threshold", type=int, default=12,
         help="Users with >= this many journeys are always kept; "
              "users below are sampled with prob = num_journeys / threshold "
              "(default: 5)",
@@ -256,11 +256,11 @@ def parse_args():
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260407/sft_data",
+                "OneRec/Data/LLMTrainingData/20260415/sft_data",
         help="Output directory",
     )
     parser.add_argument(
-        "--seed", type=int, default=42,
+        "--seed", type=int, default=43,
         help="Random seed (default: 42)",
     )
 
@@ -269,6 +269,11 @@ def parse_args():
         "--build_test_tsv", action="store_true", default=False,
         help="Build *_full_cleaned_test.tsv files from test JSONL + merged TSV. "
              "Skips the normal merge/train pipeline.",
+    )
+    parser.add_argument(
+        "--test_output_dir", type=str, 
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/test_data",
+        help="Directory to save test TSV files. If empty, uses --output_dir.",
     )
     parser.add_argument(
         "--event2journey_tsv", type=str,
@@ -352,7 +357,10 @@ def build_test_tsv(args):
     print("Build Test TSV Mode")
     print("=" * 70)
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    test_dir = args.test_output_dir.strip() if args.test_output_dir else ""
+    if not test_dir:
+        test_dir = args.output_dir
+    os.makedirs(test_dir, exist_ok=True)
 
     tasks = [
         (
@@ -380,7 +388,7 @@ def build_test_tsv(args):
         print(f"    Test users from JSONL: {len(uids):,}")
 
         out_path = os.path.join(
-            args.output_dir, f"{task_name}_full_cleaned_test.tsv")
+            test_dir, f"{task_name}_full_cleaned_test.tsv")
         total, matched = _filter_tsv_by_uids(full_tsv, uids, out_path)
 
         file_mb = os.path.getsize(out_path) / (1024 * 1024)
@@ -615,45 +623,47 @@ def main():
     print(f"    Journey pool total:     {total_journey:,}")
 
     # --- Journey-count sampling on final pools ---
-    # Step 1: Count buckets to compute uniform per-bucket probs
+    # Compute per-task bucket probs independently, each targeting half
+    per_task_target = target // 2
+
     e2j_n_high, e2j_low_buckets = count_journey_buckets(
         e2j_by_user, e2j_final_uids, threshold,
     )
     p2j_n_high, p2j_low_buckets = count_journey_buckets(
         p2j_by_user, p2j_final_uids, threshold,
     )
-    n_high_total = e2j_n_high + p2j_n_high
-    bucket_probs = compute_uniform_bucket_probs(
-        n_high_total, [e2j_low_buckets, p2j_low_buckets],
-        threshold, target,
+
+    e2j_bucket_probs = compute_uniform_bucket_probs(
+        e2j_n_high, [e2j_low_buckets],
+        threshold, per_task_target,
+    )
+    p2j_bucket_probs = compute_uniform_bucket_probs(
+        p2j_n_high, [p2j_low_buckets],
+        threshold, per_task_target,
     )
 
-    # Merge bucket counts for display
-    merged_buckets = defaultdict(int)
-    for lb in [e2j_low_buckets, p2j_low_buckets]:
-        for j, n in lb.items():
-            merged_buckets[j] += n
+    print(f"\n  Journey-count sampling (per-task, target {per_task_target:,} each):")
+    for label, n_high, low_buckets, bprobs in [
+        ("event2journey", e2j_n_high, e2j_low_buckets, e2j_bucket_probs),
+        ("profile2journey", p2j_n_high, p2j_low_buckets, p2j_bucket_probs),
+    ]:
+        print(f"\n    [{label}] High-journey users (always kept): {n_high:,}")
+        print(f"    Per-bucket probabilities:")
+        for j in sorted(low_buckets.keys()):
+            prob = bprobs.get(j, 1.0)
+            cnt = low_buckets[j]
+            expected = int(cnt * prob)
+            print(f"      {j} journeys: {cnt:>10,} users, "
+                  f"prob={prob:.4f}, expected_kept~{expected:,}")
 
-    print(f"\n  Journey-count sampling (uniform per-bucket):")
-    print(f"    High-journey users (always kept): {n_high_total:,} (across both tasks)")
-    print(f"    Low-bucket target per bucket: "
-          f"{(target - n_high_total) / max(len(merged_buckets), 1):,.0f}")
-    print(f"    Per-bucket probabilities:")
-    for j in sorted(merged_buckets.keys()):
-        prob = bucket_probs.get(j, 1.0)
-        cnt = merged_buckets[j]
-        expected = int(cnt * prob)
-        print(f"      {j} journeys: {cnt:>10,} users, "
-              f"prob={prob:.4f}, expected_kept~{expected:,}")
-
-    # Step 2: Sample with per-bucket probs
+    # Step 2: Sample with per-task bucket probs
     e2j_train, e2j_bucket = sample_by_journey_count(
         e2j_by_user, e2j_final_uids, rng,
-        keep_threshold=threshold, bucket_probs=bucket_probs,
+        keep_threshold=threshold, bucket_probs=e2j_bucket_probs,
     )
     p2j_train, p2j_bucket = sample_by_journey_count(
         p2j_by_user, p2j_final_uids, rng,
-        keep_threshold=threshold, bucket_probs=bucket_probs,
+        keep_threshold=threshold, bucket_probs=p2j_bucket_probs,
     )
 
     # Print per-bucket sampling stats

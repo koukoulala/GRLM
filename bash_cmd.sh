@@ -50,3 +50,22 @@ python s6_visualize.py /cosmos/projects/Recommendations/PartnerData/Pipelines/On
 nohup python -u cook_data/step2.8_call_LLM_ranker.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/Step1_200K_EnUs_UserReadableHis_HisLarge50_90K_1_Results_JWP.tsv > logs/step2.8_90K_1.out 2>&1 &
 nohup python -u cook_data/step2.8_call_LLM_ranker.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/Step1_200K_EnUs_UserReadableHis_HisLarge50_90K_2_Results_JWP.tsv > logs/step2.8_90K_2.out 2>&1 &
 
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate vocab_compress && export CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 && nohup python -u resources/term_vocab_compress.py > logs/term_vocab_compress.out 2>&1 &
+
+nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py \
+  --task event2journey \
+  --merge_tsv_only \
+  --prompt_results_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData_merged/ \
+  --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/ \
+  --user_his_file "" \
+  > logs/merge_tsv_event2journey.out 2>&1 &
+
+nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py \
+  --task profile2journey \
+  --merge_tsv_only \
+  --prompt_results_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/ \
+  --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/ \
+  --user_his_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step1_All_EnUs_UserReadableHis.tsv \
+  > logs/merge_tsv_profile2journey.out 2>&1 &
+
+nohup python -u s4_merge_sft_data.py --build_test_tsv > logs/s4_build_test.out 2>&1 &
