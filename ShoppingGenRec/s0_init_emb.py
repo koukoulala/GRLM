@@ -48,14 +48,75 @@ def load_data(file_path: str) -> List[Dict]:
     return result_list
 
 
-def prepare_text_for_embedding(item: Dict) -> str:
-    """Prepare text for embedding generation."""
+def prepare_text_for_embedding(item: Dict, max_field_len: int = 500) -> str:
+    """Prepare text for embedding generation.
+
+    Includes title, description, categories, and structured attributes.
+    Each field value is truncated to max_field_len characters.
+    """
     text_parts = []
     for field in ["title", "description", "categories"]:
         val = item.get(field, "")
         if val:
+            if len(val) > max_field_len:
+                val = val[:max_field_len] + "..."
             text_parts.append(f"{field.capitalize()}: {val}")
+
+    # Append structured attributes
+    attributes = item.get("attributes", {})
+    if isinstance(attributes, dict):
+        for attr_name in ["Brand", "Seller", "Color", "Size", "Gender", "AgeGroup"]:
+            attr_val = attributes.get(attr_name, "")
+            if isinstance(attr_val, str):
+                attr_val = attr_val.strip()
+            if attr_val:
+                if len(str(attr_val)) > max_field_len:
+                    attr_val = str(attr_val)[:max_field_len] + "..."
+                text_parts.append(f"{attr_name}: {attr_val}")
+
     return " | ".join(text_parts)
+
+
+def _encode_batch(batch_texts, tokenizer, model, device, max_length):
+    """Encode a single batch of texts into L2-normalized embeddings."""
+    inputs = tokenizer(
+        batch_texts,
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
+    ).to(device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        last_hidden_state = (
+            outputs.last_hidden_state
+            if hasattr(outputs, "last_hidden_state")
+            else outputs[0]
+        )
+        attention_mask = inputs["attention_mask"]
+        mask_expanded = (
+            attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        )
+        sum_embeddings = torch.sum(last_hidden_state * mask_expanded, 1)
+        sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
+        embeddings = sum_embeddings / sum_mask
+        embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+        return embeddings.cpu().numpy().astype(np.float32)
+
+
+def _save_emb_checkpoint(sorted_embeddings, next_batch_idx, failed_indices,
+                         ckpt_file, ckpt_meta_file, batch_size):
+    """Save embedding checkpoint: concatenated embeddings + metadata."""
+    all_emb = np.vstack(sorted_embeddings) if sorted_embeddings else np.array([])
+    np.save(ckpt_file, all_emb)
+    with open(ckpt_meta_file, "w") as f:
+        json.dump({
+            "next_batch_idx": next_batch_idx,
+            "batch_size": batch_size,
+            "rows_done": all_emb.shape[0] if len(all_emb.shape) > 1 else 0,
+            "failed_indices": failed_indices,
+        }, f)
 
 
 def process_batch_on_gpu(
@@ -90,52 +151,108 @@ def process_batch_on_gpu(
 
     texts = [prepare_text_for_embedding(item) for item in data_slice]
     item_ids = [item["id"] for item in data_slice]
-    all_embeddings = []
 
-    print(f"Rank {rank}: Generating embeddings for {len(texts)} items...")
+    # Sort by text length to minimize padding waste within each batch
+    sorted_indices = sorted(range(len(texts)), key=lambda j: len(texts[j]))
+    texts_sorted = [texts[j] for j in sorted_indices]
+    ids_sorted = [item_ids[j] for j in sorted_indices]
+
+    # Collect embeddings in sorted order, then unsort at the end
+    sorted_embeddings = []
+    failed_indices = []  # track failed batch ranges (in sorted order)
+
+    # Resume: check for partial checkpoint
+    ckpt_file = os.path.join(tmp_dir, f"ckpt_rank{rank}.npy")
+    ckpt_meta_file = os.path.join(tmp_dir, f"ckpt_rank{rank}_meta.json")
+    start_batch = 0
+    if os.path.exists(ckpt_file) and os.path.exists(ckpt_meta_file):
+        with open(ckpt_meta_file, "r") as f:
+            ckpt_meta = json.load(f)
+        ckpt_emb = np.load(ckpt_file)
+        start_batch = ckpt_meta["next_batch_idx"]
+        failed_indices = ckpt_meta.get("failed_indices", [])
+        # Rebuild sorted_embeddings from checkpoint chunks
+        rows_done = start_batch * batch_size
+        sorted_embeddings = [ckpt_emb[:rows_done]] if rows_done > 0 else []
+        print(f"Rank {rank}: Resuming from batch {start_batch} "
+              f"({rows_done:,} items done, {len(failed_indices)} failed)")
+
+    CHECKPOINT_EVERY = 500  # save checkpoint every N batches
+
+    print(f"Rank {rank}: Generating embeddings for {len(texts)} items "
+          f"(sorted by text length)...")
     start_time = time.time()
 
-    for i in tqdm(range(0, len(texts), batch_size), desc=f"Rank {rank}"):
-        batch_texts = texts[i : i + batch_size]
+    total_batches = (len(texts_sorted) + batch_size - 1) // batch_size
+    for batch_idx, i in enumerate(
+        tqdm(range(0, len(texts_sorted), batch_size), desc=f"Rank {rank}",
+             mininterval=30, dynamic_ncols=True)
+    ):
+        if batch_idx < start_batch:
+            continue
 
-        inputs = tokenizer(
-            batch_texts,
-            padding=True,
-            truncation=True,
-            max_length=max_length,
-            return_tensors="pt",
-        ).to(device)
+        batch_texts = texts_sorted[i : i + batch_size]
+        actual_bs = len(batch_texts)
 
-        with torch.no_grad():
-            outputs = model(**inputs)
-            last_hidden_state = (
-                outputs.last_hidden_state
-                if hasattr(outputs, "last_hidden_state")
-                else outputs[0]
+        try:
+            embeddings_np = _encode_batch(
+                batch_texts, tokenizer, model, device, max_length
+            )
+            sorted_embeddings.append(embeddings_np)
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            # OOM or CUDA error: retry with half batch size
+            torch.cuda.empty_cache()
+            print(f"\nRank {rank}: Batch {batch_idx} OOM ({actual_bs} items), "
+                  f"retrying with half batch...")
+            half = actual_bs // 2
+            try:
+                emb1 = _encode_batch(
+                    batch_texts[:half], tokenizer, model, device, max_length
+                )
+                emb2 = _encode_batch(
+                    batch_texts[half:], tokenizer, model, device, max_length
+                )
+                sorted_embeddings.append(np.vstack([emb1, emb2]))
+            except Exception as e2:
+                # Still failed: fill with zeros and record
+                print(f"Rank {rank}: Batch {batch_idx} FAILED even after "
+                      f"retry: {e2}. Filling with zeros.")
+                torch.cuda.empty_cache()
+                dim = sorted_embeddings[-1].shape[1] if sorted_embeddings else 896
+                sorted_embeddings.append(np.zeros((actual_bs, dim), dtype=np.float32))
+                failed_indices.extend(list(range(i, i + actual_bs)))
+
+        # Periodic checkpoint
+        if (batch_idx + 1) % CHECKPOINT_EVERY == 0:
+            _save_emb_checkpoint(
+                sorted_embeddings, batch_idx + 1, failed_indices,
+                ckpt_file, ckpt_meta_file, batch_size
             )
 
-            # Mean pooling
-            attention_mask = inputs["attention_mask"]
-            mask_expanded = (
-                attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
-            )
-            sum_embeddings = torch.sum(last_hidden_state * mask_expanded, 1)
-            sum_mask = torch.clamp(mask_expanded.sum(1), min=1e-9)
-            embeddings = sum_embeddings / sum_mask
+    sorted_all = np.vstack(sorted_embeddings) if sorted_embeddings else np.array([])
 
-            # L2 normalization
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            embeddings_np = embeddings.cpu().numpy().astype(np.float32)
-            all_embeddings.append(embeddings_np)
-
-    embeddings_array = np.vstack(all_embeddings) if all_embeddings else np.array([])
+    # Unsort: restore original order so embeddings align with item_ids
+    embeddings_array = np.empty_like(sorted_all)
+    for new_pos, orig_pos in enumerate(sorted_indices):
+        embeddings_array[orig_pos] = sorted_all[new_pos]
     elapsed = time.time() - start_time
     print(f"Rank {rank}: Done in {elapsed:.2f}s")
+    if failed_indices:
+        print(f"Rank {rank}: WARNING {len(failed_indices)} items failed, "
+              f"filled with zero embeddings")
 
     # Save to disk instead of passing through Queue (P3)
     np.save(os.path.join(tmp_dir, f"embeddings_rank{rank}.npy"), embeddings_array)
     with open(os.path.join(tmp_dir, f"item_ids_rank{rank}.json"), "w") as f:
         json.dump(item_ids, f)
+    # Save failed indices for downstream handling
+    if failed_indices:
+        with open(os.path.join(tmp_dir, f"failed_rank{rank}.json"), "w") as f:
+            json.dump(failed_indices, f)
+    # Clean up checkpoint after successful completion
+    for cf in [ckpt_file, ckpt_meta_file]:
+        if os.path.exists(cf):
+            os.remove(cf)
 
 
 def generate_embeddings_multi_gpu(
@@ -338,13 +455,13 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4/",
         help="Directory to save similarity results",
     )
     parser.add_argument(

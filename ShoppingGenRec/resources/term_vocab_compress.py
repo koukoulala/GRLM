@@ -231,7 +231,7 @@ def count_slot_terms(id2meta):
 class TermVocabCompressor:
     """Per-slot term vocabulary compressor with FAISS-backed NN search."""
 
-    def __init__(self, artifact_dir, min_freq=3, map_threshold=0.90,
+    def __init__(self, artifact_dir, min_freq=3, map_threshold=0.95,
                  digit_threshold=0.95, cluster_threshold=0.95,
                  embed_model="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3-Embedding-0.6B",
                  batch_size=2048, audit_min_items=1000):
@@ -419,12 +419,19 @@ class TermVocabCompressor:
                     k_nn = min(20, len(um_terms))
                     um_sims, um_ids = um_index.search(um_embs, k_nn)
 
-                    # Union-Find clustering
+                    # Union-Find clustering (with number-safety guard)
                     uf = UnionFind(len(um_terms))
                     for a in range(len(um_terms)):
                         for nn in range(1, k_nn):
                             if um_sims[a][nn] >= self.cluster_threshold:
-                                uf.union(a, um_ids[a][nn])
+                                b = um_ids[a][nn]
+                                # Block merging terms with different numbers
+                                t_a, t_b = um_terms[a], um_terms[b]
+                                if _has_digit(t_a) or _has_digit(t_b):
+                                    continue
+                                if len(t_a) <= 2 or len(t_b) <= 2:
+                                    continue
+                                uf.union(a, b)
 
                     for comp in uf.components():
                         if len(comp) <= 1:
@@ -894,8 +901,8 @@ def parse_args():
     )
     p.add_argument("--min_freq", type=int, default=3,
                    help="Active vocab frequency threshold (default: 3)")
-    p.add_argument("--threshold", type=float, default=0.90,
-                   help="Cosine sim threshold for text-term mapping (default: 0.90)")
+    p.add_argument("--threshold", type=float, default=0.95,
+                   help="Cosine sim threshold for text-term mapping (default: 0.95)")
     p.add_argument("--digit_threshold", type=float, default=0.95,
                    help="Cosine sim threshold for digit-containing terms (default: 0.95)")
     p.add_argument("--cluster_threshold", type=float, default=0.95,
