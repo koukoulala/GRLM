@@ -666,7 +666,7 @@ def parse_args():
     p.add_argument("--max_events", type=int, default=500)
     p.add_argument("--max_recent_events", type=int, default=500)
     p.add_argument("--num_gpus", type=int, default=None)
-    p.add_argument("--gpu_memory_utilization", type=float, default=0.85)
+    p.add_argument("--gpu_memory_utilization", type=float, default=0.75)
     p.add_argument("--max_model_len", type=int, default=32000)
     p.add_argument("--max_tokens", type=int, default=12000)
     p.add_argument("--item_file", type=str,
