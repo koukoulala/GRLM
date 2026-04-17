@@ -685,6 +685,7 @@ def remap_slm_outputs(slm_rows, new_tid2item_id, orig_tid2item_id,
         "products_from_new": 0,  # products matched via new mapping
         "products_from_orig": 0,  # products matched via original mapping
         "journeys_dropped": 0, "products_deduped": 0,
+        "total_journeys": 0,  # total journeys processed (before drop)
         "users_with_all_fields": 0, "users_no_valid_result": 0,
     }
     remapped_rows = []
@@ -710,6 +711,7 @@ def remap_slm_outputs(slm_rows, new_tid2item_id, orig_tid2item_id,
         user_has_new = False
         mapped = {"ContinuedJourneys": []}
         for j in jd.get("ContinuedJourneys", []):
+            stats["total_journeys"] += 1
             mj = {"Title": j.get("Title", ""), "Reason": j.get("Reason", ""),
                   "Products": []}
             journey_has_new = False
@@ -884,13 +886,23 @@ def print_remap_comparison(task, orig_stats, remap_stats):
 
     # Impact summary
     print(f"\n  --- New Product Impact ---")
-    print(f"  {'Products from NEW mapping':<50s} {remap_stats.get('products_from_new',0):>18,}")
-    print(f"  {'Products from ORIG mapping':<50s} {remap_stats.get('products_from_orig',0):>18,}")
-    print(f"  {'Users affected (>= 1 new product)':<50s} {remap_stats.get('users_affected',0):>18,}")
-    print(f"  {'Journeys affected (>= 1 new product)':<50s} {remap_stats.get('journeys_affected',0):>18,}")
-    print(f"  {'Products deduped':<50s} {remap_stats.get('products_deduped',0):>18,}")
-    print(f"  {'Journeys dropped (empty)':<50s} {remap_stats.get('journeys_dropped',0):>18,}")
-    print(f"  {'Users with valid result':<50s} {remap_stats.get('users_with_all_fields',0):>18,}")
+    pn = remap_stats.get('products_from_new', 0)
+    po = remap_stats.get('products_from_orig', 0)
+    pt = max(pn + po, 1)
+    ua = remap_stats.get('users_affected', 0)
+    ut = max(remap_stats.get('total_users', 0), 1)
+    ja = remap_stats.get('journeys_affected', 0)
+    jt = max(remap_stats.get('total_journeys', 0), 1)
+    pd = remap_stats.get('products_deduped', 0)
+    jd = remap_stats.get('journeys_dropped', 0)
+    uv = remap_stats.get('users_with_all_fields', 0)
+    print(f"  {'Products from NEW mapping':<50s} {f'{pn:,} ({pn/pt*100:.1f}%)':>18s}")
+    print(f"  {'Products from ORIG mapping':<50s} {f'{po:,} ({po/pt*100:.1f}%)':>18s}")
+    print(f"  {'Users affected (>= 1 new product)':<50s} {f'{ua:,} ({ua/ut*100:.1f}%)':>18s}")
+    print(f"  {'Journeys affected (>= 1 new product)':<50s} {f'{ja:,} ({ja/jt*100:.1f}%)':>18s}")
+    print(f"  {'Products deduped':<50s} {f'{pd:,} ({pd/rt*100:.1f}%)':>18s}")
+    print(f"  {'Journeys dropped (empty)':<50s} {f'{jd:,} ({jd/jt*100:.1f}%)':>18s}")
+    print(f"  {'Users with valid result':<50s} {f'{uv:,} ({uv/ut*100:.1f}%)':>18s}")
 
 
 # === Args ===
@@ -916,7 +928,8 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-1000_termid_pretrained/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/demo_ckpt/match_6_reorder_tid/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-800/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/journey_v4_stage2_v1sample_epoch3_checkpoint-1425/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/journey_v4_stage2_v1sample_epoch3_checkpoint-1425/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/s2_ckpt1425_v4_copilot_shopping_homepage_sample/",
         help="Directory to save evaluation output files",
     )
     p.add_argument("--tid2item_id_file", type=str,
@@ -944,14 +957,17 @@ def parse_args():
         help="Path to a single new product tid2item_id.json from s7. "
              "If set, overrides --new_tid_base_dir / --new_tid_thresholds.")
     p.add_argument("--new_tid_base_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products_3",
         help="Base directory of s7 output (contains threshold_X.XX/ subdirs)")
     p.add_argument("--new_tid_thresholds", type=float, nargs="+",
-        default=[0.80, 0.85, 0.90],
+        default=[0.80, 0.85, 0.90, 0.95],
         help="Similarity thresholds to evaluate in remap mode. "
              "For each threshold, reads <new_tid_base_dir>/threshold_X.XX/tid2item_id.json "
              "and saves results to <output_dir>/remapped_X.XX/. "
-             "Default: 0.80 0.85 0.90")
+             "Default: 0.80 0.85 0.90 0.95")
+    p.add_argument("--remap_output_suffix", type=str, default="_v3",
+        help="Optional suffix appended to remap output folder name. "
+             "E.g. '_v2' -> remapped_thresh_0.80_v2/. Empty string means no suffix.")
     return p.parse_args()
 
 # === Main ===
@@ -1004,16 +1020,21 @@ def main():
                 orig_summary = json.load(f)
             print(f"  Loaded original eval_summary.json")
 
-        # Read SLM TSV files once (shared across thresholds)
+        # Auto-detect available tasks from output_dir
         slm_data = {}  # task_name -> list of row dicts
-        for task_name in ["event2journey", "profile2journey"]:
+        all_tasks = ["event2journey", "profile2journey"]
+        for task_name in all_tasks:
             slm_file = os.path.join(args.output_dir, f"{task_name}_slm_output.tsv")
             if os.path.isfile(slm_file):
                 print(f"  Reading: {slm_file}")
                 slm_data[task_name] = read_slm_tsv(slm_file)
                 print(f"    Loaded {len(slm_data[task_name]):,} rows")
-            else:
-                print(f"  [SKIP] {slm_file} not found")
+        if not slm_data:
+            print(f"  [ERROR] No *_slm_output.tsv found in {args.output_dir}, nothing to remap.")
+            return
+        found_tasks = list(slm_data.keys())
+        skipped = [t for t in all_tasks if t not in slm_data]
+        print(f"  Found tasks: {found_tasks}" + (f", skipped (no data): {skipped}" if skipped else ""))
 
         # Process each threshold
         for thresh_label, new_tid_file in tid_configs:
@@ -1031,14 +1052,12 @@ def main():
                 new_tid2item_id = json.load(f)
             print(f"    New TIDs: {len(new_tid2item_id):,}")
 
+            suffix = f"_{args.remap_output_suffix}" if args.remap_output_suffix else ""
             remap_output_dir = os.path.join(args.output_dir,
-                                            f"remapped_{thresh_label}")
+                                            f"remapped_thresh_{thresh_label}{suffix}")
             os.makedirs(remap_output_dir, exist_ok=True)
 
-            for task_name in ["event2journey", "profile2journey"]:
-                if task_name not in slm_data:
-                    continue
-
+            for task_name in found_tasks:
                 print(f"\n{'='*70}")
                 print(f"  {task_name} (threshold={thresh_label})")
                 print(f"{'='*70}")

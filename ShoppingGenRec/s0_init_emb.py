@@ -55,7 +55,7 @@ def prepare_text_for_embedding(item: Dict, max_field_len: int = 500) -> str:
     Each field value is truncated to max_field_len characters.
     """
     text_parts = []
-    for field in ["title", "description", "categories"]:
+    for field in ["categories", "title", "description"]:
         val = item.get(field, "")
         if val:
             if len(val) > max_field_len:
@@ -103,6 +103,62 @@ def _encode_batch(batch_texts, tokenizer, model, device, max_length):
         embeddings = sum_embeddings / sum_mask
         embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
         return embeddings.cpu().numpy().astype(np.float32)
+
+
+def _encode_batch_with_retry(batch_texts, tokenizer, model, device, max_length,
+                             rank=0):
+    """Encode texts with recursive batch-halving on OOM.
+
+    Keeps halving the batch until size=1. Only records failure for
+    individual items that truly cannot be encoded.
+
+    Returns:
+        embeddings: np.ndarray of shape (N, dim) — successful items.
+            Failed items are filled with NaN so they can be identified later.
+        failed_local_indices: list of indices (0-based within batch_texts)
+            that failed even at batch_size=1.
+    """
+    try:
+        return _encode_batch(batch_texts, tokenizer, model, device, max_length), []
+    except (torch.cuda.OutOfMemoryError, RuntimeError):
+        torch.cuda.empty_cache()
+
+    n = len(batch_texts)
+    if n == 1:
+        # Single item still fails — record as failed
+        print(f"Rank {rank}: Single item FAILED, marking as NaN")
+        return None, [0]
+
+    # Halve and recurse
+    mid = n // 2
+    print(f"Rank {rank}: OOM with {n} items, splitting to {mid} + {n - mid}")
+
+    emb1, fail1 = _encode_batch_with_retry(
+        batch_texts[:mid], tokenizer, model, device, max_length, rank)
+    emb2, fail2 = _encode_batch_with_retry(
+        batch_texts[mid:], tokenizer, model, device, max_length, rank)
+
+    # Shift fail2 indices by mid
+    fail2_shifted = [idx + mid for idx in fail2]
+    all_failed = fail1 + fail2_shifted
+
+    # Build combined result
+    if emb1 is not None and emb2 is not None:
+        combined = np.vstack([emb1, emb2])
+    elif emb1 is not None:
+        # emb2 is None (single-item failure) — fill NaN placeholder
+        dim = emb1.shape[1]
+        placeholder = np.full((n - mid, dim), np.nan, dtype=np.float32)
+        combined = np.vstack([emb1, placeholder])
+    elif emb2 is not None:
+        dim = emb2.shape[1]
+        placeholder = np.full((mid, dim), np.nan, dtype=np.float32)
+        combined = np.vstack([placeholder, emb2])
+    else:
+        # Both halves fully failed
+        return None, all_failed
+
+    return combined, all_failed
 
 
 def _save_emb_checkpoint(sorted_embeddings, next_batch_idx, failed_indices,
@@ -194,33 +250,21 @@ def process_batch_on_gpu(
         batch_texts = texts_sorted[i : i + batch_size]
         actual_bs = len(batch_texts)
 
-        try:
-            embeddings_np = _encode_batch(
-                batch_texts, tokenizer, model, device, max_length
-            )
-            sorted_embeddings.append(embeddings_np)
-        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
-            # OOM or CUDA error: retry with half batch size
-            torch.cuda.empty_cache()
-            print(f"\nRank {rank}: Batch {batch_idx} OOM ({actual_bs} items), "
-                  f"retrying with half batch...")
-            half = actual_bs // 2
-            try:
-                emb1 = _encode_batch(
-                    batch_texts[:half], tokenizer, model, device, max_length
-                )
-                emb2 = _encode_batch(
-                    batch_texts[half:], tokenizer, model, device, max_length
-                )
-                sorted_embeddings.append(np.vstack([emb1, emb2]))
-            except Exception as e2:
-                # Still failed: fill with zeros and record
-                print(f"Rank {rank}: Batch {batch_idx} FAILED even after "
-                      f"retry: {e2}. Filling with zeros.")
-                torch.cuda.empty_cache()
-                dim = sorted_embeddings[-1].shape[1] if sorted_embeddings else 896
-                sorted_embeddings.append(np.zeros((actual_bs, dim), dtype=np.float32))
-                failed_indices.extend(list(range(i, i + actual_bs)))
+        emb_result, batch_failed = _encode_batch_with_retry(
+            batch_texts, tokenizer, model, device, max_length, rank
+        )
+        if emb_result is not None:
+            sorted_embeddings.append(emb_result)
+        else:
+            # Entire batch failed (all items) — use NaN placeholder
+            dim = sorted_embeddings[-1].shape[1] if sorted_embeddings else 896
+            sorted_embeddings.append(
+                np.full((actual_bs, dim), np.nan, dtype=np.float32))
+        if batch_failed:
+            # Map local batch indices to global sorted indices
+            failed_indices.extend([i + fi for fi in batch_failed])
+            print(f"Rank {rank}: Batch {batch_idx}: "
+                  f"{len(batch_failed)} items failed")
 
         # Periodic checkpoint
         if (batch_idx + 1) % CHECKPOINT_EVERY == 0:
@@ -237,11 +281,23 @@ def process_batch_on_gpu(
         embeddings_array[orig_pos] = sorted_all[new_pos]
     elapsed = time.time() - start_time
     print(f"Rank {rank}: Done in {elapsed:.2f}s")
-    if failed_indices:
-        print(f"Rank {rank}: WARNING {len(failed_indices)} items failed, "
-              f"filled with zero embeddings")
 
-    # Save to disk instead of passing through Queue (P3)
+    # Filter out failed items (NaN rows) — exclude them entirely
+    if failed_indices:
+        nan_mask = np.any(np.isnan(embeddings_array), axis=1)
+        n_failed = int(nan_mask.sum())
+        if n_failed > 0:
+            failed_item_ids = [item_ids[j] for j in range(len(item_ids))
+                               if nan_mask[j]]
+            success_mask = ~nan_mask
+            embeddings_array = embeddings_array[success_mask]
+            item_ids = [item_ids[j] for j in range(len(item_ids))
+                        if not nan_mask[j]]
+            print(f"Rank {rank}: Excluded {n_failed} failed items, "
+                  f"keeping {len(item_ids):,} successful items")
+            with open(os.path.join(tmp_dir, f"failed_ids_rank{rank}.json"), "w") as f:
+                json.dump(failed_item_ids, f)
+
     np.save(os.path.join(tmp_dir, f"embeddings_rank{rank}.npy"), embeddings_array)
     with open(os.path.join(tmp_dir, f"item_ids_rank{rank}.json"), "w") as f:
         json.dump(item_ids, f)
@@ -390,38 +446,73 @@ def compute_similarities_faiss(
 
     # Build IVFFlat index for inner product (cosine sim on normalized vecs)
     quantizer = faiss.IndexFlatIP(dim)
-    index = faiss.IndexIVFFlat(quantizer, dim, effective_nlist, faiss.METRIC_INNER_PRODUCT)
+    cpu_index = faiss.IndexIVFFlat(quantizer, dim, effective_nlist, faiss.METRIC_INNER_PRODUCT)
 
-    # Move index to GPU if available
-    if use_gpu:
-        if num_faiss_gpus > 1:
-            print(f"  Using all {num_faiss_gpus} GPUs for FAISS search")
-            index = faiss.index_cpu_to_all_gpus(index)
-        else:
-            gpu_res = faiss.StandardGpuResources()
-            index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, index)
-
+    # Train and add on CPU first, then try GPU for search
     print(f"  Training index on {n} vectors ...")
-    index.train(embeddings)
+    cpu_index.train(embeddings)
     print(f"  Adding {n} vectors to index ...")
-    index.add(embeddings)
-    index.nprobe = min(nprobe, effective_nlist)
+    cpu_index.add(embeddings)
+    cpu_index.nprobe = min(nprobe, effective_nlist)
+
+    # Try GPU search, fallback to CPU on error
+    index = cpu_index
+    if use_gpu:
+        try:
+            if num_faiss_gpus > 1:
+                print(f"  Moving index to all {num_faiss_gpus} GPUs...")
+                index = faiss.index_cpu_to_all_gpus(cpu_index)
+            else:
+                gpu_res = faiss.StandardGpuResources()
+                print(f"  Moving index to GPU {faiss_gpu_id}...")
+                index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, cpu_index)
+        except Exception as e:
+            print(f"  GPU FAISS failed: {e}")
+            print(f"  Falling back to CPU search")
+            index = cpu_index
+            use_gpu = False
 
     # Batch search: search k+1 to exclude self, then filter
     print(f"  Searching top-{k+1} neighbors for {num_queries} queries ...")
     search_k = min(k + 1, n)
-    # Search in batches to avoid OOM on very large datasets
     search_batch_size = 100000
     all_distances = []
     all_indices = []
     num_batches = (num_queries + search_batch_size - 1) // search_batch_size
+
+    search_failed_gpu = False
     for start in tqdm(range(0, num_queries, search_batch_size),
                       total=num_batches, desc="  FAISS search",
                       dynamic_ncols=True):
         end = min(start + search_batch_size, num_queries)
-        D_batch, I_batch = index.search(query_embeddings[start:end], search_k)
+        try:
+            D_batch, I_batch = index.search(query_embeddings[start:end], search_k)
+        except Exception as e:
+            if use_gpu and not search_failed_gpu:
+                print(f"\n  GPU search failed at batch {start}: {e}")
+                print(f"  Falling back to CPU for remaining batches...")
+                index = cpu_index
+                search_failed_gpu = True
+                D_batch, I_batch = index.search(
+                    query_embeddings[start:end], search_k)
+            else:
+                raise
         all_distances.append(D_batch)
         all_indices.append(I_batch)
+
+    if search_failed_gpu:
+        # Re-search the earlier GPU batches on CPU for consistency
+        print(f"  Re-searching first {len(all_distances)-1} batches on CPU "
+              f"for consistency...")
+        all_distances = []
+        all_indices = []
+        for start in range(0, num_queries, search_batch_size):
+            end = min(start + search_batch_size, num_queries)
+            D_batch, I_batch = cpu_index.search(
+                query_embeddings[start:end], search_k)
+            all_distances.append(D_batch)
+            all_indices.append(I_batch)
+
     D = np.vstack(all_distances)
     I = np.vstack(all_indices)
 
@@ -461,7 +552,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
@@ -476,7 +567,7 @@ def parse_args():
         default=None,
         help="Number of GPUs (default: all available)",
     )
-    parser.add_argument("--batch_size", type=int, default=256, help="Batch size per GPU")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size per GPU")
     parser.add_argument(
         "--top_k", type=int, default=8, help="Top-k similar items to compute"
     )
@@ -507,7 +598,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed",
+        default="",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()
