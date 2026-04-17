@@ -8,12 +8,14 @@ set -e
 # Uses standard verl main_ppo entry point with vLLM sampling (no beam search,
 # no CoT, no two-stage, no custom trainer/worker/rollout).
 #
-# Reward: format * (0.3 * instruction_following + 0.7 * diversity)
+# Reward: format * (0.2*IF + 0.3*diversity + 0.5*relevance) * volume_factor
+# Thinking mode: disabled (enable_thinking=False for Qwen3.5)
 #
-# Data (from ShoppingGenRec/s7_build_journey_rl_data.py):
-#   prompt  : instruction + input (user events / profile)
-#   answer  : ground-truth journey JSON (reference only)
-#   extra columns: required_journey_count, min_products_per_journey
+# Data (from ShoppingGenRec/s8_build_journey_rl_data.py):
+#   prompt  : JSON chat messages [{"role":"user","content":"..."}]
+#   answer  : ground-truth journey JSON (used for relevance reward)
+#   extra columns: required_journey_count, min_products_per_journey,
+#                  gt_journey_count, gt_total_products, task_type, user_id
 # ============================================================================
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
@@ -31,7 +33,7 @@ echo "Using configuration: N_NODES=$N_NODES, N_GPUS=$N_GPUS"
 # ============================================================================
 # Model & Data Configuration
 # ============================================================================
-export BASE_MODEL=${BASE_MODEL:-"/data/xiaoyukou/LLaMA-Factory/saves/grlm/journey_sft"}
+export BASE_MODEL=${BASE_MODEL:-"/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journeyv4_step1_le4096_ckpt4768/lora_journey_v4_step2_v1sample/sft_4gpus_lr2e-5_batch8_gradacc2_lorarank64_cut32768_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse_epoch3.0/checkpoint-1425-merged"}
 export DATA_DIR=${DATA_DIR:-"/data/xiaoyukou/GRLM/ShoppingGenRec/rl_data/journey"}
 export TRAIN_FILES=${TRAIN_FILES:-"$DATA_DIR/train.parquet"}
 export VAL_FILES=${VAL_FILES:-"$DATA_DIR/test.parquet"}
@@ -43,21 +45,21 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 # Training Hyperparameters
 # ============================================================================
 export LEARNING_RATE=${LEARNING_RATE:-1e-6}
-export KL_LOSS_COEF=${KL_LOSS_COEF:-0.001}
-export TEMPERATURE=${TEMPERATURE:-0.7}
+export KL_LOSS_COEF=${KL_LOSS_COEF:-0.005}
+export TEMPERATURE=${TEMPERATURE:-0.9}
 
 # ============================================================================
 # Batch Size Configuration
 # ============================================================================
 export USE_DYNAMIC_BSZ=${USE_DYNAMIC_BSZ:-True}
-export MAX_TOKENS_PER_GPU=${MAX_TOKENS_PER_GPU:-40960}
-export TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-4}
+export MAX_TOKENS_PER_GPU=${MAX_TOKENS_PER_GPU:-65536}
+export TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-8}
 
 # ============================================================================
 # Rollout Configuration — Standard Sampling (no beam search)
 # ============================================================================
 # Number of samples per prompt for GRPO advantage computation
-export ROLLOUT_N=${ROLLOUT_N:-4}
+export ROLLOUT_N=${ROLLOUT_N:-8}
 
 # Journey JSON can be very long — 8192 tokens max
 export RESPONSE_LENGTH=${RESPONSE_LENGTH:-8192}
@@ -66,16 +68,16 @@ export RESPONSE_LENGTH=${RESPONSE_LENGTH:-8192}
 # Output Configuration
 # ============================================================================
 export PROJECT_NAME=${PROJECT_NAME:-"Shopping_GRLM_Journey_RL"}
-export EXPERIMENT_NAME=${EXPERIMENT_NAME:-"grpo_journey_n4_div07"}
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-"grpo_journey_n8_rel05"}
 export OUTPUT_DIR=${OUTPUT_DIR:-"./outputs/shopping_grlm_journey"}
 export WANDB_MODE=${WANDB_MODE:-offline}
 
 # ============================================================================
 # Checkpoint & Logging Configuration
 # ============================================================================
-export SAVE_FREQ=${SAVE_FREQ:-100}
+export SAVE_FREQ=${SAVE_FREQ:-50}
 export MAX_CKPT_TO_KEEP=${MAX_CKPT_TO_KEEP:-3}
-export TEST_FREQ=${TEST_FREQ:-100}
+export TEST_FREQ=${TEST_FREQ:-80}
 export LOGGER_BACKEND=${LOGGER_BACKEND:-"[console,file]"}
 
 # ============================================================================
@@ -100,7 +102,7 @@ echo "Learning Rate: $LEARNING_RATE"
 echo "Temperature: $TEMPERATURE"
 echo "Max Response Length: $RESPONSE_LENGTH"
 echo "Mode: Standard vLLM sampling"
-echo "Reward: 0.3*IF + 0.7*Diversity (gated by format)"
+echo "Reward: format*(0.2*IF + 0.3*Div + 0.5*Rel)*vol"
 echo "Save Freq: $SAVE_FREQ steps"
 echo "Max Checkpoints: $MAX_CKPT_TO_KEEP"
 echo "Output Dir: $OUTPUT_DIR"
@@ -115,13 +117,13 @@ python3 -u -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=$TRAIN_FILES \
     data.val_files=$VAL_FILES \
-    data.max_prompt_length=10240 \
+    data.max_prompt_length=20000 \
     data.prompt_key='prompt' \
     data.shuffle=True \
     data.max_response_length=$RESPONSE_LENGTH \
     data.train_batch_size=$TRAIN_BATCH_SIZE \
     data.filter_overlong_prompts=True \
-    data.truncation='left' \
+    data.truncation='error' \
     data.custom_cls.path=$SCRIPT_DIR/shopping_grlm_journey_recipe.py \
     data.custom_cls.name=ShoppingGrlmJourneyDataset \
     data.reward_fn_key='data_source' \
@@ -151,7 +153,7 @@ python3 -u -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.dtype=bfloat16 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$ROLLOUT_TP_SIZE \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.7 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
     actor_rollout_ref.rollout.temperature=$TEMPERATURE \
     actor_rollout_ref.rollout.top_p=0.95 \
     actor_rollout_ref.rollout.do_sample=True \

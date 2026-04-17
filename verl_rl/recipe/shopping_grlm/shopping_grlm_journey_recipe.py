@@ -9,21 +9,51 @@ Model output format (JSON):
     ...
   ]}
 
-Reward signals:
-  1. Format reward  — valid JSON with ContinuedJourneys structure (0/1)
-  2. Instruction following — journey count + min-products compliance (0-1)
-  3. Diversity     — pairwise product-TID diversity within each journey (0-1)
+Reward formula:
+  score = format * (0.2*IF + 0.3*diversity + 0.5*relevance) * volume_factor
 
-Combined: score = format * (0.3 * instruction_following + 0.7 * diversity)
+Components:
+  1. Format (0 / 0.6 / 0.8 / 1.0)
+     - json.loads succeeds directly → 1.0
+     - succeeds after removing markdown fences → 0.8
+     - succeeds via brace matching → 0.6
+     - fails → 0.0
 
-Data format (from s7_build_journey_rl_data.py parquet):
-  - prompt                    : str   (instruction + input, wrapped as user message)
-  - answer                    : str   (ground-truth journey JSON for reference)
+  2. Instruction Following (IF, 0–1)
+     Journey count sub-score (50%):
+       - N specified:   min(1, actual / N)      (monotonic, more is better)
+       - N unspecified:  min(1, actual / gt_count) (use GT as soft target)
+     Products sub-score (50%):
+       - Per journey: min(n_products / M, 1.0), averaged across journeys
+
+  3. Diversity (0–1)
+     Per journey: 1 − mean(pairwise TID word-set overlap)
+       overlap(A, B) = |A ∩ B| / max(|A|, |B|)
+     Averaged across all journeys.
+
+  4. Relevance (0–1)
+     Journey-level best-match alignment between GT and prediction:
+       For each GT journey g, find pred journey p with max product overlap.
+       journey_relevance(g, p) = matched_products / |g.ProductTIDs|
+         where a product matches if Jaccard(pred_tid, gt_tid) ≥ 0.5
+       relevance = mean(journey_relevance) over all GT journeys.
+
+  5. Volume Factor (0–1)
+     min(1, total_predicted_products / 20)
+     Prevents reward hacking via minimal output.
+
+Data format (from s8_build_journey_rl_data.py parquet):
+  - prompt                    : str   (JSON chat messages)
+  - answer                    : str   (ground-truth journey JSON)
   - data_source               : str   ("shopping_journey")
+  - task_type                 : str   ("event2journey" | "profile2journey")
   - required_journey_count    : int   (N from instruction, -1 = not specified)
   - min_products_per_journey  : int   (M from instruction)
+  - gt_journey_count          : int   (number of journeys in GT)
+  - gt_total_products         : int   (total products in GT)
 
 This recipe uses standard vLLM sampling (no beam search, no CoT, no two-stage).
+Thinking mode is disabled (enable_thinking=False) for Qwen3.5.
 """
 
 from __future__ import annotations
@@ -206,7 +236,8 @@ class ShoppingGrlmJourneyDataset(Dataset):
         def filter_fn(row):
             messages = row[prompt_key]
             prompt_text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
             )
             return len(tokenizer.encode(prompt_text)) <= max_length
 
@@ -252,9 +283,10 @@ class ShoppingGrlmJourneyDataset(Dataset):
             except (ValueError, SyntaxError):
                 messages = [{"role": "user", "content": messages}]
 
-        # Tokenize
+        # Tokenize — thinking mode disabled for direct JSON generation
         raw_prompt = self.tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=False
+            messages, add_generation_prompt=True, tokenize=False,
+            enable_thinking=False,
         )
         model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
         input_ids = model_inputs.pop("input_ids")
@@ -297,6 +329,8 @@ class ShoppingGrlmJourneyDataset(Dataset):
         row["extra_info"] = {
             "required_journey_count": row.pop("required_journey_count", -1),
             "min_products_per_journey": row.pop("min_products_per_journey", 8),
+            "gt_journey_count": row.pop("gt_journey_count", 0),
+            "gt_total_products": row.pop("gt_total_products", 0),
             "task_type": row.pop("task_type", ""),
             "index": index,
         }
@@ -317,15 +351,18 @@ class ShoppingGrlmJourneyDataset(Dataset):
 def _extract_json_from_text(text: str):
     """Robustly extract a JSON object from potentially noisy model output.
 
-    Handles markdown fences, leading/trailing text, and minor escaping issues.
-    Returns parsed dict or None.
+    Returns (parsed_dict, parse_quality) where parse_quality is:
+      1.0  — json.loads succeeded on raw text
+      0.8  — succeeded after removing markdown fences
+      0.6  — succeeded via brace matching
+      None — all methods failed (returns (None, 0.0))
     """
     if not isinstance(text, str):
-        return None
+        return None, 0.0
 
     text_stripped = text.strip()
     try:
-        return json.loads(text_stripped)
+        return json.loads(text_stripped), 1.0
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -333,14 +370,14 @@ def _extract_json_from_text(text: str):
     cleaned = re.sub(r"```(?:json)?\s*", "", text_stripped)
     cleaned = re.sub(r"```\s*$", "", cleaned).strip()
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned), 0.8
     except (json.JSONDecodeError, TypeError):
         pass
 
     # Find first { ... } pair via brace matching
     brace_start = cleaned.find("{")
     if brace_start == -1:
-        return None
+        return None, 0.0
     depth = 0
     for i in range(brace_start, len(cleaned)):
         if cleaned[i] == "{":
@@ -349,26 +386,25 @@ def _extract_json_from_text(text: str):
             depth -= 1
             if depth == 0:
                 try:
-                    return json.loads(cleaned[brace_start : i + 1])
+                    return json.loads(cleaned[brace_start : i + 1]), 0.6
                 except json.JSONDecodeError:
-                    return None
-    return None
+                    return None, 0.0
+    return None, 0.0
 
 
 def _parse_journeys(text: str):
     """Parse journey JSON from model output.
 
-    Returns list of dicts, each with keys:
-      title, reason, journey_type, product_tids (list of word-lists)
-    or None if parsing fails completely.
+    Returns (list_of_journey_dicts, format_score) or (None, 0.0).
+    Each journey dict has keys: title, reason, journey_type, product_tids.
     """
-    obj = _extract_json_from_text(text)
+    obj, fmt_score = _extract_json_from_text(text)
     if obj is None:
-        return None
+        return None, 0.0
 
     journeys_list = obj.get("ContinuedJourneys", [])
     if not isinstance(journeys_list, list):
-        return None
+        return None, 0.0
 
     parsed = []
     for j in journeys_list:
@@ -391,36 +427,36 @@ def _parse_journeys(text: str):
             "product_tids": valid_tids,
         })
 
-    return parsed if parsed else None
+    if not parsed:
+        return None, 0.0
+    # Must have at least one journey with at least one product
+    if not any(j["product_tids"] for j in parsed):
+        return None, 0.0
+    return parsed, fmt_score
 
 
 # ---------- Individual reward components ----------
 
 
 def format_reward(prediction: str) -> float:
-    """1.0 if prediction is valid journey JSON with >= 1 journey & >= 1 product."""
-    journeys = _parse_journeys(prediction)
-    if journeys is None:
-        return 0.0
-    for j in journeys:
-        if j["product_tids"]:
-            return 1.0
-    return 0.0
+    """Graded format reward: 1.0 / 0.8 / 0.6 / 0.0 based on parse difficulty."""
+    _, fmt_score = _parse_journeys(prediction)
+    return fmt_score
 
 
 def instruction_following_reward(prediction: str, extra_info: dict) -> float:
     """Score compliance with journey-count and min-products requirements.
 
-    Journey count sub-score (50 %):
-      - If N specified: max(0, 1 - |actual - N| / N)
-      - If N not specified: 1.0 if journeys > 0, else 0.0
+    Journey count sub-score (50%):
+      - N specified:   min(1, actual / N)  — monotonic, more is not penalized
+      - N unspecified: min(1, actual / gt_count)  — GT count as soft target
 
-    Products-per-journey sub-score (50 %):
+    Products-per-journey sub-score (50%):
       - Per journey: min(actual_products / M, 1.0), averaged across journeys
 
     Returns 0.0 – 1.0.
     """
-    journeys = _parse_journeys(prediction)
+    journeys, _ = _parse_journeys(prediction)
     if journeys is None:
         return 0.0
 
@@ -430,15 +466,17 @@ def instruction_following_reward(prediction: str, extra_info: dict) -> float:
     min_products = extra_info.get("min_products_per_journey", 8)
     if hasattr(min_products, "item"):
         min_products = min_products.item()
+    gt_journey_count = extra_info.get("gt_journey_count", 0)
+    if hasattr(gt_journey_count, "item"):
+        gt_journey_count = gt_journey_count.item()
 
     num_journeys = len(journeys)
 
     # --- Journey count sub-score ---
     if required_count > 0:
-        if num_journeys == required_count:
-            count_score = 1.0
-        else:
-            count_score = max(0.0, 1.0 - abs(num_journeys - required_count) / required_count)
+        count_score = min(1.0, num_journeys / required_count)
+    elif gt_journey_count > 0:
+        count_score = min(1.0, num_journeys / gt_journey_count)
     else:
         count_score = 1.0 if num_journeys > 0 else 0.0
 
@@ -462,14 +500,13 @@ def diversity_reward(prediction: str) -> float:
     """Compute product-TID diversity within each journey.
 
     For each journey with > 1 product:
-      - Build word-sets for each ProductTID
-      - Compute pairwise overlap = |intersection| / max(|A|, |B|)
-      - diversity = 1 − mean(pairwise_overlap)
+      overlap(A, B) = |A ∩ B| / max(|A|, |B|)
+      diversity = 1 − mean(pairwise overlap)
     Single-product journeys get diversity 1.0.
 
     Returns average diversity across all journeys (0.0 – 1.0).
     """
-    journeys = _parse_journeys(prediction)
+    journeys, _ = _parse_journeys(prediction)
     if journeys is None:
         return 0.0
 
@@ -505,11 +542,100 @@ def diversity_reward(prediction: str) -> float:
     return sum(journey_divs) / len(journey_divs)
 
 
+def _tid_to_wordset(tid: list[str]) -> frozenset:
+    """Convert a TID word list to a lowercased frozenset for matching."""
+    return frozenset(w.lower().strip() for w in tid if w.strip())
+
+
+def _jaccard(a: frozenset, b: frozenset) -> float:
+    """Jaccard similarity between two sets."""
+    if not a and not b:
+        return 1.0
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+def relevance_reward(prediction: str, ground_truth: str) -> float:
+    """Journey-level relevance: best-match alignment between GT and prediction.
+
+    For each GT journey g, find the predicted journey p with maximum
+    product TID overlap. Then compute per-journey product recall:
+      matched = number of g's products with a Jaccard ≥ 0.5 match in p
+      journey_relevance = matched / |g.products|
+
+    Returns mean journey_relevance over all GT journeys (0.0 – 1.0).
+    """
+    pred_journeys, _ = _parse_journeys(prediction)
+    gt_journeys, _ = _parse_journeys(ground_truth)
+
+    if gt_journeys is None or not gt_journeys:
+        return 1.0 if pred_journeys else 0.0
+    if pred_journeys is None or not pred_journeys:
+        return 0.0
+
+    # Pre-compute word-sets for all predicted products per journey
+    pred_journey_sets = []
+    for pj in pred_journeys:
+        pred_journey_sets.append([_tid_to_wordset(tid) for tid in pj["product_tids"]])
+
+    journey_relevances = []
+    for gj in gt_journeys:
+        gt_product_sets = [_tid_to_wordset(tid) for tid in gj["product_tids"]]
+        if not gt_product_sets:
+            journey_relevances.append(1.0)
+            continue
+
+        # Find best-matching predicted journey (max product overlap)
+        best_recall = 0.0
+        for p_sets in pred_journey_sets:
+            if not p_sets:
+                continue
+            # Count matched GT products (each GT product matched at most once)
+            matched = 0
+            used_pred = set()
+            for gt_set in gt_product_sets:
+                best_j, best_idx = 0.0, -1
+                for pidx, p_set in enumerate(p_sets):
+                    if pidx in used_pred:
+                        continue
+                    j = _jaccard(gt_set, p_set)
+                    if j > best_j:
+                        best_j = j
+                        best_idx = pidx
+                if best_j >= 0.5 and best_idx >= 0:
+                    matched += 1
+                    used_pred.add(best_idx)
+            recall = matched / len(gt_product_sets)
+            if recall > best_recall:
+                best_recall = recall
+
+        journey_relevances.append(best_recall)
+
+    return sum(journey_relevances) / len(journey_relevances)
+
+
+def volume_factor(prediction: str, threshold: int = 20) -> float:
+    """Penalize predictions with too few total products.
+
+    factor = min(1, total_products / threshold)
+    """
+    journeys, _ = _parse_journeys(prediction)
+    if journeys is None:
+        return 0.0
+    total = sum(len(j["product_tids"]) for j in journeys)
+    if threshold <= 0:
+        return 1.0
+    return min(1.0, total / threshold)
+
+
 # ---------- Main compute_score entry point ----------
 
-# Weights: 0.3 instruction-following + 0.7 diversity
-_W_IF = 0.3
-_W_DIV = 0.7
+_W_IF = 0.2
+_W_DIV = 0.3
+_W_REL = 0.5
+_VOLUME_THRESHOLD = 20
 
 
 def compute_score(
@@ -520,16 +646,17 @@ def compute_score(
 ) -> dict[str, float]:
     """Compute combined reward for journey generation.
 
-    score = format * (0.3 * instruction_following + 0.7 * diversity)
+    score = format * (0.2*IF + 0.3*diversity + 0.5*relevance) * volume_factor
 
     Args:
         data_source: Data source identifier (e.g. "shopping_journey").
         solution_str: Model-generated response text.
-        ground_truth: Reference journey JSON (kept for logging, not used in reward).
-        extra_info: Dict with required_journey_count, min_products_per_journey.
+        ground_truth: Reference journey JSON (used for relevance reward).
+        extra_info: Dict with required_journey_count, min_products_per_journey,
+                    gt_journey_count, gt_total_products.
 
     Returns:
-        Dict with score and per-component metrics.
+        Dict with score and all per-component metrics for logging.
     """
     prediction = solution_str
     info = extra_info if extra_info is not None else {}
@@ -537,12 +664,16 @@ def compute_score(
     fmt = format_reward(prediction)
     ifr = instruction_following_reward(prediction, info)
     div = diversity_reward(prediction)
+    rel = relevance_reward(prediction, ground_truth)
+    vol = volume_factor(prediction, _VOLUME_THRESHOLD)
 
-    combined = fmt * (_W_IF * ifr + _W_DIV * div)
+    combined = fmt * (_W_IF * ifr + _W_DIV * div + _W_REL * rel) * vol
 
     return {
         "score": combined,
         "format_reward": fmt,
         "instruction_following_reward": ifr,
         "diversity_reward": div,
+        "relevance_reward": rel,
+        "volume_factor": vol,
     }
