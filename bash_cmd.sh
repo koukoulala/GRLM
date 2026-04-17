@@ -69,3 +69,4 @@ nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py \
   > logs/merge_tsv_profile2journey.out 2>&1 &
 
 nohup python -u s4_merge_sft_data.py --build_test_tsv > logs/s4_build_test.out 2>&1 &
+nohup python -u s7_assign_tid_by_similarity.py > logs/s7_assign_tid_full.out 2>&1 &
