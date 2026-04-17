@@ -601,7 +601,8 @@ def parse_args():
     parser.add_argument(
         "--new_item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/diff_1m_item.jsonl",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/diff_1m_item.jsonl",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/s2_ckpt1425_0408Index_item.json"
         help="Path to new product metadata file (JSON or JSONL format)",
     )
     parser.add_argument(
@@ -620,14 +621,14 @@ def parse_args():
     parser.add_argument(
         "--fallback_tid2item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/tid2item_id.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/s2_ckpt1425_0408Index_tid2item_id.json",
         help="Path to fallback tid2item_id.json (TID -> [GIDs]) for "
              "products below the similarity threshold",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products_3/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products_full/",
         help="Directory to save all output files",
     )
     # --- Embedding model ---
@@ -657,7 +658,7 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=128,
+        default=256,
         help="Batch size per GPU for embedding generation",
     )
     parser.add_argument(
@@ -667,6 +668,13 @@ def parse_args():
         help="Maximum token length for tokenizer truncation",
     )
     # --- FAISS settings ---
+    parser.add_argument(
+        "--faiss_top_k",
+        type=int,
+        default=3,
+        help="Number of nearest neighbors to retrieve from FAISS for "
+             "reranking (default: 3)",
+    )
     parser.add_argument(
         "--faiss_index_file",
         type=str,
@@ -1142,7 +1150,7 @@ def main():
     # Stage 3: ANN Search — Find Nearest Existing Product
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Stage 3: ANN Search (Top-5 Nearest Existing Products)")
+    print(f"Stage 3: ANN Search (Top-{args.faiss_top_k} Nearest Existing Products)")
     print("=" * 60)
 
     # FAISS search: try GPU first (much faster), fallback to CPU if OOM
@@ -1157,7 +1165,7 @@ def main():
             gpu_index = faiss.index_cpu_to_gpu(res, 0, index, co)
             print(f"  Moved to GPU 0 with float16, starting search...")
             search_start = time.time()
-            D, I = search_nearest_neighbors(gpu_index, new_embeddings, k=5,
+            D, I = search_nearest_neighbors(gpu_index, new_embeddings, k=args.faiss_top_k,
                                             batch_size=50000)
             search_elapsed = time.time() - search_start
             del gpu_index
@@ -1170,7 +1178,7 @@ def main():
     if not use_gpu_search:
         print(f"  Using CPU FAISS search (index ntotal={index.ntotal:,})")
         search_start = time.time()
-        D, I = search_nearest_neighbors(index, new_embeddings, k=5)
+        D, I = search_nearest_neighbors(index, new_embeddings, k=args.faiss_top_k)
         search_elapsed = time.time() - search_start
 
     # Print raw FAISS top-1 statistics
