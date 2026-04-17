@@ -602,7 +602,7 @@ def parse_args():
         "--new_item_file",
         type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/diff_1m_item.jsonl",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/s2_ckpt1425_0408Index_item.json"
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/s2_ckpt1425_0408Index_item.json",
         help="Path to new product metadata file (JSON or JSONL format)",
     )
     parser.add_argument(
