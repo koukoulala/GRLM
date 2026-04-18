@@ -276,14 +276,19 @@ def process_batch_on_gpu(
         with open(ckpt_meta_file, "r") as f:
             ckpt_meta = json.load(f)
         ckpt_emb = np.load(ckpt_file)
-        start_batch = ckpt_meta["next_batch_idx"]
         failed_indices = ckpt_meta.get("failed_indices", [])
-        rows_done = start_batch * batch_size
-        sorted_embeddings = [ckpt_emb[:rows_done]] if rows_done > 0 else []
+        # Use actual row count from checkpoint (robust to batch_size changes)
+        rows_done = ckpt_emb.shape[0] if len(ckpt_emb.shape) > 1 else 0
+        # Align to current batch_size boundary and compute start_batch
+        start_batch = rows_done // batch_size
+        aligned_rows = start_batch * batch_size
+        sorted_embeddings = [ckpt_emb[:aligned_rows]] if aligned_rows > 0 else []
         print(f"Rank {rank}: Resuming from batch {start_batch} "
-              f"({rows_done:,} items done, {len(failed_indices)} failed)")
+              f"(checkpoint had {rows_done:,} rows, using {aligned_rows:,} "
+              f"aligned to batch_size={batch_size}, "
+              f"{len(failed_indices)} failed)")
 
-    CHECKPOINT_EVERY = 500
+    CHECKPOINT_EVERY = 200
 
     print(f"Rank {rank}: Generating embeddings for {len(texts)} items "
           f"(sorted by text length)...")
@@ -711,7 +716,7 @@ def parse_args():
     parser.add_argument(
         "--resume_new_emb_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products_2/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/eval_new_products_recovered/",
         help="If set and files exist, reuse new product embeddings from "
              "this directory (new_embeddings.npy, new_item_ids.json) "
              "instead of regenerating them.",
@@ -1157,16 +1162,13 @@ def main():
     use_gpu_search = hasattr(faiss, "StandardGpuResources") and faiss.get_num_gpus() > 0
     if use_gpu_search:
         try:
-            print(f"  Trying GPU FAISS search (float16, single GPU)...")
-            co = faiss.GpuClonerOptions()
-            co.useFloat16 = True
-            res = faiss.StandardGpuResources()
-            res.setTempMemory(512 * 1024 * 1024)  # 512MB temp
-            gpu_index = faiss.index_cpu_to_gpu(res, 0, index, co)
-            print(f"  Moved to GPU 0 with float16, starting search...")
+            num_faiss_gpus = faiss.get_num_gpus()
+            print(f"  Trying GPU FAISS search (float32, {num_faiss_gpus} GPUs)...")
+            gpu_index = faiss.index_cpu_to_all_gpus(index)
+            print(f"  Moved to {num_faiss_gpus} GPUs, starting search...")
             search_start = time.time()
             D, I = search_nearest_neighbors(gpu_index, new_embeddings, k=args.faiss_top_k,
-                                            batch_size=50000)
+                                            batch_size=200000)
             search_elapsed = time.time() - search_start
             del gpu_index
             print(f"  GPU search completed in {search_elapsed:.2f}s")
@@ -1199,10 +1201,10 @@ def main():
         print(f"{label}: {hist_top1[bi]:>10,}")
 
     # =========================================================================
-    # Stage 3.5: Reranking — Select Best from Top-5 (Plan E + B)
+    # Stage 3.5: Reranking — Select Best from Top-K (Plan E + B)
     # =========================================================================
     print("\n" + "=" * 60)
-    print("Stage 3.5: Reranking Top-5 Candidates (Plan E + B)")
+    print(f"Stage 3.5: Reranking Top-{args.faiss_top_k} Candidates (Plan E + B)")
     print("=" * 60)
 
     # Load existing item metadata for attribute comparison
@@ -1240,7 +1242,7 @@ def main():
     rerank_stats = Counter()
     rerank_position_counter = Counter()
 
-    print(f"  Reranking {total:,} items (top-5 -> best candidate)...")
+    print(f"  Reranking {total:,} items (top-{args.faiss_top_k} -> best candidate)...")
     print(f"    Shortcut: top-1 if any attr match & no category conflict")
     print(f"    Rerank bonuses: category +0.04, brand +0.02, seller +0.02")
     print(f"    Post-filter (B): reject if both have category but mismatch")
@@ -1256,7 +1258,7 @@ def main():
         new_seller = str(_na.get("Seller", "")).strip().lower()
         new_top_cat = extract_top_category(_ni.get("categories", "")).lower()
 
-        # Build candidate list from top-5 FAISS results
+        # Build candidate list from top-K FAISS results
         candidates = []
         for j in range(D.shape[1]):
             idx = int(I[i, j])
