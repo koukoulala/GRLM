@@ -416,6 +416,7 @@ def run_vllm_inference(prompts, model_path, num_gpus, gpu_mem, max_model_len, ma
     llm = LLM(model=model_path, tensor_parallel_size=num_gpus,
               gpu_memory_utilization=gpu_mem, max_model_len=max_model_len,
               trust_remote_code=True, seed=SEED)
+            #trust_remote_code=True, seed=SEED, enforce_eager=True)
     sp = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.8, top_k=20)
     # Truncate prompts that exceed max input length using the engine's tokenizer
     _tok = llm.get_tokenizer()
@@ -914,7 +915,7 @@ def parse_args():
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journey_v3_cp1200/lora_journey_v3/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank32_cut4096_packing_enablethinkingfalse/checkpoint-9000-merged", # demo ckpt
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank64_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
         #default="/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/qwen3-5-9b/lora_journey_v4/sft_4gpus_lr5e-5_batch1_gradacc16_lorarank32_cut32768_packing_enablethinkingfalse/checkpoint-1000-merged",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_lora_v4/merged_checkpoint_final",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_v4_step2/checkpoint-1840",
         #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journeyv4_step1_le4096_ckpt4768/lora_journey_v4_step2_v1sample/sft_4gpus_lr2e-5_batch8_gradacc2_lorarank64_cut32768_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-475-merged",
         #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/journeyv4_step1_le4096_ckpt4768/lora_journey_v4_step2_v1sample/sft_4gpus_lr2e-5_batch8_gradacc2_lorarank64_cut32768_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse_epoch3.0/checkpoint-800-merged",
         #default="/scratch/AzureBlobStorage_CODE/scratch/workspaceblobstore/users/wangying/LlamaFactory/saves/all_termId_ckpt21019/lora_journey_v4_step1_le4096/sft_4gpus_lr5e-5_batch12_gradacc2_lorarank64_cut4096_enableligerkernel_true_neatpacking_false_flashattn_fa2_enablethinkingfalse/checkpoint-4768-merged",
@@ -929,7 +930,7 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/demo_ckpt/match_6_reorder_tid/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/v4_ying_9B_checkpoint-800/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/journey_v4_stage2_v1sample_epoch3_checkpoint-1425/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/s2_ckpt1425_v4_copilot_shopping_homepage_sample/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/eval_results/qwen3-5-9b_full_v4_step2_ckpt_1840/",
         help="Directory to save evaluation output files",
     )
     p.add_argument("--tid2item_id_file", type=str,
@@ -939,7 +940,7 @@ def parse_args():
     p.add_argument("--max_events", type=int, default=500)
     p.add_argument("--max_recent_events", type=int, default=500)
     p.add_argument("--num_gpus", type=int, default=None)
-    p.add_argument("--gpu_memory_utilization", type=float, default=0.75)
+    p.add_argument("--gpu_memory_utilization", type=float, default=0.85)
     p.add_argument("--max_model_len", type=int, default=32000)
     p.add_argument("--max_tokens", type=int, default=12000)
     p.add_argument("--item_file", type=str,

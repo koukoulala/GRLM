@@ -214,8 +214,6 @@ def resolve_journey_tids(journey, id2meta, max_products):
 
     return {
         "title": journey.get("title", ""),
-        "description": journey.get("description", ""),
-        "conversation_starters": journey.get("conversation_starters", []),
         "reason": journey.get("reason", ""),
         "journey_type": journey.get("journey_type", "explicit"),
         "product_tids": product_tids,
@@ -348,14 +346,12 @@ def build_output_json(resolved_journeys):
     """Build the structured JSON output string for SFT training.
 
     Output format:
-    {"ContinuedJourneys":[{"JourneyType":"...","Title":"...",
-     "Description":"...","ConversationStarter":["..."],
-     "Reason":"...","ProductTIDs":[["a","b",...],...]},...
-    ]}
+    {"ContinuedJourneys":[{"JourneyType":"...","Title":"...","Reason":"...",
+     "ProductTIDs":[["a","b",...],...]},...]}
 
     Args:
-        resolved_journeys: List of dicts with journey_type, title,
-            description, conversation_starters, reason, product_tids.
+        resolved_journeys: List of dicts with journey_type, title, reason,
+            product_tids.
 
     Returns:
         JSON string.
@@ -365,8 +361,6 @@ def build_output_json(resolved_journeys):
         continued.append({
             "JourneyType": j.get("journey_type", "explicit"),
             "Title": j["title"],
-            "Description": j.get("description", ""),
-            "ConversationStarter": j.get("conversation_starters", []),
             "Reason": j["reason"],
             "ProductTIDs": j["product_tids"],
         })
@@ -418,19 +412,12 @@ def create_instruction(task, num_journeys, min_products_in_user,
     instruction = (
         f"{opening}"
         f" Each journey has a JourneyType ('explicit' or 'related'),"
-        f" a short engaging Title,"
-        f" a Description (2-3 sentences in personal-shopper tone highlighting"
-        f" why this journey fits the user and what value exploring it brings),"
-        f" a list of ConversationStarters (3 natural first-person openings"
-        f" that resume the shopping journey),"
-        f" a Reason (explains which user signals triggered this journey),"
+        f" a short engaging title, a user-centric reason,"
         f" and {product_text} recommended products as text IDs (7 slots each)."
         f" Products within each journey must be diverse:"
         f" cover different brands, styles, use cases, and subcategories."
         f' Output JSON:'
-        f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...",'
-        f'"Description":"...","ConversationStarter":["...","...","..."],'
-        f'"Reason":"...",'
+        f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...","Reason":"...",'
         f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
     )
 
@@ -949,21 +936,21 @@ def parse_args():
         "--shopping_journey_file",
         type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/event2journey.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/raw_data/profile2journey.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260415/raw_data/profile2journey.json",
         help="Path to shopping_journeys.json. For profile2journey, each entry "
              "must contain a 'user_profile' key.",
     )
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/id2meta_with_norm.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260424/sft_data",
+                "Data/LLMTrainingData/20260415/sft_data",
         help="Output directory",
     )
     # Event/input controls
@@ -1045,18 +1032,6 @@ def parse_args():
         default=43,
         help="Random seed for reproducibility (default: 42)",
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
-        help="Debug mode: only process a subset of users",
-    )
-    parser.add_argument(
-        "--debug_sample_size",
-        type=int,
-        default=100,
-        help="Number of users to sample in debug mode (default: 100)",
-    )
     return parser.parse_args()
 
 
@@ -1082,14 +1057,6 @@ def main():
     with open(args.shopping_journey_file, "r", encoding="utf-8") as f:
         shopping_data = json.load(f)
     print(f"    Entries: {len(shopping_data):,}")
-
-    # Debug mode: subsample users
-    if args.debug:
-        all_keys = list(shopping_data.keys())
-        sample_n = min(args.debug_sample_size, len(all_keys))
-        sampled_keys = random.sample(all_keys, sample_n)
-        shopping_data = {k: shopping_data[k] for k in sampled_keys}
-        print(f"    [DEBUG] Subsampled to {len(shopping_data):,} users")
 
     # For profile2journey, check that user_profile exists in data
     if task == "profile2journey":

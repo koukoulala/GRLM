@@ -70,3 +70,7 @@ nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py \
 
 nohup python -u s4_merge_sft_data.py --build_test_tsv > logs/s4_build_test.out 2>&1 &
 nohup python -u s7_assign_tid_by_similarity.py > logs/s7_assign_tid_full.out 2>&1 &
+
+VLLM_USE_V1=0 python -u /cosmos/local/users/wangn/IDB/TermIdIndex/Code/infer_termid_v3.py --model_path=$ckpt_path --input_path=/cosmos/local/users/wangn/IDB/TermIdIndex/GoidIndex/extend_index_data_en_us_20260408_01_all.tsv  --output_path=/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/0408_10M_TermId.tsv --tensor_parallel_size=4 --max_model_len=2048 --max_tokens=128 --batch_size 1024
+VLLM_USE_V1=0 nohup python -u s5_0_infer_termid.py --model_path=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_v4_step2/checkpoint-1840/ --input_path=/cosmos/local/users/wangn/IDB/TermIdIndex/GoidIndex/extend_index_data_en_us_20260408_01_all.tsv  --output_path=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/full_trained_ckpt_0408_10M_TermId.tsv --tensor_parallel_size=2 --max_model_len=2048 --max_tokens=128 --batch_size 1024 > logs/s5_0_termid.out 2>&1 &
+

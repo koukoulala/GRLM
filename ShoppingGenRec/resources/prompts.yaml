@@ -796,10 +796,11 @@ prompts:
         Keep the original seller form. Do not translate, split, normalize, or rewrite it.
         If brand and seller are the same or nearly the same, do NOT repeat — use this slot for the next available aspect instead.
 
-      7. Target audience, style, occasion, use scenario, or distinctive selling point
-        - Target audience: include ONLY if explicitly stated and specific (e.g., kids, women, professional, cat). Exclude generic values like unisex, or adult.
-        - Style/occasion: e.g., holiday, outdoor, waterproof, budget-friendly
-        - If no specific audience or style applies, use this slot for any remaining informative attribute from the product.
+      7. Target audience (PRIORITY), style, occasion, use scenario, or distinctive selling point
+        - Target audience has the HIGHEST PRIORITY for this slot: if a specific target audience is explicitly stated (e.g., kids, women, men, professional, cat, baby, toddler), it MUST occupy this slot — do not use it for style or other attributes.
+        - Exclude generic audience values like "unisex" or "adult" — these do not count as specific.
+        - Style/occasion (ONLY if NO specific target audience exists): e.g., holiday, outdoor, waterproof, budget-friendly
+        - If neither specific audience nor style applies, use this slot for any remaining informative attribute from the product.
 
       **RULES**
 

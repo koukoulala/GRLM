@@ -65,6 +65,7 @@ from llm_utils import (load_prompts, run_llm_parallel,
                       cleanup_checkpoint)
 from Infer_by_papyrus import (run_papyrus_parallel,
                               run_papyrus_parallel_with_checkpoint)
+from term_normalizer import normalize_term
 
 
 # =============================================================================
@@ -592,20 +593,20 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         #default="./processed/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
@@ -690,7 +691,7 @@ def parse_args():
     parser.add_argument(
         "--copilot_chunk_size",
         type=int,
-        default=20000,
+        default=10000,
         help="Number of items per Copilot processing chunk for checkpoint "
              "saving",
     )
@@ -814,8 +815,9 @@ def parse_args():
         #default=[],
         default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
-        help="One or more paths to .jsonl files from previous runs to resume "
-             "from. Each file should be a summaries_with_similarity.jsonl. "
+        help="One or more paths to .jsonl or .json files from previous runs "
+             "to resume from. Supports both JSONL (one record per line) and "
+             "JSON dict format (e.g., id2meta.json: {id: item_dict}). "
              "Results are merged (later files overwrite earlier ones for "
              "duplicate IDs). Set to empty to skip resume.",
     )
@@ -925,6 +927,26 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
     print(f"id2meta saved to: {id2meta_path}")
     print(f"  Mapped items: {len(id2meta):,} "
           f"(skipped {skipped_count:,} without valid 7-word summary)")
+
+    # ---- Build id2meta_with_norm (add summary_words_norm) ----
+    print("\nBuilding id2meta_with_norm (normalizing summary_words) ...")
+    id2meta_norm = {}
+    for item_id, item in id2meta.items():
+        item_copy = dict(item)
+        words = item_copy.get("summary_words", [])
+        item_copy["summary_words_norm"] = [
+            normalize_term(w) for w in words
+        ]
+        id2meta_norm[item_id] = item_copy
+
+    if output_prefix:
+        norm_path = os.path.join(output_dir,
+                                 f"{output_prefix}_id2meta_with_norm.json")
+    else:
+        norm_path = os.path.join(output_dir, "id2meta_with_norm.json")
+    with open(norm_path, "w", encoding="utf-8") as f:
+        json.dump(id2meta_norm, f, ensure_ascii=False, indent=2)
+    print(f"id2meta_with_norm saved to: {norm_path} ({len(id2meta_norm):,} items)")
 
     # ---- Build id2words mapping ----
     if output_prefix:
@@ -1066,18 +1088,28 @@ def main():
         if valid_resume_files:
             for prev_file in valid_resume_files:
                 print(f"  Loading resume file: {prev_file}")
-                with open(prev_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                            rid = record.get("id")
-                            if rid:
-                                previous_results[rid] = record
-                        except json.JSONDecodeError:
-                            continue
+                is_json_dict = (prev_file.endswith('.json')
+                                and not prev_file.endswith('.jsonl'))
+                if is_json_dict:
+                    with open(prev_file, "r", encoding="utf-8") as f:
+                        json_data = json.load(f)
+                    for rid, record in json_data.items():
+                        if "id" not in record:
+                            record["id"] = rid
+                        previous_results[rid] = record
+                else:
+                    with open(prev_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                record = json.loads(line)
+                                rid = record.get("id")
+                                if rid:
+                                    previous_results[rid] = record
+                            except json.JSONDecodeError:
+                                continue
             print(f"  Loaded {len(previous_results):,} items from resume files")
 
         # Build full result dicts
@@ -1249,7 +1281,7 @@ def main():
 
     if not debug:
         resume_paths = args.resume_from_multi_path or []
-        # Filter to existing .jsonl files
+        # Filter to existing files (.jsonl or .json)
         valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
 
     if valid_resume_files:
@@ -1257,35 +1289,70 @@ def main():
         for prev_file in valid_resume_files:
             print(f"\n[RESUME] Loading previous results from: {prev_file}")
             file_count = 0
-            with open(prev_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        result = json.loads(line)
-                        rid = result["id"]
 
-                        # Repair records from Copilot checkpoint that were
-                        # saved with 'result' instead of 'llm_output'
-                        if "llm_output" not in result and "result" in result:
-                            result["llm_output"] = result.pop("result")
-                            result["summary_words"] = parse_summary_words(
-                                result["llm_output"]
-                            )
-                            repaired_count += 1
-                        # Also repair records with missing summary_words
-                        elif "summary_words" not in result and "llm_output" in result:
-                            result["summary_words"] = parse_summary_words(
-                                result["llm_output"]
-                            )
-                            repaired_count += 1
+            # Detect format: .json (dict) vs .jsonl (line-by-line)
+            is_json_dict = (prev_file.endswith('.json')
+                           and not prev_file.endswith('.jsonl'))
 
-                        previous_results[rid] = result
-                        file_count += 1
+            if is_json_dict:
+                # JSON dict format (e.g., id2meta.json: {item_id: item_dict})
+                with open(prev_file, "r", encoding="utf-8") as f:
+                    json_data = json.load(f)
+                records_iter = (
+                    (rid, result) for rid, result in json_data.items()
+                )
+            else:
+                # JSONL format (one JSON object per line)
+                def _iter_jsonl(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                result = json.loads(line)
+                                yield result["id"], result
+                records_iter = _iter_jsonl(prev_file)
+
+            for rid, result in records_iter:
+                if "id" not in result:
+                    result["id"] = rid
+
+                # Repair records from Copilot checkpoint that were
+                # saved with 'result' instead of 'llm_output'
+                if "llm_output" not in result and "result" in result:
+                    result["llm_output"] = result.pop("result")
+                    result["summary_words"] = parse_summary_words(
+                        result["llm_output"]
+                    )
+                    repaired_count += 1
+                # Also repair records with missing summary_words
+                elif "summary_words" not in result and "llm_output" in result:
+                    result["summary_words"] = parse_summary_words(
+                        result["llm_output"]
+                    )
+                    repaired_count += 1
+
+                previous_results[rid] = result
+                file_count += 1
+
             print(f"  Loaded {file_count:,} records from this file")
 
         if repaired_count > 0:
             print(f"  [RESUME] Repaired {repaired_count:,} records "
                   f"(re-parsed llm_output)")
+
+        # Filter out failed items (no valid 7-word summary) so they
+        # get re-processed; keep only items with exactly 7 non-empty words
+        prev_total_raw = len(previous_results)
+        failed_ids = set()
+        for rid, result in previous_results.items():
+            words = result.get("summary_words", [])
+            non_empty = [w for w in words if w]
+            if len(non_empty) != 7:
+                failed_ids.add(rid)
+        for rid in failed_ids:
+            del previous_results[rid]
+        print(f"  [RESUME] Filtered out {len(failed_ids):,} failed items "
+              f"(no valid 7-word summary) for re-processing")
 
         # Only keep results that are in the current data set
         current_ids = {item["id"] for item in data}
@@ -1665,4 +1732,8 @@ def main():
     print(f"First {num_debug_show} LLM outputs:")
     for idx, res in enumerate(all_results[:num_debug_show]):
         print(f"\n  [{idx+1}] ID={res['id']}")
+
+
+if __name__ == "__main__":
+    main()
      

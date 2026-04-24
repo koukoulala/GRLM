@@ -1,34 +1,34 @@
-"""Step 3: Merge and Shuffle All SFT Datasets + Build Test Sets
+"""Step 4: Merge and Shuffle All SFT Datasets + Build Test Sets
 
 Three tasks: meta2tid, event2journey, profile2journey.
+Any task can be skipped by leaving its file path empty or pointing to
+a non-existent file.
 
-For event2journey and profile2journey:
-  - Shared users between the two tasks are identified.
-  - test_sample_n test users are sampled from shared users and excluded
-    from BOTH tasks' training data.
-  - Remaining shared users are split or shared between tasks to reach
-    the --journey_target_total.  If the deduped total is already above
-    the target, shared users are simply split 50/50 with no duplication.
-    If below, some shared users appear in both tasks to fill the gap.
+Pipeline per journey task:
+  1. Load full JSON; group by user_id.
+  2. Random-sample test_sample_n users as test set.
+  3. Apply per-bucket balance cap on remaining users.
+  4. Sample from capped pool to reach journey_target_total.
 
 For meta2tid:
   - Loads meta2tid_sft_full.json (with metadata.GlobalOfferId).
-  - test_sample_n items sampled as test set (with GlobalOfferId).
-  - Remaining items sampled by --meta2tid_prob.
+  - test_sample_n items sampled as test set.
+  - Remaining items sampled by --meta2tid_prob, capped at --meta2tid_max_train.
 
 Outputs (in --output_dir):
   1. combined_sft.jsonl          - Merged training data (shuffled).
   2. meta2tid_test.jsonl         - Test set (instruction/input/output + GlobalOfferId).
   3. event2journey_test.jsonl    - Test set (instruction/input/output + UserId).
   4. profile2journey_test.jsonl  - Test set (instruction/input/output + UserId).
+  5. *_full_cleaned_test.tsv     - Test TSV files (if source TSV exists).
 
 Usage:
-    python s3_merge_sft_data.py \\
+    python s4_merge_sft_data.py \\
         --meta2tid_full_file ./sft_data/meta2tid_sft_full.json \\
         --event2journey_full_file ./sft_data/event2journey_sft_full.json \\
         --profile2journey_full_file ./sft_data/profile2journey_sft_full.json \\
-        --journey_target_total 1000000 \\
-        --test_sample_n 5000
+        --journey_target_total 500000 \\
+        --test_sample_n 1000
 """
 
 import argparse
@@ -38,9 +38,6 @@ import os
 import random
 import sys
 from collections import defaultdict
-
-
-
 
 
 # =============================================================================
@@ -58,248 +55,67 @@ def extract_sft_fields(sample):
 
 def percentile(sorted_list, p):
     """Return p-th percentile from a pre-sorted list."""
+    if not sorted_list:
+        return 0
     idx = int(len(sorted_list) * p / 100)
     return sorted_list[min(idx, len(sorted_list) - 1)]
 
 
-def count_journey_buckets(user_samples_dict, task_uids, keep_threshold):
-    """Count users by journey-count bucket for a single task.
-
-    Returns:
-        Tuple of (n_high, low_bucket_counts) where
-        n_high is the number of users with >= keep_threshold journeys,
-        low_bucket_counts is a dict mapping journey_count -> user_count
-        for users with < keep_threshold journeys.
-    """
-    n_high = 0
-    low_buckets = defaultdict(int)
-    for uid in task_uids:
-        if uid not in user_samples_dict:
-            continue
-        num_j = user_samples_dict[uid].get("metadata", {}).get("num_journeys", 0)
-        if num_j >= keep_threshold:
-            n_high += 1
-        else:
-            low_buckets[num_j] += 1
-    return n_high, dict(low_buckets)
+def _load_full_json(path, label):
+    """Load a *_full.json file. Returns list or empty list if missing."""
+    if not path or not path.strip() or not os.path.exists(path):
+        print(f"  [{label}] File not found or empty path: {path}")
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    print(f"  [{label}] Loaded {len(data):,} samples from {path}")
+    return data
 
 
-def compute_uniform_bucket_probs(n_high_total, low_buckets_list,
-                                 keep_threshold, target_total):
-    """Compute per-bucket sampling probs for uniform kept-count distribution.
+def balance_by_journey_count(user_samples, rng, balance_cap):
+    """Balance users by capping each journey-count bucket.
 
-    Goal: each low-journey bucket contributes the same number of kept samples.
-    For bucket j with count_j users: prob_j = C / count_j, capped at 1.0.
-    C is chosen so that n_high_total + sum(kept) ≈ target_total.
-
-    Uses iterative saturation: buckets too small to downsample (count_j <= C)
-    are saturated (kept 100%), and remaining quota is redistributed.
-
-    Returns:
-        Dict mapping journey_count -> sampling probability.
-    """
-    merged = defaultdict(int)
-    for low_buckets in low_buckets_list:
-        for j, n_j in low_buckets.items():
-            merged[j] += n_j
-
-    if not merged or target_total <= n_high_total:
-        return {j: 1.0 for j in merged}
-
-    needed = target_total - n_high_total
-    saturated_count = 0
-    unsaturated = dict(merged)
-    saturated_probs = {}  # j -> 1.0 for saturated buckets
-
-    for _ in range(keep_threshold + 2):
-        n_buckets = len(unsaturated)
-        if n_buckets == 0:
-            break
-
-        remaining_needed = needed - saturated_count
-        if remaining_needed <= 0:
-            result = {j: 0.0 for j in unsaturated}
-            result.update(saturated_probs)
-            return result
-
-        # Each unsaturated bucket should keep C samples
-        C = remaining_needed / n_buckets
-
-        # Saturate buckets where count_j <= C (can't downsample, keep all)
-        newly_saturated = [j for j, count_j in unsaturated.items()
-                           if count_j <= C]
-
-        if not newly_saturated:
-            # Done — compute final probs
-            result = {}
-            for j, count_j in unsaturated.items():
-                result[j] = min(C / count_j, 1.0)
-            result.update(saturated_probs)
-            return result
-
-        for j in newly_saturated:
-            saturated_count += unsaturated.pop(j)
-            saturated_probs[j] = 1.0
-
-    # Fallback: all saturated
-    result = {j: 1.0 for j in merged}
-    return result
-
-
-def sample_by_journey_count(user_samples_dict, task_uids, rng,
-                            keep_threshold=5, bucket_probs=None):
-    """Sample users based on per-bucket probabilities for uniform distribution.
-
-    Users with num_journeys >= keep_threshold are always kept.
-    Users with fewer journeys are kept with the probability from bucket_probs.
+    Groups users by num_journeys, randomly samples at most balance_cap
+    from each bucket.
 
     Args:
-        user_samples_dict: Dict mapping user_id -> full sample dict.
-        task_uids: Set/list of user IDs to consider.
+        user_samples: Dict mapping user_id -> full sample dict.
         rng: Random instance.
-        keep_threshold: Journey count threshold for guaranteed inclusion.
-        bucket_probs: Dict mapping journey_count -> sampling probability.
+        balance_cap: Max samples per journey-count bucket.
 
     Returns:
-        Tuple of (training_samples_list, bucket_stats_dict) where
-        bucket_stats_dict maps journey_count -> [total, kept, effective_prob].
+        Tuple of (kept_user_ids_set, stats_str).
     """
-    if bucket_probs is None:
-        bucket_probs = {}
+    buckets = defaultdict(list)
+    for uid, sample in user_samples.items():
+        n_j = sample.get("metadata", {}).get("num_journeys", 0)
+        buckets[n_j].append(uid)
 
-    kept = []
-    bucket_stats = defaultdict(lambda: [0, 0, 0.0])
-
-    for uid in task_uids:
-        if uid not in user_samples_dict:
-            continue
-        sample = user_samples_dict[uid]
-        num_j = sample.get("metadata", {}).get("num_journeys", 0)
-        bucket_stats[num_j][0] += 1
-
-        if num_j >= keep_threshold:
-            kept.append(extract_sft_fields(sample))
-            bucket_stats[num_j][1] += 1
-            bucket_stats[num_j][2] = 1.0
+    kept = set()
+    print(f"    Balance cap = {balance_cap:,} per bucket:")
+    for cnt in sorted(buckets.keys()):
+        uids = buckets[cnt]
+        if len(uids) > balance_cap:
+            sampled = rng.sample(uids, balance_cap)
+            print(f"      {cnt:>2} journeys: {len(uids):>8,} -> {balance_cap:>8,} (capped)")
         else:
-            keep_prob = bucket_probs.get(num_j, 1.0)
-            bucket_stats[num_j][2] = keep_prob
-            if rng.random() < keep_prob:
-                kept.append(extract_sft_fields(sample))
-                bucket_stats[num_j][1] += 1
+            sampled = uids
+            print(f"      {cnt:>2} journeys: {len(uids):>8,} -> {len(uids):>8,}")
+        kept.update(sampled)
 
-    return kept, dict(bucket_stats)
-
-
-# =============================================================================
-# CLI
-# =============================================================================
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Merge and shuffle SFT datasets (meta2tid + two journey "
-                    "tasks) into one training file, plus three test files."
-    )
-
-    # --- Input files ---
-    parser.add_argument(
-        "--meta2tid_full_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260324/sft_data_v4/"
-                "all_meta2tid_sft_full.json",
-        help="Path to meta2tid *_full.json (with metadata.GlobalOfferId)",
-    )
-    parser.add_argument(
-        "--event2journey_full_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260415/sft_data/"
-                "event2journey_sft_full.json",
-        help="Path to event2journey *_full.json (with metadata.user_id)",
-    )
-    parser.add_argument(
-        "--profile2journey_full_file", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260415/sft_data/"
-                "profile2journey_sft_full.json",
-        help="Path to profile2journey *_full.json (with metadata.user_id)",
-    )
-
-    # --- Sampling ---
-    parser.add_argument(
-        "--meta2tid_prob", type=float, default=0.5,
-        help="Sampling probability for meta2tid training data",
-    )
-    parser.add_argument(
-        "--meta2tid_max_train", type=int, default=400000,
-        help="Maximum number of meta2tid training samples (default: 500000)",
-    )
-    parser.add_argument(
-        "--journey_target_total", type=int, default=400000,
-        help="Target total for event2journey + profile2journey combined. "
-             "If deduped total is below this, shared users are duplicated "
-             "across both tasks to fill the gap (default: 500000)",
-    )
-
-    # --- Test set ---
-    parser.add_argument(
-        "--journey_keep_threshold", type=int, default=12,
-        help="Users with >= this many journeys are always kept; "
-             "users below are sampled with prob = num_journeys / threshold "
-             "(default: 5)",
-    )
-    parser.add_argument(
-        "--test_sample_n", type=int, default=2000,
-        help="Number of test samples per task (default: 5000)",
-    )
-
-    # --- Output ---
-    parser.add_argument(
-        "--output_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260415/sft_data",
-        help="Output directory",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=43,
-        help="Random seed (default: 42)",
-    )
-
-    # --- Build test TSV mode ---
-    parser.add_argument(
-        "--build_test_tsv", action="store_true", default=False,
-        help="Build *_full_cleaned_test.tsv files from test JSONL + merged TSV. "
-             "Skips the normal merge/train pipeline.",
-    )
-    parser.add_argument(
-        "--test_output_dir", type=str, 
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/test_data",
-        help="Directory to save test TSV files. If empty, uses --output_dir.",
-    )
-    parser.add_argument(
-        "--event2journey_tsv", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260407/raw_data/"
-                "event2journey_full_cleaned.tsv",
-        help="Path to merged event2journey TSV (from pre_s2)",
-    )
-    parser.add_argument(
-        "--profile2journey_tsv", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
-                "OneRec/Data/LLMTrainingData/20260407/raw_data/"
-                "profile2journey_full_cleaned.tsv",
-        help="Path to merged profile2journey TSV (from pre_s2)",
-    )
-
-    return parser.parse_args()
+    print(f"    Total after balance: {len(kept):,}")
+    return kept
 
 
 # =============================================================================
-# Build test TSV from test JSONL + merged full_cleaned TSV
+# Test TSV builder
 # =============================================================================
 
 def _read_test_uids(jsonl_path):
     """Read UserId values from a test JSONL file."""
     uids = set()
+    if not os.path.exists(jsonl_path):
+        return uids
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -315,19 +131,14 @@ def _read_test_uids(jsonl_path):
 def _filter_tsv_by_uids(tsv_path, uids, out_path):
     """Read a TSV, keep only rows whose UserId is in uids, write to out_path.
 
-    Optimization: reads raw lines and extracts only the first tab-field
-    (UserId) for matching, avoiding full CSV parsing of huge fields
-    (UserHistory, FinalJourney can be 100KB+ per row).
-
     Returns (total_rows, matched_rows).
     """
     total = 0
     matched = 0
-    remaining = set(uids)  # early exit when all found
+    remaining = set(uids)
 
     with open(tsv_path, "r", encoding="utf-8") as fin, \
          open(out_path, "w", encoding="utf-8") as fout:
-        # Copy header
         header_line = fin.readline()
         if not header_line:
             return 0, 0
@@ -335,7 +146,6 @@ def _filter_tsv_by_uids(tsv_path, uids, out_path):
 
         for line in fin:
             total += 1
-            # Fast: extract UserId before first tab (no full parse)
             tab_pos = line.find("\t")
             uid = line[:tab_pos].strip() if tab_pos > 0 else line.strip()
             if uid in remaining:
@@ -343,7 +153,7 @@ def _filter_tsv_by_uids(tsv_path, uids, out_path):
                 matched += 1
                 remaining.discard(uid)
                 if not remaining:
-                    break  # all test users found
+                    break
             if total % 100_000 == 0:
                 print(f"      Scanned {total:>10,} rows, "
                       f"matched {matched:,}/{len(uids):,} ...")
@@ -351,44 +161,31 @@ def _filter_tsv_by_uids(tsv_path, uids, out_path):
     return total, matched
 
 
-def build_test_tsv(args):
-    """Build *_full_cleaned_test.tsv for evaluation."""
-    print("=" * 70)
-    print("Build Test TSV Mode")
-    print("=" * 70)
+def build_test_tsv(output_dir, test_output_dir, tasks_tsv_map):
+    """Build *_full_cleaned_test.tsv for evaluation.
 
-    test_dir = args.test_output_dir.strip() if args.test_output_dir else ""
-    if not test_dir:
-        test_dir = args.output_dir
-    os.makedirs(test_dir, exist_ok=True)
+    Args:
+        output_dir: Directory containing *_test.jsonl files.
+        test_output_dir: Directory to save test TSV files.
+        tasks_tsv_map: Dict of task_name -> source_tsv_path.
+    """
+    os.makedirs(test_output_dir, exist_ok=True)
 
-    tasks = [
-        (
-            "event2journey",
-            os.path.join(args.output_dir, "event2journey_test.jsonl"),
-            args.event2journey_tsv,
-        ),
-        (
-            "profile2journey",
-            os.path.join(args.output_dir, "profile2journey_test.jsonl"),
-            args.profile2journey_tsv,
-        ),
-    ]
-
-    for task_name, test_jsonl, full_tsv in tasks:
+    for task_name, full_tsv in tasks_tsv_map.items():
+        test_jsonl = os.path.join(output_dir, f"{task_name}_test.jsonl")
         print(f"\n  [{task_name}]")
         if not os.path.exists(test_jsonl):
             print(f"    SKIP: test JSONL not found: {test_jsonl}")
             continue
-        if not os.path.exists(full_tsv):
-            print(f"    SKIP: full TSV not found: {full_tsv}")
+        if not full_tsv or not full_tsv.strip() or not os.path.exists(full_tsv):
+            print(f"    SKIP: source TSV not found: {full_tsv}")
             continue
 
         uids = _read_test_uids(test_jsonl)
         print(f"    Test users from JSONL: {len(uids):,}")
 
         out_path = os.path.join(
-            test_dir, f"{task_name}_full_cleaned_test.tsv")
+            test_output_dir, f"{task_name}_full_cleaned_test.tsv")
         total, matched = _filter_tsv_by_uids(full_tsv, uids, out_path)
 
         file_mb = os.path.getsize(out_path) / (1024 * 1024)
@@ -397,7 +194,99 @@ def build_test_tsv(args):
         print(f"    Missing:          {len(uids) - matched:,}")
         print(f"    Output: {out_path} ({file_mb:.1f} MB)")
 
-    print("\nDone!")
+
+# =============================================================================
+# CLI
+# =============================================================================
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Merge and shuffle SFT datasets (meta2tid + journey "
+                    "tasks) into one training file, plus test files."
+    )
+
+    # --- Input files (empty string = skip this task) ---
+    parser.add_argument(
+        "--meta2tid_full_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/sft_data/"
+                "meta2tid_sft_full.json",
+        help="Path to meta2tid *_full.json. Empty or missing = skip.",
+    )
+    parser.add_argument(
+        "--event2journey_full_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/sft_data/"
+                "event2journey_sft_full.json",
+        help="Path to event2journey *_full.json. Empty or missing = skip.",
+    )
+    parser.add_argument(
+        "--profile2journey_full_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/sft_data/"
+                "profile2journey_sft_full.json",
+        help="Path to profile2journey *_full.json. Empty or missing = skip.",
+    )
+
+    # --- Sampling ---
+    parser.add_argument(
+        "--meta2tid_prob", type=float, default=0.5,
+        help="Sampling probability for meta2tid training data (default: 0.5)",
+    )
+    parser.add_argument(
+        "--meta2tid_max_train", type=int, default=500000,
+        help="Maximum number of meta2tid training samples (default: 500000)",
+    )
+    parser.add_argument(
+        "--journey_target_total", type=int, default=500000,
+        help="Target total for event2journey + profile2journey combined "
+             "(default: 500000). Split proportionally across available tasks.",
+    )
+    parser.add_argument(
+        "--journey_balance_cap", type=int, default=20000,
+        help="Max samples per journey-count bucket for balancing "
+             "(default: 20000)",
+    )
+    parser.add_argument(
+        "--test_sample_n", type=int, default=1000,
+        help="Number of test samples per task (default: 1000)",
+    )
+
+    # --- Output ---
+    parser.add_argument(
+        "--output_dir", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/sft_data",
+        help="Output directory",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=43,
+        help="Random seed (default: 43)",
+    )
+
+    # --- Test TSV sources ---
+    parser.add_argument(
+        "--test_output_dir", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/test_data",
+        help="Directory to save test TSV files.",
+    )
+    parser.add_argument(
+        "--event2journey_tsv", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/raw_data/"
+                "event2journey_full_cleaned.tsv",
+        help="Path to event2journey source TSV. Empty or missing = skip.",
+    )
+    parser.add_argument(
+        "--profile2journey_tsv", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/"
+                "OneRec/Data/LLMTrainingData/20260424/raw_data/"
+                "profile2journey_full_cleaned.tsv",
+        help="Path to profile2journey source TSV. Empty or missing = skip.",
+    )
+
+    return parser.parse_args()
 
 
 # =============================================================================
@@ -409,353 +298,157 @@ def main():
     random.seed(args.seed)
     rng = random.Random(args.seed)
 
-    # --build_test_tsv: fast path
-    if args.build_test_tsv:
-        build_test_tsv(args)
-        return
-
     all_training = []
     stats = {}
 
     # =========================================================================
-    # 1. meta2tid: load _full.json, split test, sample training
+    # 1. meta2tid: load, test split, sample training
     # =========================================================================
     print("=" * 70)
-    print("1. meta2tid - loading meta2tid_sft_full.json")
+    print("1. meta2tid")
     print("=" * 70)
 
-    meta_by_gid = {}  # GlobalOfferId -> full sample
-    if args.meta2tid_full_file and os.path.exists(args.meta2tid_full_file):
-        with open(args.meta2tid_full_file, "r", encoding="utf-8") as f:
-            meta_full_data = json.load(f)
-        for sample in meta_full_data:
-            gid = sample.get("metadata", {}).get("GlobalOfferId", "")
-            if gid:
-                meta_by_gid[gid] = sample
-        print(f"  Loaded {len(meta_full_data):,} samples, "
-              f"{len(meta_by_gid):,} unique GlobalOfferIds")
+    meta_full_data = _load_full_json(args.meta2tid_full_file, "meta2tid")
+    meta_by_gid = {}
+    for sample in meta_full_data:
+        gid = sample.get("metadata", {}).get("GlobalOfferId", "")
+        if gid:
+            meta_by_gid[gid] = sample
+
+    if meta_by_gid:
+        meta_gids = list(meta_by_gid.keys())
+        rng.shuffle(meta_gids)
+        test_n = min(args.test_sample_n, len(meta_gids))
+        meta_test_gids = meta_gids[:test_n]
+        meta_train_gids = meta_gids[test_n:]
+
+        # Test set
+        meta_test = []
+        for gid in meta_test_gids:
+            entry = extract_sft_fields(meta_by_gid[gid])
+            entry["GlobalOfferId"] = gid
+            meta_test.append(entry)
+
+        # Training: sample + cap
+        meta_train = []
+        for gid in meta_train_gids:
+            if rng.random() < args.meta2tid_prob:
+                meta_train.append(extract_sft_fields(meta_by_gid[gid]))
+        if args.meta2tid_max_train and len(meta_train) > args.meta2tid_max_train:
+            rng.shuffle(meta_train)
+            meta_train = meta_train[:args.meta2tid_max_train]
+
+        stats["meta2tid"] = (len(meta_by_gid), len(meta_train))
+        all_training.extend(meta_train)
+        print(f"  Unique items:  {len(meta_by_gid):,}")
+        print(f"  Test:          {len(meta_test):,}")
+        print(f"  Train:         {len(meta_train_gids):,} -> sampled {len(meta_train):,} "
+              f"(prob={args.meta2tid_prob}, cap={args.meta2tid_max_train:,})")
     else:
-        print(f"  File not found: {args.meta2tid_full_file}")
-
-    # Shuffle GlobalOfferIds, then split test / train
-    meta_gids = list(meta_by_gid.keys())
-    rng.shuffle(meta_gids)
-    test_n_meta = min(args.test_sample_n, len(meta_gids))
-    meta_test_gids = meta_gids[:test_n_meta]
-    meta_train_gids = meta_gids[test_n_meta:]
-
-    # Test set: sft fields + GlobalOfferId
-    meta_test = []
-    for gid in meta_test_gids:
-        entry = extract_sft_fields(meta_by_gid[gid])
-        entry["GlobalOfferId"] = gid
-        meta_test.append(entry)
-
-    # Training: apply sampling probability, then cap at max_train
-    meta_train = []
-    for gid in meta_train_gids:
-        if rng.random() < args.meta2tid_prob:
-            meta_train.append(extract_sft_fields(meta_by_gid[gid]))
-
-    if args.meta2tid_max_train and len(meta_train) > args.meta2tid_max_train:
-        rng.shuffle(meta_train)
-        meta_train = meta_train[:args.meta2tid_max_train]
-
-    stats["meta2tid"] = (len(meta_train_gids), len(meta_train))
-    all_training.extend(meta_train)
-    print(f"  Test:  {len(meta_test):,}")
-    print(f"  Train: {len(meta_train_gids):,} -> sampled {len(meta_train):,} "
-          f"(prob={args.meta2tid_prob})")
+        meta_test = []
+        print(f"  SKIP: no data loaded")
 
     # =========================================================================
-    # 2. Journey tasks: load, test split, dedup/share, build training
+    # 2. Journey tasks: load, test split, balance cap, target sampling
     # =========================================================================
     print()
     print("=" * 70)
-    print("2. Journey tasks - event2journey + profile2journey")
+    print("2. Journey tasks")
     print("=" * 70)
 
     # --- Load both full files, group by user_id ---
-    e2j_by_user = {}
-    if args.event2journey_full_file and os.path.exists(args.event2journey_full_file):
-        with open(args.event2journey_full_file, "r", encoding="utf-8") as f:
-            e2j_data = json.load(f)
-        for sample in e2j_data:
-            uid = sample.get("metadata", {}).get("user_id", "")
-            if uid:
-                e2j_by_user[uid] = sample
-        print(f"  [event2journey]    Loaded {len(e2j_data):,} samples, "
-              f"{len(e2j_by_user):,} unique users")
-    else:
-        print(f"  [event2journey]    File not found: "
-              f"{args.event2journey_full_file}")
+    journey_tasks = {}  # task_name -> {uid: sample}
 
-    p2j_by_user = {}
-    if args.profile2journey_full_file and os.path.exists(args.profile2journey_full_file):
-        with open(args.profile2journey_full_file, "r", encoding="utf-8") as f:
-            p2j_data = json.load(f)
-        for sample in p2j_data:
-            uid = sample.get("metadata", {}).get("user_id", "")
-            if uid:
-                p2j_by_user[uid] = sample
-        print(f"  [profile2journey]  Loaded {len(p2j_data):,} samples, "
-              f"{len(p2j_by_user):,} unique users")
-    else:
-        print(f"  [profile2journey]  File not found: "
-              f"{args.profile2journey_full_file}")
-
-    # --- Identify user groups ---
-    shared_uids = set(e2j_by_user.keys()) & set(p2j_by_user.keys())
-    e2j_only_uids = set(e2j_by_user.keys()) - shared_uids
-    p2j_only_uids = set(p2j_by_user.keys()) - shared_uids
-
-    print(f"\n  User breakdown:")
-    print(f"    Shared:               {len(shared_uids):>10,}")
-    print(f"    event2journey only:   {len(e2j_only_uids):>10,}")
-    print(f"    profile2journey only: {len(p2j_only_uids):>10,}")
-
-    # --- Sample test users independently from each task ---
-    # event2journey test
-    e2j_all_uids = sorted(e2j_by_user.keys())
-    rng.shuffle(e2j_all_uids)
-    test_n_e2j = min(args.test_sample_n, len(e2j_all_uids))
-    e2j_test_uids = set(e2j_all_uids[:test_n_e2j])
-
-    # profile2journey test
-    p2j_all_uids = sorted(p2j_by_user.keys())
-    rng.shuffle(p2j_all_uids)
-    test_n_p2j = min(args.test_sample_n, len(p2j_all_uids))
-    p2j_test_uids = set(p2j_all_uids[:test_n_p2j])
-
-    test_uids = e2j_test_uids | p2j_test_uids
-
-    # Build test sets: sft fields + UserId
-    e2j_test = []
-    p2j_test = []
-    for uid in sorted(e2j_test_uids):
-        entry = extract_sft_fields(e2j_by_user[uid])
-        entry["UserId"] = uid
-        e2j_test.append(entry)
-    for uid in sorted(p2j_test_uids):
-        entry = extract_sft_fields(p2j_by_user[uid])
-        entry["UserId"] = uid
-        p2j_test.append(entry)
-
-    print(f"\n  Test sets (independently sampled):")
-    print(f"    event2journey test:    {len(e2j_test):,} (from {len(e2j_by_user):,} users)")
-    print(f"    profile2journey test:  {len(p2j_test):,} (from {len(p2j_by_user):,} users)")
-    print(f"    Total test users:      {len(test_uids):,} (union)")
-
-    # --- Remove test users from all pools ---
-    shared_train_uids = shared_uids - test_uids
-    e2j_only_uids -= test_uids
-    p2j_only_uids -= test_uids
-
-    # --- Classify users by journey count (high vs low) ---
-    threshold = args.journey_keep_threshold
-    target = args.journey_target_total
-
-    def _get_num_j(uid):
-        """Get max num_journeys across both tasks for a user."""
-        nj_e = e2j_by_user.get(uid, {}).get("metadata", {}).get("num_journeys", 0)
-        nj_p = p2j_by_user.get(uid, {}).get("metadata", {}).get("num_journeys", 0)
-        return max(nj_e, nj_p)
-
-    # Shared users: high → BOTH tasks unconditionally; low → sharing strategy
-    shared_high = set()  # >= threshold
-    shared_low = set()   # < threshold
-    for uid in shared_train_uids:
-        if _get_num_j(uid) >= threshold:
-            shared_high.add(uid)
-        else:
-            shared_low.add(uid)
-
-    print(f"\n  Journey-count classification (threshold={threshold}):")
-    print(f"    Shared high (>= {threshold}j, both tasks): {len(shared_high):>10,}")
-    print(f"    Shared low  (<  {threshold}j, to split):   {len(shared_low):>10,}")
-
-    # --- Sharing strategy for LOW-journey shared users only ---
-    # High-journey users contribute 2 * len(shared_high) to both tasks
-    n_guaranteed = len(shared_high) * 2 + len(e2j_only_uids) + len(p2j_only_uids)
-    # (e2j_only and p2j_only high users are already in their task's pool)
-
-    S_low = len(shared_low)
-    # min: split shared_low 50/50
-    min_low_total = n_guaranteed + S_low
-    # max: all shared_low in both
-    max_low_total = n_guaranteed + 2 * S_low
-
-    if target <= min_low_total:
-        num_to_share_low = 0
-    elif target <= max_low_total:
-        num_to_share_low = target - min_low_total
-    else:
-        num_to_share_low = S_low
-
-    shared_low_list = sorted(shared_low)
-    rng.shuffle(shared_low_list)
-
-    # First num_to_share_low go to BOTH tasks
-    shared_low_both = set(shared_low_list[:num_to_share_low])
-    # Remaining split 50/50
-    remaining_low = shared_low_list[num_to_share_low:]
-    mid = len(remaining_low) // 2
-    e2j_exclusive_low = set(remaining_low[:mid])
-    p2j_exclusive_low = set(remaining_low[mid:])
-
-    # --- Final uid pools ---
-    # High-journey shared users go to BOTH tasks
-    e2j_final_uids = e2j_only_uids | shared_high | shared_low_both | e2j_exclusive_low
-    p2j_final_uids = p2j_only_uids | shared_high | shared_low_both | p2j_exclusive_low
-
-    total_journey = len(e2j_final_uids) + len(p2j_final_uids)
-
-    print(f"\n  Sharing strategy (target={target:,}):")
-    print(f"    Guaranteed (high both + exclusive): {n_guaranteed:,}")
-    print(f"    Low shared users:       {S_low:,}")
-    print(f"    Min total (no share):   {min_low_total:,}")
-    print(f"    Max total (full share): {max_low_total:,}")
-    print(f"    Low users shared both:  {num_to_share_low:,}")
-    print(f"    Low exclusive to e2j:   {len(e2j_exclusive_low):,}")
-    print(f"    Low exclusive to p2j:   {len(p2j_exclusive_low):,}")
-    print(f"    event2journey pool:     {len(e2j_final_uids):,}")
-    print(f"    profile2journey pool:   {len(p2j_final_uids):,}")
-    print(f"    Journey pool total:     {total_journey:,}")
-
-    # --- Journey-count sampling on final pools ---
-    # Compute per-task bucket probs independently, each targeting half
-    per_task_target = target // 2
-
-    e2j_n_high, e2j_low_buckets = count_journey_buckets(
-        e2j_by_user, e2j_final_uids, threshold,
-    )
-    p2j_n_high, p2j_low_buckets = count_journey_buckets(
-        p2j_by_user, p2j_final_uids, threshold,
-    )
-
-    e2j_bucket_probs = compute_uniform_bucket_probs(
-        e2j_n_high, [e2j_low_buckets],
-        threshold, per_task_target,
-    )
-    p2j_bucket_probs = compute_uniform_bucket_probs(
-        p2j_n_high, [p2j_low_buckets],
-        threshold, per_task_target,
-    )
-
-    print(f"\n  Journey-count sampling (per-task, target {per_task_target:,} each):")
-    for label, n_high, low_buckets, bprobs in [
-        ("event2journey", e2j_n_high, e2j_low_buckets, e2j_bucket_probs),
-        ("profile2journey", p2j_n_high, p2j_low_buckets, p2j_bucket_probs),
+    for task_name, full_file in [
+        ("event2journey", args.event2journey_full_file),
+        ("profile2journey", args.profile2journey_full_file),
     ]:
-        print(f"\n    [{label}] High-journey users (always kept): {n_high:,}")
-        print(f"    Per-bucket probabilities:")
-        for j in sorted(low_buckets.keys()):
-            prob = bprobs.get(j, 1.0)
-            cnt = low_buckets[j]
-            expected = int(cnt * prob)
-            print(f"      {j} journeys: {cnt:>10,} users, "
-                  f"prob={prob:.4f}, expected_kept~{expected:,}")
-
-    # Step 2: Sample with per-task bucket probs
-    e2j_train, e2j_bucket = sample_by_journey_count(
-        e2j_by_user, e2j_final_uids, rng,
-        keep_threshold=threshold, bucket_probs=e2j_bucket_probs,
-    )
-    p2j_train, p2j_bucket = sample_by_journey_count(
-        p2j_by_user, p2j_final_uids, rng,
-        keep_threshold=threshold, bucket_probs=p2j_bucket_probs,
-    )
-
-    # Print per-bucket sampling stats
-    for label, bucket in [("event2journey", e2j_bucket),
-                          ("profile2journey", p2j_bucket)]:
-        total_all = sum(v[0] for v in bucket.values())
-        kept_all = sum(v[1] for v in bucket.values())
-        print(f"\n    [{label}] per-bucket stats:")
-        print(f"      {'Journeys':>8s}  {'Total':>8s}  {'Kept':>8s}  {'Pct':>6s}")
-        for jc in sorted(bucket.keys()):
-            total, kept, prob = bucket[jc]
-            pct = total / max(total_all, 1) * 100
-            print(f"      {jc:>8d}  {total:>8,}  {kept:>8,}  {pct:>5.1f}%")
-        print(f"      {'ALL':>8s}  {total_all:>8,}  {kept_all:>8,}  100.0%")
-
-    combined_journey = len(e2j_train) + len(p2j_train)
-    print(f"\n    Combined journey train: {combined_journey:,} "
-          f"(target: {target:,}, diff: {combined_journey - target:+,})")
-
-    stats["event2journey"] = (len(e2j_final_uids), len(e2j_train))
-    stats["profile2journey"] = (len(p2j_final_uids), len(p2j_train))
-    all_training.extend(e2j_train)
-    all_training.extend(p2j_train)
-
-    # --- Explicit vs Related journey distribution ---
-    print(f"\n  Explicit vs Related journey distribution:")
-    for label, by_user, final_uids in [
-        ("event2journey", e2j_by_user, e2j_final_uids),
-        ("profile2journey", p2j_by_user, p2j_final_uids),
-    ]:
-        all_explicit = []        # per-user explicit counts
-        all_related = []         # per-user related counts
-        all_explicit_pct = []    # per-user explicit percentage
-        all_related_pct = []     # per-user related percentage
-        total_explicit = 0
-        total_related = 0
-
-        for uid in final_uids:
-            if uid not in by_user:
-                continue
-            sample = by_user[uid]
-            try:
-                out = json.loads(sample["output"])
-                types = [j.get("JourneyType", "explicit")
-                         for j in out.get("ContinuedJourneys", [])]
-            except (json.JSONDecodeError, KeyError):
-                continue
-            n_exp = types.count("explicit")
-            n_rel = types.count("related")
-            n_total = n_exp + n_rel
-            if n_total == 0:
-                continue
-            total_explicit += n_exp
-            total_related += n_rel
-            all_explicit.append(n_exp)
-            all_related.append(n_rel)
-            all_explicit_pct.append(n_exp / n_total * 100)
-            all_related_pct.append(n_rel / n_total * 100)
-
-        n_users = len(all_explicit)
-        if n_users == 0:
-            print(f"\n    [{label}] No data")
+        data = _load_full_json(full_file, task_name)
+        if not data:
             continue
+        by_user = {}
+        for sample in data:
+            uid = sample.get("metadata", {}).get("user_id", "")
+            if uid:
+                by_user[uid] = sample
+        print(f"    {task_name}: {len(by_user):,} unique users")
+        journey_tasks[task_name] = by_user
 
-        grand_total = total_explicit + total_related
-        sorted_exp = sorted(all_explicit)
-        sorted_rel = sorted(all_related)
-        sorted_exp_pct = sorted(all_explicit_pct)
-        sorted_rel_pct = sorted(all_related_pct)
+    if not journey_tasks:
+        print(f"  No journey tasks loaded. Skipping journey section.")
+    else:
+        # --- Per-task: test split -> balance cap -> collect training pool ---
+        journey_test_sets = {}  # task_name -> test list
+        journey_train_pools = {}  # task_name -> list of sft dicts
 
-        print(f"\n    [{label}] ({n_users:,} users, "
-              f"{grand_total:,} total journeys)")
-        print(f"      Overall: explicit {total_explicit:,} "
-              f"({total_explicit / grand_total * 100:.1f}%), "
-              f"related {total_related:,} "
-              f"({total_related / grand_total * 100:.1f}%)")
-        print(f"      Per-user explicit:  "
-              f"count  min={sorted_exp[0]}, max={sorted_exp[-1]}, "
-              f"mean={sum(sorted_exp)/n_users:.1f}, "
-              f"median={percentile(sorted_exp, 50)}  |  "
-              f"pct  min={sorted_exp_pct[0]:.1f}%, "
-              f"max={sorted_exp_pct[-1]:.1f}%, "
-              f"mean={sum(sorted_exp_pct)/n_users:.1f}%, "
-              f"median={percentile(sorted_exp_pct, 50):.1f}%")
-        print(f"      Per-user related:   "
-              f"count  min={sorted_rel[0]}, max={sorted_rel[-1]}, "
-              f"mean={sum(sorted_rel)/n_users:.1f}, "
-              f"median={percentile(sorted_rel, 50)}  |  "
-              f"pct  min={sorted_rel_pct[0]:.1f}%, "
-              f"max={sorted_rel_pct[-1]:.1f}%, "
-              f"mean={sum(sorted_rel_pct)/n_users:.1f}%, "
-              f"median={percentile(sorted_rel_pct, 50):.1f}%")
+        for task_name, by_user in journey_tasks.items():
+            print(f"\n  [{task_name}]")
+
+            # Step 1: Random sample test users
+            all_uids = list(by_user.keys())
+            rng.shuffle(all_uids)
+            test_n = min(args.test_sample_n, len(all_uids))
+            test_uids = set(all_uids[:test_n])
+
+            test_samples = []
+            for uid in sorted(test_uids):
+                entry = extract_sft_fields(by_user[uid])
+                entry["UserId"] = uid
+                test_samples.append(entry)
+            journey_test_sets[task_name] = test_samples
+            print(f"    Test users: {len(test_samples):,}")
+
+            # Step 2: Remove test users, then balance cap
+            train_candidates = {
+                uid: sample for uid, sample in by_user.items()
+                if uid not in test_uids
+            }
+            print(f"    Train candidates (before balance): {len(train_candidates):,}")
+
+            kept_uids = balance_by_journey_count(
+                train_candidates, rng, args.journey_balance_cap,
+            )
+
+            # Build training pool from kept uids
+            pool = []
+            for uid in kept_uids:
+                pool.append(extract_sft_fields(train_candidates[uid]))
+            journey_train_pools[task_name] = pool
+            print(f"    Train pool (after balance): {len(pool):,}")
+
+        # --- Distribute journey_target_total across available tasks ---
+        target = args.journey_target_total
+        total_pool = sum(len(p) for p in journey_train_pools.values())
+        print(f"\n  Journey target total: {target:,}")
+        print(f"  Total pool available: {total_pool:,}")
+
+        journey_train = {}
+        if total_pool <= target:
+            # Use everything
+            for task_name, pool in journey_train_pools.items():
+                journey_train[task_name] = pool
+                print(f"    [{task_name}] Using all {len(pool):,} samples")
+        else:
+            # Proportional sampling to reach target
+            for task_name, pool in journey_train_pools.items():
+                task_target = int(target * len(pool) / total_pool)
+                task_target = min(task_target, len(pool))
+                rng.shuffle(pool)
+                sampled = pool[:task_target]
+                journey_train[task_name] = sampled
+                print(f"    [{task_name}] {len(pool):,} -> sampled {len(sampled):,}")
+
+        combined_journey = sum(len(v) for v in journey_train.values())
+        print(f"    Combined journey train: {combined_journey:,} "
+              f"(target: {target:,}, diff: {combined_journey - target:+,})")
+
+        # Add to all_training and stats
+        for task_name, train_list in journey_train.items():
+            stats[task_name] = (
+                len(journey_train_pools[task_name]),
+                len(train_list),
+            )
+            all_training.extend(train_list)
 
     # =========================================================================
     # 3. Shuffle
@@ -791,27 +484,40 @@ def main():
 
     # --- meta2tid test ---
     meta_test_file = os.path.join(args.output_dir, "meta2tid_test.jsonl")
-    with open(meta_test_file, "w", encoding="utf-8") as f:
-        for item in meta_test:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    print(f"  meta2tid test: {meta_test_file}  ({len(meta_test):,})")
+    if meta_test:
+        with open(meta_test_file, "w", encoding="utf-8") as f:
+            for item in meta_test:
+                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        print(f"  meta2tid test: {meta_test_file}  ({len(meta_test):,})")
 
-    # --- event2journey test ---
-    e2j_test_file = os.path.join(args.output_dir, "event2journey_test.jsonl")
-    with open(e2j_test_file, "w", encoding="utf-8") as f:
-        for item in e2j_test:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    print(f"  event2journey test: {e2j_test_file}  ({len(e2j_test):,})")
-
-    # --- profile2journey test ---
-    p2j_test_file = os.path.join(args.output_dir, "profile2journey_test.jsonl")
-    with open(p2j_test_file, "w", encoding="utf-8") as f:
-        for item in p2j_test:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    print(f"  profile2journey test: {p2j_test_file}  ({len(p2j_test):,})")
+    # --- Journey test sets ---
+    if journey_tasks:
+        for task_name in journey_tasks:
+            test_list = journey_test_sets.get(task_name, [])
+            if not test_list:
+                continue
+            test_file = os.path.join(args.output_dir, f"{task_name}_test.jsonl")
+            with open(test_file, "w", encoding="utf-8") as f:
+                for item in test_list:
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            print(f"  {task_name} test: {test_file}  ({len(test_list):,})")
 
     # =========================================================================
-    # 5. Summary
+    # 5. Build test TSV (automatically, skip if source TSV missing)
+    # =========================================================================
+    print()
+    print("=" * 70)
+    print("5. Building test TSV files")
+    print("=" * 70)
+
+    tasks_tsv_map = {
+        "event2journey": args.event2journey_tsv,
+        "profile2journey": args.profile2journey_tsv,
+    }
+    build_test_tsv(args.output_dir, args.test_output_dir, tasks_tsv_map)
+
+    # =========================================================================
+    # 6. Summary
     # =========================================================================
     print()
     print("=" * 70)
@@ -822,18 +528,23 @@ def main():
     print(f"  {'-'*25} {'-'*10} {'-'*10}")
     for name in ["meta2tid", "event2journey", "profile2journey"]:
         pool, train = stats.get(name, (0, 0))
-        print(f"  {name:<25s} {pool:>10,} {train:>10,}")
+        if pool == 0 and train == 0:
+            print(f"  {name:<25s} {'(skipped)':>10s} {'':>10s}")
+        else:
+            print(f"  {name:<25s} {pool:>10,} {train:>10,}")
     print(f"  {'-'*25} {'-'*10} {'-'*10}")
     total_pool = sum(v[0] for v in stats.values())
     print(f"  {'TOTAL':<25s} {total_pool:>10,} {len(all_training):>10,}")
 
     print(f"\n  Test Sets:")
     print(f"    meta2tid:          {len(meta_test):>10,}")
-    print(f"    event2journey:     {len(e2j_test):>10,}")
-    print(f"    profile2journey:   {len(p2j_test):>10,}")
+    if journey_tasks:
+        for task_name in journey_tasks:
+            test_list = journey_test_sets.get(task_name, [])
+            print(f"    {task_name}:     {len(test_list):>10,}")
 
     # =========================================================================
-    # 6. Length Statistics
+    # 7. Length Statistics
     # =========================================================================
     if all_training:
         print()

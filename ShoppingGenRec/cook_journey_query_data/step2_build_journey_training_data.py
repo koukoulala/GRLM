@@ -32,6 +32,7 @@ import sys
 import random
 from collections import defaultdict
 
+import glob
 import numpy as np
 from tqdm import tqdm
 
@@ -47,16 +48,23 @@ DEFAULT_INPUT_FILE = (
     "1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/"
     "Step0_UserProfile_500KEnUsHisRandom0408_199K_Journey.tsv"
 )
+DEFAULT_INPUT_DIR = (
+    "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/"
+    "1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc_300K/"
+)
 DEFAULT_OUTPUT_DIR = (
     "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260417_OnlyJourney/sft_data/"
 )
 
 DEFAULT_MAX_EVENTS = 500
-DEFAULT_OUTPUT_SUFFIX = ""
+DEFAULT_OUTPUT_SUFFIX = "300K"
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 20
 DEFAULT_KEEP_EMPTY_RATIO = 0.0
 DEFAULT_COUNT_RATIO = 0.5
+DEFAULT_BALANCE_CAP = 20000
+
+ALLOWED_JOURNEY_TYPES = {"explicit", "related"}
 
 
 # =============================================================================
@@ -174,12 +182,16 @@ def read_input_tsv(filepath, max_rows=0):
 # =============================================================================
 
 def validate_journey(j):
-    """Return True if the journey dict has the required fields."""
+    """Return True if the journey dict has the required fields and allowed type."""
     if not isinstance(j, dict):
         return False
     if not j.get("Title"):
         return False
     if not j.get("Queries") or not isinstance(j["Queries"], list):
+        return False
+    # Filter by allowed journey types
+    jtype = j.get("JourneyType", "explicit").strip().lower()
+    if jtype not in ALLOWED_JOURNEY_TYPES:
         return False
     return True
 
@@ -259,7 +271,7 @@ def build_output_json(journeys):
     clean = []
     for j in journeys:
         entry = {
-            "JourneyType": j.get("JourneyType", "explicit"),
+            "JourneyType": j.get("JourneyType", "explicit").strip().lower(),
             "Title": j.get("Title", ""),
             "Description": j.get("Description", ""),
             "ConversationStarter": j.get("ConversationStarter", []),
@@ -398,7 +410,7 @@ def create_sft_data(
                 "num_events": num_events_used,
                 "num_journeys": num_journeys,
                 "journey_types": [
-                    j.get("JourneyType", "explicit") for j in valid_journeys
+                    j.get("JourneyType", "explicit").strip().lower() for j in valid_journeys
                 ],
             },
         }
@@ -513,6 +525,74 @@ def create_sft_data(
 
 
 # =============================================================================
+# Balancing
+# =============================================================================
+
+def balance_sft_data(sft_data, cap_per_bucket, seed=42):
+    """Balance SFT data by capping each journey-count bucket.
+
+    Groups samples by num_journeys, then randomly samples at most
+    cap_per_bucket samples from each group.
+
+    Returns (balanced_data, stats_str).
+    """
+    rng = random.Random(seed)
+
+    # Group by journey count
+    buckets = defaultdict(list)
+    for sample in sft_data:
+        n = sample["metadata"]["num_journeys"]
+        buckets[n].append(sample)
+
+    balanced = []
+    print(f"\n  --- Balancing (cap={cap_per_bucket:,} per bucket) ---")
+    total_before = len(sft_data)
+    total_capped = 0
+    for cnt in sorted(buckets.keys()):
+        bucket = buckets[cnt]
+        if len(bucket) > cap_per_bucket:
+            sampled = rng.sample(bucket, cap_per_bucket)
+            total_capped += 1
+            print(f"    {cnt:>2} journeys: {len(bucket):>8,} -> {cap_per_bucket:>8,} (capped)")
+        else:
+            sampled = bucket
+            print(f"    {cnt:>2} journeys: {len(bucket):>8,} -> {len(bucket):>8,}")
+        balanced.extend(sampled)
+
+    # Shuffle to avoid ordering by journey count
+    rng.shuffle(balanced)
+
+    print(f"  Buckets capped: {total_capped}")
+    print(f"  Total: {total_before:,} -> {len(balanced):,} "
+          f"({len(balanced) / max(total_before, 1) * 100:.1f}%)")
+
+    # Print balanced bucket distribution
+    bal_dist = defaultdict(int)
+    for s in balanced:
+        bal_dist[s["metadata"]["num_journeys"]] += 1
+    print(f"\n  --- Balanced Bucket Distribution ---")
+    for cnt in sorted(bal_dist.keys()):
+        label = f"{cnt} journey" if cnt == 1 else f"{cnt} journeys"
+        pct = bal_dist[cnt] / len(balanced) * 100
+        bar = "#" * int(pct / 2)
+        print(f"    {label:>12s}: {bal_dist[cnt]:>8,} "
+              f"({pct:5.1f}%) {bar}")
+
+    # Print balanced journey type distribution
+    type_dist = defaultdict(int)
+    for s in balanced:
+        for jt in s["metadata"]["journey_types"]:
+            type_dist[jt] += 1
+    total_j = sum(type_dist.values())
+    print(f"\n  --- Balanced Journey Type Distribution ---")
+    for jtype, cnt in sorted(type_dist.items(), key=lambda x: -x[1]):
+        print(f"    {jtype:>15s}: {cnt:>10,} "
+              f"({cnt / max(total_j, 1) * 100:.1f}%)")
+
+    return balanced
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -523,6 +603,12 @@ def parse_args():
     parser.add_argument(
         "--input_file", type=str, default=DEFAULT_INPUT_FILE,
         help="Path to Step 1 output TSV",
+    )
+    parser.add_argument(
+        "--input_dir", type=str, default="",
+        help="Directory containing *_Results.tsv files. If set, reads all "
+             "matching files and ignores --input_file. "
+             f"(default: empty, example: {DEFAULT_INPUT_DIR})",
     )
     parser.add_argument(
         "--output_suffix", type=str, default=DEFAULT_OUTPUT_SUFFIX,
@@ -557,6 +643,11 @@ def parse_args():
         help="Max input rows to read; 0 = all (default: 0)",
     )
     parser.add_argument(
+        "--balance_cap", type=int, default=DEFAULT_BALANCE_CAP,
+        help=f"Max samples per journey-count bucket for balanced output "
+             f"(default: {DEFAULT_BALANCE_CAP})",
+    )
+    parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed (default: 42)",
     )
@@ -583,10 +674,34 @@ def main():
     # ---- Step 1: Load input ----
     print("=" * 70)
     print("Step 1: Loading input data")
-    print(f"  File: {args.input_file}")
-    print("=" * 70)
 
-    rows = read_input_tsv(args.input_file, max_rows=args.max_rows)
+    if args.input_dir:
+        # Read all *_Results.tsv files from the directory
+        pattern = os.path.join(args.input_dir, "*_Results.tsv")
+        input_files = sorted(glob.glob(pattern))
+        if not input_files:
+            print(f"ERROR: No *_Results.tsv files found in {args.input_dir}")
+            sys.exit(1)
+        print(f"  Directory: {args.input_dir}")
+        print(f"  Found {len(input_files)} *_Results.tsv file(s):")
+        for fp in input_files:
+            print(f"    - {os.path.basename(fp)}")
+        print("=" * 70)
+
+        rows = []
+        for fp in input_files:
+            print(f"\n  Reading: {os.path.basename(fp)}")
+            file_rows = read_input_tsv(fp, max_rows=0)
+            rows.extend(file_rows)
+            if args.max_rows > 0 and len(rows) >= args.max_rows:
+                rows = rows[:args.max_rows]
+                print(f"  Reached max_rows={args.max_rows}, stopping.")
+                break
+    else:
+        print(f"  File: {args.input_file}")
+        print("=" * 70)
+        rows = read_input_tsv(args.input_file, max_rows=args.max_rows)
+
     if not rows:
         print("ERROR: No rows loaded.")
         sys.exit(1)
@@ -594,6 +709,7 @@ def main():
     # Quick summary
     has_journeys = sum(1 for r in rows if r["journeys"])
     total_journeys = sum(len(r["journeys"]) for r in rows)
+    print(f"\n  Total rows loaded:    {len(rows):,}")
     print(f"  Users with journeys:  {has_journeys:,} / {len(rows):,}")
     print(f"  Total journeys:       {total_journeys:,}")
 
@@ -633,6 +749,12 @@ def main():
     suffix = f"_{args.output_suffix}" if args.output_suffix else ""
     output_file = os.path.join(args.output_dir, f"event2journey_sft{suffix}.jsonl")
     save_sft_data(sft_data, output_file)
+
+    # ---- Step 3b: Save balanced version ----
+    if args.balance_cap > 0:
+        balanced_data = balance_sft_data(sft_data, args.balance_cap, seed=args.seed)
+        balanced_file = os.path.join(args.output_dir, f"event2journey_sft{suffix}_balanced.jsonl")
+        save_sft_data(balanced_data, balanced_file)
 
     # ---- Step 4: Example cases ----
     print(f"\n{'=' * 70}")
