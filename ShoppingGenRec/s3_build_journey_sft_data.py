@@ -98,6 +98,169 @@ DEFAULT_KEEP_EMPTY_RATIO = 0
 DEFAULT_COUNT_RATIO = 0.7
 DEFAULT_DUP_THRESHOLD = 5
 
+
+# =============================================================================
+# TSV Pair Loading (JWP + ranked files)
+# =============================================================================
+
+def _unescape_json(text):
+    """Try to parse JSON, progressively unescaping if needed."""
+    for _ in range(3):
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            text = text.replace('\\"', '"')
+    return None
+
+
+def _parse_event_lines(events_text):
+    """Parse ReadableUserEvents from #N#-separated text into event list."""
+    if not events_text or not events_text.strip():
+        return []
+    text = events_text.replace("#N#", "\n")
+    events = []
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Strip leading event number: "1 | ..."
+        m = re.match(r"^\d+\s*\|\s*(.*)", line)
+        if m:
+            event = m.group(1).strip()
+            if event:
+                events.append(event)
+    return events
+
+
+def load_from_tsv_pair(jwp_path, ranked_path):
+    """Load shopping journey data from a JWP + ranked TSV pair.
+
+    JWP TSV (User-level): UserId, ReadableUserEvents, ShoppingProfile, ...
+    Ranked TSV (Journey-level): UserId, Profile, JourneyIndex, Journey, OUTPUT
+
+    Joins on UserId. OUTPUT contains the final ranked journey with:
+      JourneyType, Title, Description, ConversationStarter (string),
+      WhyAmISeeingThis, Products[{OfferId, ...}]
+
+    Returns:
+        Dict matching shopping_journeys.json format:
+        {UserId: {user_shopping_events: [...], user_profile: "...",
+                  journeys: [{title, description, conversation_starter,
+                              reason, journey_type, product_ids}, ...]}}
+    """
+    # --- Step 1: Read JWP to get events + profile per user ---
+    print(f"  Loading JWP TSV: {jwp_path}")
+    user_info = {}  # uid -> {events, profile}
+    with open(jwp_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            uid = row.get("UserId", "").strip()
+            if not uid:
+                continue
+            events_text = row.get("ReadableUserEvents", "")
+            profile_text = (row.get("ShoppingProfile", "")
+                           or row.get("Profile", ""))
+            user_info[uid] = {
+                "events": _parse_event_lines(events_text),
+                "profile": _clean_profile_json(profile_text),
+            }
+    print(f"    Users with events: {len(user_info):,}")
+
+    # --- Step 2: Read ranked TSV, group journeys by UserId + JourneyIndex ---
+    print(f"  Loading ranked TSV: {ranked_path}")
+    # uid -> {index: journey_dict}
+    user_journeys_raw = defaultdict(dict)
+    total_rows = 0
+    parse_fail = 0
+    for ranked_file in ([ranked_path] if isinstance(ranked_path, str)
+                        else ranked_path):
+        with open(ranked_file, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                total_rows += 1
+                uid = row.get("UserId", "").strip()
+                if not uid:
+                    continue
+                j_idx = int(row.get("JourneyIndex", 0))
+                out_text = row.get("OUTPUT", "")
+                out_obj = _unescape_json(out_text)
+                if out_obj is None:
+                    parse_fail += 1
+                    continue
+
+                # Extract product_ids from Products array
+                products = out_obj.get("Products", [])
+                product_ids = []
+                for p in products:
+                    oid = str(p.get("OfferId", "")).strip()
+                    if oid:
+                        product_ids.append(oid)
+
+                # Map fields to standard format
+                # ConversationStarter: string -> keep as string
+                # WhyAmISeeingThis -> reason
+                cs = out_obj.get("ConversationStarter", "")
+                if isinstance(cs, list):
+                    cs = cs[0] if cs else ""
+
+                journey = {
+                    "title": out_obj.get("Title", ""),
+                    "description": out_obj.get("Description", ""),
+                    "conversation_starter": cs,
+                    "reason": out_obj.get("WhyAmISeeingThis",
+                                          out_obj.get("Reason", "")),
+                    "journey_type": out_obj.get("JourneyType", "explicit"),
+                    "product_ids": product_ids,
+                }
+                user_journeys_raw[uid][j_idx] = journey
+
+                # Also grab profile from ranked if not in JWP
+                if uid not in user_info:
+                    profile_text = row.get("Profile", "")
+                    user_info[uid] = {
+                        "events": [],
+                        "profile": _clean_profile_json(profile_text),
+                    }
+
+    print(f"    Ranked rows: {total_rows:,}, parse failures: {parse_fail:,}")
+    print(f"    Users with journeys: {len(user_journeys_raw):,}")
+
+    # --- Step 3: Merge into standard format, sort by JourneyIndex ---
+    shopping_data = {}
+    for uid, info in user_info.items():
+        journeys_by_idx = user_journeys_raw.get(uid, {})
+        # Sort by JourneyIndex to maintain order
+        sorted_journeys = [
+            journeys_by_idx[idx]
+            for idx in sorted(journeys_by_idx.keys())
+        ]
+        entry = {
+            "user_shopping_events": info["events"],
+            "journeys": sorted_journeys,
+        }
+        if info.get("profile"):
+            entry["user_profile"] = info["profile"]
+        shopping_data[uid] = entry
+
+    # Also include users from ranked that weren't in JWP
+    for uid in user_journeys_raw:
+        if uid not in shopping_data:
+            journeys_by_idx = user_journeys_raw[uid]
+            sorted_journeys = [
+                journeys_by_idx[idx]
+                for idx in sorted(journeys_by_idx.keys())
+            ]
+            shopping_data[uid] = {
+                "user_shopping_events": [],
+                "journeys": sorted_journeys,
+            }
+
+    print(f"    Final merged users: {len(shopping_data):,}")
+    total_j = sum(len(v["journeys"]) for v in shopping_data.values())
+    print(f"    Total journeys: {total_j:,}")
+
+    return shopping_data
+
 # =============================================================================
 # Time Normalization
 # =============================================================================
@@ -215,7 +378,7 @@ def resolve_journey_tids(journey, id2meta, max_products):
     return {
         "title": journey.get("title", ""),
         "description": journey.get("description", ""),
-        "conversation_starters": journey.get("conversation_starters", []),
+        "conversation_starter": journey.get("conversation_starter", ""),
         "reason": journey.get("reason", ""),
         "journey_type": journey.get("journey_type", "explicit"),
         "product_tids": product_tids,
@@ -349,13 +512,13 @@ def build_output_json(resolved_journeys):
 
     Output format:
     {"ContinuedJourneys":[{"JourneyType":"...","Title":"...",
-     "Description":"...","ConversationStarter":["..."],
+     "Description":"...","ConversationStarter":"...",
      "Reason":"...","ProductTIDs":[["a","b",...],...]},...
     ]}
 
     Args:
         resolved_journeys: List of dicts with journey_type, title,
-            description, conversation_starters, reason, product_tids.
+            description, conversation_starter, reason, product_tids.
 
     Returns:
         JSON string.
@@ -366,7 +529,7 @@ def build_output_json(resolved_journeys):
             "JourneyType": j.get("journey_type", "explicit"),
             "Title": j["title"],
             "Description": j.get("description", ""),
-            "ConversationStarter": j.get("conversation_starters", []),
+            "ConversationStarter": j.get("conversation_starter", ""),
             "Reason": j["reason"],
             "ProductTIDs": j["product_tids"],
         })
@@ -421,15 +584,15 @@ def create_instruction(task, num_journeys, min_products_in_user,
         f" a short engaging Title,"
         f" a Description (2-3 sentences in personal-shopper tone highlighting"
         f" why this journey fits the user and what value exploring it brings),"
-        f" a list of ConversationStarters (3 natural first-person openings"
-        f" that resume the shopping journey),"
+        f" a ConversationStarter (a natural first-person opening"
+        f" that resumes the shopping journey),"
         f" a Reason (explains which user signals triggered this journey),"
         f" and {product_text} recommended products as text IDs (7 slots each)."
         f" Products within each journey must be diverse:"
         f" cover different brands, styles, use cases, and subcategories."
         f' Output JSON:'
         f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...",'
-        f'"Description":"...","ConversationStarter":["...","...","..."],'
+        f'"Description":"...","ConversationStarter":"...",'
         f'"Reason":"...",'
         f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
     )
@@ -951,7 +1114,24 @@ def parse_args():
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/event2journey.json",
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/raw_data/profile2journey.json",
         help="Path to shopping_journeys.json. For profile2journey, each entry "
-             "must contain a 'user_profile' key.",
+             "must contain a 'user_profile' key. "
+             "Ignored if --jwp_tsv_file and --ranked_tsv_file are provided.",
+    )
+    parser.add_argument(
+        "--jwp_tsv_file",
+        type=str,
+        default="",
+        help="Path to *_JWP.tsv (User-level: UserId, ReadableUserEvents, "
+             "ShoppingProfile, JourneyWithProducts). Used together with "
+             "--ranked_tsv_file to load from TSV pair instead of JSON.",
+    )
+    parser.add_argument(
+        "--ranked_tsv_file",
+        type=str,
+        default="",
+        help="Path to *_ranked.tsv (Journey-level: UserId, Profile, "
+             "JourneyIndex, Journey, OUTPUT). Used together with "
+             "--jwp_tsv_file.",
     )
     parser.add_argument(
         "--id2meta_file",
@@ -1078,9 +1258,21 @@ def main():
     print(f"Step 1: Loading input files (task={task})")
     print("=" * 70)
 
-    print(f"  Loading shopping journeys: {args.shopping_journey_file}")
-    with open(args.shopping_journey_file, "r", encoding="utf-8") as f:
-        shopping_data = json.load(f)
+    # Determine input mode: TSV pair or JSON
+    use_tsv_pair = (args.jwp_tsv_file and args.ranked_tsv_file
+                    and os.path.exists(args.jwp_tsv_file)
+                    and os.path.exists(args.ranked_tsv_file))
+
+    if use_tsv_pair:
+        print(f"  Input mode: TSV pair (JWP + ranked)")
+        shopping_data = load_from_tsv_pair(
+            args.jwp_tsv_file, args.ranked_tsv_file,
+        )
+    else:
+        print(f"  Input mode: JSON")
+        print(f"  Loading shopping journeys: {args.shopping_journey_file}")
+        with open(args.shopping_journey_file, "r", encoding="utf-8") as f:
+            shopping_data = json.load(f)
     print(f"    Entries: {len(shopping_data):,}")
 
     # Debug mode: subsample users
