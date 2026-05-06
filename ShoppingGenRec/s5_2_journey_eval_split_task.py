@@ -415,8 +415,8 @@ def run_vllm_inference(prompts, model_path, num_gpus, gpu_mem, max_model_len, ma
     print(f"\nInitializing vLLM ...\n  Model: {model_path}\n  TP: {num_gpus}")
     llm = LLM(model=model_path, tensor_parallel_size=num_gpus,
               gpu_memory_utilization=gpu_mem, max_model_len=max_model_len,
-              trust_remote_code=True, seed=SEED)
-            #trust_remote_code=True, seed=SEED, enforce_eager=True)
+            #  trust_remote_code=True, seed=SEED)
+            trust_remote_code=True, seed=SEED, enforce_eager=True)
     sp = SamplingParams(max_tokens=max_tokens, temperature=0.7, top_p=0.8, top_k=20)
     # Truncate prompts that exceed max input length using the engine's tokenizer
     _tok = llm.get_tokenizer()

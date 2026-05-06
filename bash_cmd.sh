@@ -9,6 +9,7 @@ CUDA_VISIBLE_DEVICES=0,1 nohup bash ./recipe/grlm/run_grlm_grpo_simple.sh > ../l
 cd GRLM/ShoppingGenRec/
 nohup python -u preprocess_raw_data/pre_s0_combine_item_data.py > logs/pre_s0.out 2>&1 &
 nohup python -u s0_init_emb.py > logs/s0_init_emb.out 2>&1 &
+nohup bash -c 'source /scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/env.sh && python -u s0_init_emb.py' > logs/s0_init_emb.out 2>&1 &
 nohup python -u cook_data/step0_0_build_input.py > logs/step0_0_build.out 2>&1 &
 nohup python -u cook_data/step0_1_merge_inputs.py > logs/step0_1_merge.out 2>&1 &
 nohup python -u cook_data/step0_2_generate_journey.py --max_users=60000 > logs/step0_split.out 2>&1 &
@@ -17,6 +18,7 @@ nohup python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py > logs/
 nohup python -u s5_journey_eval.py > logs/s5_eval.out 2>&1 &
 nohup python -u cook_data/step3_eval_ranker_results.py > logs/step3.out 2>&1 &
 nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py > logs/pre_s2.out 2>&1 &
+nohup python -u s1_generate_tid.py --export_prompts_only > logs/s1_split.out 2>&1 &
 nohup python -u s1_generate_tid.py --prompt_results_dir="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/" > logs/s1_merge.out 2>&1 &
 nohup python -u s4_merge_sft_data.py > logs/s4.out 2>&1 &
 
@@ -25,6 +27,7 @@ nohup bash -c 'for i in 8; do echo "=== Chunk $i start $(date) ==="; python -u c
 nohup bash -c 'for i in 1 2 3 4 5 6; do echo "=== Chunk $i start $(date) ==="; python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/pre_s1.out 2>&1 &
 nohup bash -c 'for i in 53 54 55 56 57; do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_prompts_${i}.tsv --token_file="./resources/tokens_shopping.txt" --copilot_workers=20; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_continue.out 2>&1 &
 nohup bash -c 'for i in 1 10 13 7 8 9; do echo "=== Chunk $i start $(date) ==="; python -u cook_data/step2_ann_search_and_output.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_${i}_results.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/step2.out 2>&1 &
+nohup bash -c 'for i in $(seq 17 100); do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/prompts/item_prompts_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_17_100.out 2>&1 &
 
 nohup bash -c 'while kill -0 1623855 2>/dev/null; do sleep 60; done; echo "=== step2.8_9 done, starting s1 rerun $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_rerun_other_prompts.tsv' > logs/s1_rerun_other.out 2>&1 &
 nohup bash -c 'while kill -0 1827277 2>/dev/null; do sleep 60; done; echo "=== s1 rerun done, starting s1 continue $(date) ==="; for i in 53 54 55 56 57; do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_prompts_${i}.tsv --token_file="./resources/tokens_shopping.txt" --copilot_workers=20; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_continue.out 2>&1 &
@@ -69,8 +72,11 @@ nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py \
   > logs/merge_tsv_profile2journey.out 2>&1 &
 
 nohup python -u s4_merge_sft_data.py --build_test_tsv > logs/s4_build_test.out 2>&1 &
+nohup python -u s5_2_journey_eval_split_task.py > logs/s5_eval_full_v4_0408_index.out 2>&1 &
 nohup python -u s7_assign_tid_by_similarity.py > logs/s7_assign_tid_full.out 2>&1 &
 
 VLLM_USE_V1=0 python -u /cosmos/local/users/wangn/IDB/TermIdIndex/Code/infer_termid_v3.py --model_path=$ckpt_path --input_path=/cosmos/local/users/wangn/IDB/TermIdIndex/GoidIndex/extend_index_data_en_us_20260408_01_all.tsv  --output_path=/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/0408_10M_TermId.tsv --tensor_parallel_size=4 --max_model_len=2048 --max_tokens=128 --batch_size 1024
 VLLM_USE_V1=0 nohup python -u s5_0_infer_termid.py --model_path=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_v4_step2/checkpoint-1840/ --input_path=/cosmos/local/users/wangn/IDB/TermIdIndex/GoidIndex/extend_index_data_en_us_20260408_01_all.tsv  --output_path=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/EvalData/full_trained_ckpt_0408_10M_TermId.tsv --tensor_parallel_size=2 --max_model_len=2048 --max_tokens=128 --batch_size 1024 > logs/s5_0_termid.out 2>&1 &
 
+nohup python -u s5_5_ranker_eval.py --instruction_version=v1 --eval_only > logs/s5_5_eval_650.out 2>&1 &
+nohup python -u s5_5_ranker_eval.py --instruction_version=v2 > logs/s5_5_eval_v2_1000.out 2>&1 &

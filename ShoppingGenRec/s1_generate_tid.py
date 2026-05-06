@@ -813,7 +813,7 @@ def parse_args():
         type=str,
         nargs="*",
         #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/summaries_with_similarity.jsonl"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl or .json files from previous runs "
              "to resume from. Supports both JSONL (one record per line) and "
@@ -825,8 +825,8 @@ def parse_args():
         "--checkpoint_dirs",
         type=str,
         nargs="*",
-        default=[],
-        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/_s1_checkpoint","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/_s1_checkpoint"],
+        #default=[],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/_s1_checkpoint"],
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",
@@ -1725,6 +1725,17 @@ def main():
                 if item["id"] in merged
             ]
             print(f"  Merged total: {len(all_results):,} items")
+
+    # ---- Final save: write all merged results to disk ----
+    if not debug:
+        print(f"\n[FINAL-SAVE] Saving {len(all_results):,} merged results ...")
+        stats = save_all_outputs(all_results, args.output_dir,
+                                 id2meta_file=args.id2meta_file)
+        cleanup_checkpoint(checkpoint_dir)
+        print(f"\nCompleted! Total: {len(all_results)}, "
+              f"Products: {stats['valid_product_count']}, "
+              f"Non-products: {stats['non_product_count']}, "
+              f"Failed: {stats['failed_count']}")
 
     # Print first few examples
     num_debug_show = len(all_results) if debug else 3

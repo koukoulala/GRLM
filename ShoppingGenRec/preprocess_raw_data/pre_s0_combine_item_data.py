@@ -180,20 +180,22 @@ def parse_args():
     parser.add_argument(
         "--journey_product_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/0307_EnUs_Product.tsv",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/0307_EnUs_Product.tsv",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product.tsv",
         help="Path to JourneyProduct TSV file",
     )
     parser.add_argument(
         "--more_product_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step0_Product.tsv",
+        default="",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/Step0_Product.tsv",
         help="Optional path to Step0_Product TSV file (has its own header). "
              "Higher priority than JourneyProduct for overlapping GIDs. "
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260331/raw_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/raw_data",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -216,15 +218,28 @@ def main():
     print("Step 1: Reading input TSV files")
     print("=" * 70)
 
-    # JourneyProduct: specific columns
-    journey_columns = [
+    # JourneyProduct: auto-detect header or use predefined columns
+    # Old files have no header (first row is data); new files have header with "GlobalOfferId" in it
+    journey_columns_fallback = [
         "GlobalOfferId", "Title", "Embedding", "Seller", "Gender",
         "OriginalPrice", "LLMCatId", "CategoryName", "AgeGroup",
         "Brand", "Description", "OfferUrl", "ImageUrl",
     ]
     print(f"\n  Reading JourneyProduct: {args.journey_product_file}")
-    journey_rows = read_tsv(args.journey_product_file, expected_columns=journey_columns)
+    # Peek at first line to check if it's a header
+    with open(args.journey_product_file, "r", encoding="utf-8") as f:
+        first_line = f.readline().strip()
+    first_fields = first_line.split("\t")
+    if "GlobalOfferId" in first_fields:
+        print(f"    Detected header row: {first_fields[:5]}...")
+        journey_rows = read_tsv(args.journey_product_file)  # uses its own header
+    else:
+        print(f"    No header detected, using predefined columns")
+        journey_rows = read_tsv(args.journey_product_file,
+                                expected_columns=journey_columns_fallback)
     print(f"    Rows: {len(journey_rows):,}")
+    if journey_rows:
+        print(f"    Columns: {list(journey_rows[0].keys())}")
 
     # Step0_Product (optional): self-describing header
     product_rows = []

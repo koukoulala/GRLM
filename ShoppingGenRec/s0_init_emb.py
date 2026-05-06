@@ -546,13 +546,15 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
@@ -567,7 +569,7 @@ def parse_args():
         default=None,
         help="Number of GPUs (default: all available)",
     )
-    parser.add_argument("--batch_size", type=int, default=128, help="Batch size per GPU")
+    parser.add_argument("--batch_size", type=int, default=512, help="Batch size per GPU")
     parser.add_argument(
         "--top_k", type=int, default=8, help="Top-k similar items to compute"
     )
@@ -598,7 +600,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()

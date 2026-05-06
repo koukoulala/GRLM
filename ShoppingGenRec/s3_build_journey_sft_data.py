@@ -53,6 +53,22 @@ import numpy as np
 # Increase CSV field size limit to handle very large fields
 csv.field_size_limit(sys.maxsize)
 
+# =============================================================================
+# Constants
+# =============================================================================
+
+DEFAULT_MAX_EVENTS = 500
+DEFAULT_MAX_RECENT_EVENTS = 500
+DEFAULT_MAX_PRODUCTS = 20
+DEFAULT_MIN_PRODUCTS = 8
+DEFAULT_MIN_AVG_PRODUCTS = 8
+DEFAULT_MIN_JOURNEYS = 1
+DEFAULT_MAX_JOURNEYS = 20
+DEFAULT_KEEP_EMPTY_RATIO = 0
+DEFAULT_COUNT_RATIO = 0.6
+DEFAULT_DUP_THRESHOLD = 5
+
+
 
 def _clean_profile_json(raw):
     """Unescape multi-layer escaped profile JSON.
@@ -81,22 +97,6 @@ def _clean_profile_json(raw):
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
     return raw
-
-
-# =============================================================================
-# Constants
-# =============================================================================
-
-DEFAULT_MAX_EVENTS = 500
-DEFAULT_MAX_RECENT_EVENTS = 500
-DEFAULT_MAX_PRODUCTS = 20
-DEFAULT_MIN_PRODUCTS = 8
-DEFAULT_MIN_AVG_PRODUCTS = 8
-DEFAULT_MIN_JOURNEYS = 1
-DEFAULT_MAX_JOURNEYS = 20
-DEFAULT_KEEP_EMPTY_RATIO = 0
-DEFAULT_COUNT_RATIO = 0.7
-DEFAULT_DUP_THRESHOLD = 5
 
 
 # =============================================================================
@@ -1102,7 +1102,7 @@ def parse_args():
     parser.add_argument(
         "--task",
         type=str,
-        required=True,
+        default="profile2journey",
         choices=["event2journey", "profile2journey"],
         help="Task type: event2journey or profile2journey",
     )
@@ -1120,7 +1120,7 @@ def parse_args():
     parser.add_argument(
         "--jwp_tsv_file",
         type=str,
-        default="",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/500K_Journey_JWP.tsv",
         help="Path to *_JWP.tsv (User-level: UserId, ReadableUserEvents, "
              "ShoppingProfile, JourneyWithProducts). Used together with "
              "--ranked_tsv_file to load from TSV pair instead of JSON.",
@@ -1128,15 +1128,24 @@ def parse_args():
     parser.add_argument(
         "--ranked_tsv_file",
         type=str,
-        default="",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/500K_Journey_Ranked.tsv",
         help="Path to *_ranked.tsv (Journey-level: UserId, Profile, "
              "JourneyIndex, Journey, OUTPUT). Used together with "
              "--jwp_tsv_file.",
     )
     parser.add_argument(
+        "--ranked_tsv_folder",
+        type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/_tmp_ranker_chunks",
+        help="Path to a folder containing multiple ranked TSV chunks "
+             "(e.g. batch_00001.tsv, batch_00002.tsv, ...). All .tsv files "
+             "in the folder will be merged. Takes precedence over "
+             "--ranked_tsv_file when the folder exists and contains .tsv files.",
+    )
+    parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/id2meta_with_norm.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed_full/id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
@@ -1258,15 +1267,37 @@ def main():
     print(f"Step 1: Loading input files (task={task})")
     print("=" * 70)
 
+    # Determine ranked TSV source: folder (multiple chunks) or single file
+    ranked_tsv_path = None
+    if args.ranked_tsv_folder and os.path.isdir(args.ranked_tsv_folder):
+        tsv_files = sorted([
+            os.path.join(args.ranked_tsv_folder, f)
+            for f in os.listdir(args.ranked_tsv_folder)
+            if f.endswith(".tsv")
+        ])
+        if tsv_files:
+            ranked_tsv_path = tsv_files  # list of files
+            print(f"  Ranked TSV folder: {args.ranked_tsv_folder}")
+            print(f"    Found {len(tsv_files)} TSV chunk(s): "
+                  f"{', '.join(os.path.basename(f) for f in tsv_files)}")
+    if ranked_tsv_path is None and args.ranked_tsv_file:
+        ranked_tsv_path = args.ranked_tsv_file  # single file (string)
+
     # Determine input mode: TSV pair or JSON
-    use_tsv_pair = (args.jwp_tsv_file and args.ranked_tsv_file
+    ranked_exists = False
+    if ranked_tsv_path is not None:
+        if isinstance(ranked_tsv_path, list):
+            ranked_exists = len(ranked_tsv_path) > 0
+        else:
+            ranked_exists = os.path.exists(ranked_tsv_path)
+    use_tsv_pair = (args.jwp_tsv_file and ranked_tsv_path is not None
                     and os.path.exists(args.jwp_tsv_file)
-                    and os.path.exists(args.ranked_tsv_file))
+                    and ranked_exists)
 
     if use_tsv_pair:
         print(f"  Input mode: TSV pair (JWP + ranked)")
         shopping_data = load_from_tsv_pair(
-            args.jwp_tsv_file, args.ranked_tsv_file,
+            args.jwp_tsv_file, ranked_tsv_path,
         )
     else:
         print(f"  Input mode: JSON")

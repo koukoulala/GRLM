@@ -1038,4 +1038,12 @@ def main():
         with open(cp, "w", encoding="utf-8") as f:
             for item in combined:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        print(f"  Per-user results: {
+        print(f"  Per-user results: {cp}")
+    else:
+        print(f"\n  PHASE 2 skipped.")
+
+    print(f"\nDone!")
+
+
+if __name__ == "__main__":
+    main()
