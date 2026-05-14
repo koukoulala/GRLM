@@ -195,16 +195,16 @@ Diversity is enforced through a two-stage process: first group near-duplicate pr
   ### Diversity Validation
   Before finalizing, review the non-filtered list and ask: "Would a user see meaningful variety here?" If multiple non-filtered products are functionally interchangeable (same type, same brand, similar price), rank the best one highest and demote the others lower in the non-filtered ranking. Do NOT filter them out — just rank them lower so the downstream system can decide how many to show.
 
-**Filtering guidance**: Be strict on relevance and seller quality — aggressively filter products that don't clearly match the journey title and queries, or that come from blocklisted sellers. Be lenient on price and diversity — these are soft ranking signals and should NEVER cause a product to be removed. The downstream system will decide how many products to display based on Rank.
+**Filtering guidance & Product count target**: Aim to retain **15 to 30 products** per journey — retain as many quality products as possible. When in doubt about whether a product is relevant enough, **prefer Demote over Exclude** to maximize the output pool. Only exclude a product when it clearly fails a hard gate (safety, seller blacklist, gender/attribute mismatch) or is truly unrelated to the journey. Price and diversity are soft ranking signals and should NEVER cause a product to be removed. Only go below 15 if there are genuinely fewer than 15 candidates that pass the hard filters. The downstream system will decide how many products to display based on Rank.
 
 ## Adaptive Relevance — Minimum Output Guarantee
 
-After applying all gates (1–5), if the total number of surviving products is **fewer than 12**, re-evaluate Gate 1 Excluded products using a **relaxed standard**:
+After applying all gates (1–5), if the total number of surviving products is **fewer than 15**, re-evaluate Gate 1 Excluded products using a **relaxed standard**:
 1. From the Gate 1 Excluded pool, identify products that are **tangentially related** to the journey — they share the same broad category or could reasonably complement the journey's intent, even if they don't directly match.
 2. **Still exclude** products that are: (a) completely unrelated to the journey's category, (b) from a blocklisted seller, (c) failing any other hard gate (safety, gender, seller).
 3. Re-admit the best of these tangentially-related products as **Demoted** level, ranked after all existing Keep and Demote products.
-4. Continue re-admitting until the output reaches **12 products** or there are no more tangentially-related candidates.
-5. **Never sacrifice quality for quantity** — if fewer than 12 products genuinely relate to the journey, output fewer than 12. An irrelevant or unsafe product must never be included just to hit the target.
+4. Continue re-admitting until the output reaches **15 products** or there are no more tangentially-related candidates.
+5. **Never sacrifice quality for quantity** — if fewer than 15 products genuinely relate to the journey, output fewer than 15. An irrelevant or unsafe product must never be included just to hit the target.
 
 ## Post-Gate Reranking Signals
 
@@ -287,13 +287,18 @@ The `<JOURNEY>` section contains a single journey and its candidate products to 
           "OfferId": "string - Unique product identifier",
           "Title": "string - Product title",
           "Seller": "string - Seller name",
-          "Price": "string - Product price (e.g. $67.96)"
+          "Price": "string - Product price (e.g. $67.96)",
+          "Category": "string (optional)",
+          "Brand": "string (optional)",
+          "Gender": "string (optional)"
         }
       ]
     }
   ]
 }
 ```
+
+**Note on optional product fields (Category, Brand, Gender)**: These fields are provided as supplementary signals to assist ranking decisions. They may be **inaccurate or missing** — always cross-verify against the product title before trusting them. When a product's title clearly contradicts its Category/Brand/Gender field, trust the title. Use these fields as hints to speed up evaluation, not as ground truth.
 
 <USER-SHOPPING-PROFILE>
 ##Profile##
@@ -304,3 +309,5 @@ The `<JOURNEY>` section contains a single journey and its candidate products to 
 </JOURNEY>
 
 Now I will analyze the user's shopping profile, then rank all products in this journey (pooling all query results into one unified ranking, keeping only products that pass all gates, and annotating each with its original query).
+
+

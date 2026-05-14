@@ -193,4 +193,4 @@ wandb/
 ShoppingGenRec/raw_data/**
 ShoppingGenRec/resources/tokens.txt
 ShoppingGenRec/resources/tokens_full.txt
-ShoppingGenRec/resources/tokens_shopping.txt
+ShoppingGenRec/resources/tokens_shopping.txtShoppingGenRec/backup/

@@ -23,8 +23,19 @@ from tqdm import tqdm
 import time
 from typing import List, Dict, Tuple
 import warnings
-import faiss
 import tempfile
+import ctypes
+
+# Pre-load libfaiss.so from the local ROCm build so `import faiss` can find it
+_FAISS_LIB_PATHS = [
+    "/scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/build/faiss/libfaiss.so",
+    "/home/aiscuser/.local/lib/python3.12/site-packages/faiss/libfaiss_python_callbacks.so",
+]
+for _lib in _FAISS_LIB_PATHS:
+    if os.path.exists(_lib):
+        ctypes.CDLL(_lib, mode=ctypes.RTLD_GLOBAL)
+
+import faiss
 
 warnings.filterwarnings("ignore")
 
@@ -372,6 +383,7 @@ def compute_similarities_faiss(
     nprobe: int = 128,
     num_threads: int = 0,
     query_indices: np.ndarray = None,
+    index_output_path: str = None,
 ) -> Dict:
     """Compute top-k cosine similarities using FAISS ANN.
 
@@ -399,6 +411,8 @@ def compute_similarities_faiss(
         query_indices: Optional numpy array of indices into embeddings/item_ids
             to search for. If None, searches for all items. The index is
             always built on ALL embeddings so neighbors come from the full set.
+        index_output_path: If set, save the trained FAISS CPU index to this
+            path for later reuse (e.g., querying with new items).
     """
     n, dim = embeddings.shape
 
@@ -448,29 +462,46 @@ def compute_similarities_faiss(
     quantizer = faiss.IndexFlatIP(dim)
     cpu_index = faiss.IndexIVFFlat(quantizer, dim, effective_nlist, faiss.METRIC_INNER_PRODUCT)
 
-    # Train and add on CPU first, then try GPU for search
-    print(f"  Training index on {n} vectors ...")
-    cpu_index.train(embeddings)
-    print(f"  Adding {n} vectors to index ...")
-    cpu_index.add(embeddings)
-    cpu_index.nprobe = min(nprobe, effective_nlist)
-
-    # Try GPU search, fallback to CPU on error
+    # Try to train/add/search entirely on GPU for maximum speed
     index = cpu_index
     if use_gpu:
         try:
             if num_faiss_gpus > 1:
-                print(f"  Moving index to all {num_faiss_gpus} GPUs...")
+                print(f"  Cloning index to all {num_faiss_gpus} GPUs for train+add+search...")
                 index = faiss.index_cpu_to_all_gpus(cpu_index)
             else:
                 gpu_res = faiss.StandardGpuResources()
-                print(f"  Moving index to GPU {faiss_gpu_id}...")
+                print(f"  Moving index to GPU {faiss_gpu_id} for train+add+search...")
                 index = faiss.index_cpu_to_gpu(gpu_res, faiss_gpu_id, cpu_index)
+            print(f"  Training index on GPU with {n} vectors ...")
+            index.train(embeddings)
+            print(f"  Adding {n} vectors to GPU index ...")
+            index.add(embeddings)
         except Exception as e:
-            print(f"  GPU FAISS failed: {e}")
-            print(f"  Falling back to CPU search")
+            print(f"  GPU FAISS train/add failed: {e}")
+            print(f"  Falling back to CPU train+add, then GPU search")
             index = cpu_index
             use_gpu = False
+            print(f"  Training index on CPU with {n} vectors ...")
+            cpu_index.train(embeddings)
+            print(f"  Adding {n} vectors to CPU index ...")
+            cpu_index.add(embeddings)
+    else:
+        print(f"  Training index on CPU with {n} vectors ...")
+        cpu_index.train(embeddings)
+        print(f"  Adding {n} vectors to CPU index ...")
+        cpu_index.add(embeddings)
+
+    cpu_index.nprobe = min(nprobe, effective_nlist)
+
+    # Save the trained CPU index to disk for later reuse
+    if index_output_path:
+        # If training happened on GPU, copy back to CPU before saving
+        if use_gpu and index is not cpu_index:
+            cpu_index = faiss.index_gpu_to_cpu(index)
+            cpu_index.nprobe = min(nprobe, effective_nlist)
+        faiss.write_index(cpu_index, index_output_path)
+        print(f"  Saved FAISS index to: {index_output_path}")
 
     # Batch search: search k+1 to exclude self, then filter
     print(f"  Searching top-{k+1} neighbors for {num_queries} queries ...")
@@ -547,14 +578,14 @@ def parse_args():
         "--item_file",
         type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
@@ -600,7 +631,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()
@@ -630,6 +661,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     emb_file = os.path.join(args.output_dir, "embeddings.npy")
     ids_file = os.path.join(args.output_dir, "item_ids.json")
+    index_file = os.path.join(args.output_dir, "faiss_index.bin")
     output_file = os.path.join(args.output_dir, "similarities.json")
 
     current_ids = [item["id"] for item in data]
@@ -781,6 +813,7 @@ def main():
             nprobe=args.faiss_nprobe,
             num_threads=args.faiss_threads,
             query_indices=query_indices,
+            index_output_path=index_file,
         )
 
         # Merge: previous similarities for old items + new results for new items
@@ -802,6 +835,7 @@ def main():
             nlist=args.faiss_nlist,
             nprobe=args.faiss_nprobe,
             num_threads=args.faiss_threads,
+            index_output_path=index_file,
         )
 
     print(f"Saving similarity results to: {output_file}")
@@ -811,7 +845,8 @@ def main():
     # Clean up temp dir
     tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
     if os.path.isdir(tmp_dir):
-        os.rmdir(tmp_dir)
+        import shutil
+        shutil.rmtree(tmp_dir)
 
     print("Processing completed!")
 

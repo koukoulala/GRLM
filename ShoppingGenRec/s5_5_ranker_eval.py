@@ -1050,7 +1050,7 @@ def parse_args():
         "--model_path", type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_ranker/checkpoint-650",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_ranker_v2_optimized_lr2e-5/checkpoint-1000",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_ranker_v3_lr1e5/checkpoint-2100",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Results/qwen3-5-9b_full_ranker_v3_lr1e5/checkpoint-150",
     )
     p.add_argument(
         "--instruction_version", type=str, default="v2",
@@ -1068,7 +1068,7 @@ def parse_args():
     p.add_argument("--output_file_name", type=str,
                    #default="ranker_eval_results_full_650.json",
                    #default="ranker_eval_results_v2_full_lr2e-5_1000.json",
-                   default="ranker_eval_results_v3_full_lr1e-5_2100.json"
+                   default="ranker_eval_results_v3_full_lr1e-5_150.json"
                    )
     p.add_argument("--sample_n", type=int, default=500)
     p.add_argument("--seed", type=int, default=42)
@@ -1300,10 +1300,12 @@ def main():
                 user_content = ranker_instruction + "\n" + input_text
 
             msgs = [{"role": "user", "content": user_content}]
+            # Use add_generation_prompt=False to avoid injecting <think> tags,
+            # then manually append assistant header to match qwen3_5_nothink training template
             formatted = tokenizer.apply_chat_template(
-                msgs, tokenize=False, add_generation_prompt=True,
-                enable_thinking=False,
+                msgs, tokenize=False, add_generation_prompt=False,
             )
+            formatted += "<|im_start|>assistant\n"
             prompts.append(formatted)
 
         print(f"  Built {len(prompts)} chat-formatted prompts")

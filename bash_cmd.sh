@@ -1,13 +1,14 @@
-CUDA_VISIBLE_DEVICES=0,1 nohup python -u s1_init_sum.py > ../logs/s1_init_sum.out 2>&1 &
-
-cd EasyR1/
-CUDA_VISIBLE_DEVICES=0,1 nohup bash examples/grlm_beauty_grpo.sh > ./logs/grlm_beauty_grpo.out 2>&1 &
-
-cd verl_rl/
-CUDA_VISIBLE_DEVICES=0,1 nohup bash ./recipe/grlm/run_grlm_grpo_simple.sh > ../logs/run_grlm_grpo.out 2>&1 &
 
 cd GRLM/ShoppingGenRec/
+nohup python -u cook_journey_data/step0_combine_item_data.py > logs/step0.out 2>&1 &
+nohup python -u cook_journey_data/step2_0_filter_user_events.py > logs/step2_0.out 2>&1 &
+nohup python -u cook_journey_data/step2_construct_shopping_profile.py > logs/step2.out 2>&1 &
+nohup python -u cook_journey_data/step3_generate_journey_query.py --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks --max_users 100000 > logs/step3_100K.out 2>&1 &
+nohup python -u cook_journey_data/step3_generate_journey_query.py > logs/step3.out 2>&1 &
+nohup python -u cook_journey_data/step3_generate_journey_query.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks/UserEvents_clean_profiles_results_100K_1.tsv --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks > logs/step3_chunk_1.out 2>&1 &
+
 nohup python -u preprocess_raw_data/pre_s0_combine_item_data.py > logs/pre_s0.out 2>&1 &
+export LD_LIBRARY_PATH="/scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/build/faiss:/home/aiscuser/.local/lib/python3.12/site-packages/faiss:${LD_LIBRARY_PATH}"
 nohup python -u s0_init_emb.py > logs/s0_init_emb.out 2>&1 &
 nohup bash -c 'source /scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/env.sh && python -u s0_init_emb.py' > logs/s0_init_emb.out 2>&1 &
 nohup python -u cook_data/step0_0_build_input.py > logs/step0_0_build.out 2>&1 &

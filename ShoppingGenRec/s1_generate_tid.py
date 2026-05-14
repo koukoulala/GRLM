@@ -48,6 +48,8 @@ import argparse
 from collections import Counter
 import time
 import sys
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from functools import partial
 
 from tqdm import tqdm
 
@@ -58,7 +60,7 @@ random.seed(SEED)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RESOURCES_DIR = os.path.join(SCRIPT_DIR, "resources")
 sys.path.insert(0, RESOURCES_DIR)
-from llm_utils import (load_prompts, run_llm_parallel,
+from llm_utils import (run_llm_parallel,
                       run_llm_parallel_with_checkpoint,
                       load_checkpoint as _load_checkpoint_raw,
                       save_checkpoint as _save_checkpoint_raw,
@@ -470,7 +472,7 @@ def build_all_prompts_vllm(data, similarities_dict, all_items_dict, prompt_templ
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     prompts = []
-    for item in tqdm(data, desc="Building prompts"):
+    for item in tqdm(data, desc="Building prompts", mininterval=30):
         item_id = item["id"]
         top_similar_items = similarities_dict.get(item_id, [])[:5]
         raw_prompt = prepare_prompt(item, top_similar_items, all_items_dict,
@@ -593,20 +595,19 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        #default="./processed/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
@@ -626,16 +627,10 @@ def parse_args():
              "exists, else Copilot.",
     )
     parser.add_argument(
-        "--prompts_file",
+        "--prompt_file",
         type=str,
-        default="./resources/prompts.yaml",
-        help="Path to prompts.yaml file with prompt templates",
-    )
-    parser.add_argument(
-        "--prompt_template_name",
-        type=str,
-        default="term_generation",
-        help="Name of the prompt template to use from prompts.yaml (default: term_generation)",
+        default=os.path.join(SCRIPT_DIR, "prompts", "term_generation.md"),
+        help="Path to prompt template file (.md/.txt) with {placeholders}",
     )
     # --- vLLM-specific args ---
     parser.add_argument(
@@ -672,7 +667,7 @@ def parse_args():
     parser.add_argument(
         "--token_file",
         type=str,
-        default="./resources/tokens.txt",
+        default="./resources/tokens_full.txt",
         help="Path to tokens.txt file for Copilot API authentication",
     )
     parser.add_argument(
@@ -771,9 +766,9 @@ def parse_args():
     parser.add_argument(
         "--prompts_chunk_size",
         type=int,
-        default=80000,
+        default=90000,
         help="Number of prompts per file when using --export_prompts_only "
-             "(default: 80000)",
+             "(default: 90000)",
     )
     parser.add_argument(
         "--prompts_input_file",
@@ -813,7 +808,7 @@ def parse_args():
         type=str,
         nargs="*",
         #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/summaries_with_similarity.jsonl"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl or .json files from previous runs "
              "to resume from. Supports both JSONL (one record per line) and "
@@ -825,8 +820,8 @@ def parse_args():
         "--checkpoint_dirs",
         type=str,
         nargs="*",
-        #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/_s1_checkpoint"],
+        default=[],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/_s1_checkpoint"],
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",
@@ -963,6 +958,24 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
 
 
 # =============================================================================
+# Parallel Helpers (module-level for pickling with ProcessPoolExecutor)
+# =============================================================================
+
+def _build_result_batch(batch):
+    """Process a batch of (idx, item, gen_text) tuples.
+    Returns list of (idx, item_id, result_dict)."""
+    results = []
+    for idx, item, gen_text in batch:
+        words = parse_summary_words(gen_text)
+        item_id = item["id"]
+        result = item.copy()
+        result["llm_output"] = gen_text
+        result["summary_words"] = words
+        results.append((idx, item_id, result))
+    return results
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -1034,7 +1047,7 @@ def main():
         similarities_dict = load_similarities(args.similarity_file)
         print(f"Loaded similarities for {len(similarities_dict)} items")
 
-        # Find and merge all *_results.tsv files
+        # Find and merge all *_results.tsv files (PARALLEL)
         import csv as csv_mod
         results_files = sorted([
             os.path.join(args.prompt_results_dir, f)
@@ -1042,101 +1055,162 @@ def main():
             if f.endswith("_results.tsv") and os.path.isfile(
                 os.path.join(args.prompt_results_dir, f))
         ])
-        print(f"\nFound {len(results_files)} results files:")
-        merged_outputs = {}  # item_id -> llm_output
+        print(f"\nFound {len(results_files)} results files, reading in parallel ...")
+
         # Column name candidates for item ID and LLM output
         id_col_names = {"GlobalOfferId", "globalofferid", "item_id", "ItemId", "ID", "id"}
         output_col_names = {"Output", "output", "OUTPUT", "LLMOutput", "llm_output"}
-        for rf in results_files:
-            count = 0
-            with open(rf, "r", encoding="utf-8") as f:
-                reader = csv_mod.reader(f, delimiter="\t")
-                header = next(reader, None)  # read header
-                if header is None:
-                    print(f"  {os.path.basename(rf)}: SKIP (empty)")
-                    continue
-                # Find column indices by name
-                id_idx = None
-                output_idx = None
-                for i, col in enumerate(header):
-                    col_stripped = col.strip()
-                    if col_stripped in id_col_names:
-                        id_idx = i
-                    elif col_stripped in output_col_names:
-                        output_idx = i
-                if id_idx is None or output_idx is None:
-                    print(f"  {os.path.basename(rf)}: SKIP (missing columns: "
-                          f"id={'FOUND' if id_idx is not None else 'MISSING'}, "
-                          f"output={'FOUND' if output_idx is not None else 'MISSING'}) "
-                          f"header={header}")
-                    continue
-                min_cols = max(id_idx, output_idx) + 1
-                for row in reader:
-                    if len(row) >= min_cols:
-                        item_id = row[id_idx].strip()
-                        gen_text = row[output_idx].replace("\\n", "\n")
-                        merged_outputs[item_id] = gen_text
-                        count += 1
-            print(f"  {os.path.basename(rf)}: {count:,} items "
-                  f"(id_col={header[id_idx].strip()}, output_col={header[output_idx].strip()})")
-        print(f"Total merged: {len(merged_outputs):,} unique items")
 
-        # Also load resume files if specified
+        def _read_one_results_tsv(rf):
+            """Read a single results TSV file. Returns (basename, dict, count, msg)."""
+            local_dict = {}
+            count = 0
+            basename = os.path.basename(rf)
+            try:
+                with open(rf, "r", encoding="utf-8") as f:
+                    reader = csv_mod.reader(f, delimiter="\t")
+                    header = next(reader, None)
+                    if header is None:
+                        return (basename, local_dict, 0, "SKIP (empty)")
+                    id_idx = None
+                    output_idx = None
+                    for i, col in enumerate(header):
+                        col_stripped = col.strip()
+                        if col_stripped in id_col_names:
+                            id_idx = i
+                        elif col_stripped in output_col_names:
+                            output_idx = i
+                    if id_idx is None or output_idx is None:
+                        msg = (f"SKIP (missing columns: "
+                               f"id={'FOUND' if id_idx is not None else 'MISSING'}, "
+                               f"output={'FOUND' if output_idx is not None else 'MISSING'}) "
+                               f"header={header}")
+                        return (basename, local_dict, 0, msg)
+                    min_cols = max(id_idx, output_idx) + 1
+                    for row in reader:
+                        if len(row) >= min_cols:
+                            item_id = row[id_idx].strip()
+                            gen_text = row[output_idx].replace("\\n", "\n")
+                            local_dict[item_id] = gen_text
+                            count += 1
+                    msg = (f"{count:,} items "
+                           f"(id_col={header[id_idx].strip()}, "
+                           f"output_col={header[output_idx].strip()})")
+                    return (basename, local_dict, count, msg)
+            except Exception as e:
+                return (basename, local_dict, 0, f"ERROR: {e}")
+
+        merged_outputs = {}  # item_id -> llm_output
+        read_start = time.time()
+        num_read_workers = min(32, len(results_files))
+        with ThreadPoolExecutor(max_workers=num_read_workers) as executor:
+            futures = {executor.submit(_read_one_results_tsv, rf): rf
+                       for rf in results_files}
+            for future in as_completed(futures):
+                basename, local_dict, count, msg = future.result()
+                merged_outputs.update(local_dict)
+                print(f"  {basename}: {msg}")
+        read_elapsed = time.time() - read_start
+        print(f"Total merged: {len(merged_outputs):,} unique items "
+              f"(read {len(results_files)} files in {read_elapsed:.1f}s "
+              f"with {num_read_workers} workers)")
+
+        # Also load resume files if specified (PARALLEL)
         previous_results = {}
         resume_paths = args.resume_from_multi_path or []
         valid_resume_files = [p for p in resume_paths if p and os.path.exists(p)]
-        if valid_resume_files:
-            for prev_file in valid_resume_files:
-                print(f"  Loading resume file: {prev_file}")
-                is_json_dict = (prev_file.endswith('.json')
-                                and not prev_file.endswith('.jsonl'))
-                if is_json_dict:
-                    with open(prev_file, "r", encoding="utf-8") as f:
-                        json_data = json.load(f)
-                    for rid, record in json_data.items():
-                        if "id" not in record:
-                            record["id"] = rid
-                        previous_results[rid] = record
-                else:
-                    with open(prev_file, "r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                record = json.loads(line)
-                                rid = record.get("id")
-                                if rid:
-                                    previous_results[rid] = record
-                            except json.JSONDecodeError:
-                                continue
-            print(f"  Loaded {len(previous_results):,} items from resume files")
 
-        # Build full result dicts
-        all_results = []
-        data_by_id = {item["id"]: item for item in full_data}
-        matched = 0
-        from_resume = 0
-        for item in full_data:
+        def _load_one_resume_file(prev_file):
+            """Load a single resume file. Returns (path, dict, count)."""
+            local_results = {}
+            is_json_dict = (prev_file.endswith('.json')
+                            and not prev_file.endswith('.jsonl'))
+            if is_json_dict:
+                with open(prev_file, "r", encoding="utf-8") as f:
+                    json_data = json.load(f)
+                for rid, record in json_data.items():
+                    if "id" not in record:
+                        record["id"] = rid
+                    local_results[rid] = record
+            else:
+                with open(prev_file, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                            rid = record.get("id")
+                            if rid:
+                                local_results[rid] = record
+                        except json.JSONDecodeError:
+                            continue
+            return (prev_file, local_results, len(local_results))
+
+        if valid_resume_files:
+            resume_start = time.time()
+            with ThreadPoolExecutor(max_workers=len(valid_resume_files)) as executor:
+                resume_futures = [executor.submit(_load_one_resume_file, pf)
+                                  for pf in valid_resume_files]
+                for future in as_completed(resume_futures):
+                    pf, local_res, cnt = future.result()
+                    previous_results.update(local_res)
+                    print(f"  Loaded resume file: {pf} ({cnt:,} items)")
+            resume_elapsed = time.time() - resume_start
+            print(f"  Loaded {len(previous_results):,} items from "
+                  f"{len(valid_resume_files)} resume files in {resume_elapsed:.1f}s")
+
+        # Build full result dicts (PARALLEL parse_summary_words)
+        build_start = time.time()
+        # Separate items into three buckets
+        items_to_parse = []   # (index, item, gen_text) - need parse
+        items_from_resume = []  # (index, item_id) - from resume
+        for idx, item in enumerate(full_data):
             item_id = item["id"]
             if item_id in merged_outputs:
-                gen_text = merged_outputs[item_id]
-                words = parse_summary_words(gen_text)
-                similar_item_ids = [
-                    sim["item_id"]
-                    for sim in similarities_dict.get(item_id, [])[:5]
-                ]
-                result = item.copy()
-                result["llm_output"] = gen_text
-                result["summary_words"] = words
-                result["similar_item_ids"] = similar_item_ids
-                all_results.append(result)
-                matched += 1
+                items_to_parse.append((idx, item, merged_outputs[item_id]))
             elif item_id in previous_results:
-                all_results.append(previous_results[item_id])
-                from_resume += 1
+                items_from_resume.append((idx, item_id))
 
-        print(f"\nBuilt {len(all_results):,} results "
+        # Split items_to_parse into batches for parallel processing
+        parse_batch_size = max(1, len(items_to_parse) // (os.cpu_count() or 4))
+        parse_batches = [
+            items_to_parse[i:i + parse_batch_size]
+            for i in range(0, len(items_to_parse), parse_batch_size)
+        ]
+
+        all_results_indexed = {}  # idx -> result
+        matched = 0
+        from_resume = 0
+
+        if parse_batches:
+            num_parse_workers = min(os.cpu_count() or 4, len(parse_batches))
+            print(f"\nParsing {len(items_to_parse):,} items with "
+                  f"{num_parse_workers} workers ({len(parse_batches)} batches) ...")
+            with ProcessPoolExecutor(max_workers=num_parse_workers) as executor:
+                parse_futures = [executor.submit(_build_result_batch, batch)
+                                 for batch in parse_batches]
+                for future in as_completed(parse_futures):
+                    for idx, item_id, result in future.result():
+                        # Add similar_item_ids
+                        result["similar_item_ids"] = [
+                            sim["item_id"]
+                            for sim in similarities_dict.get(item_id, [])[:5]
+                        ]
+                        all_results_indexed[idx] = result
+                        matched += 1
+
+        # Add resume items
+        for idx, item_id in items_from_resume:
+            all_results_indexed[idx] = previous_results[item_id]
+            from_resume += 1
+
+        # Rebuild ordered list
+        all_results = [all_results_indexed[idx]
+                       for idx in sorted(all_results_indexed.keys())]
+        build_elapsed = time.time() - build_start
+
+        print(f"\nBuilt {len(all_results):,} results in {build_elapsed:.1f}s "
               f"(from results dir: {matched:,}, from resume: {from_resume:,}, "
               f"missing: {len(full_data) - matched - from_resume:,})")
 
@@ -1242,11 +1316,11 @@ def main():
         cleanup_checkpoint(checkpoint_dir)
         return
 
-    # ---- Load prompt template from prompts.yaml ----
-    print(f"\nLoading prompt template from: {args.prompts_file}")
-    prompts_config = load_prompts(args.prompts_file)
-    prompt_template = prompts_config[args.prompt_template_name]['user']
-    print(f"  Prompt template '{args.prompt_template_name}' loaded successfully")
+    # ---- Load prompt template from file ----
+    print(f"\nLoading prompt template from: {args.prompt_file}")
+    with open(args.prompt_file, "r", encoding="utf-8") as f:
+        prompt_template = f.read()
+    print(f"  Prompt template loaded successfully")
 
     # ---- Load data ----
     print(f"\nLoading data: {args.item_file}")
@@ -1500,7 +1574,7 @@ def main():
 
         # Build all prompts in memory
         all_prompt_rows = []  # list of (item_id, escaped_prompt)
-        for item in tqdm(data, desc="Building prompts"):
+        for item in tqdm(data, desc="Building prompts", mininterval=30):
             item_id = item["id"]
             top_similar_items = similarities_dict.get(item_id, [])[:5]
             raw_prompt = prepare_prompt(
@@ -1550,7 +1624,7 @@ def main():
         # Build (item_id, prompt) inputs for all items
         print("\nBuilding prompts for Copilot API ...")
         copilot_inputs = []
-        for item in tqdm(data, desc="Building prompts"):
+        for item in tqdm(data, desc="Building prompts", mininterval=30):
             item_id = item["id"]
             top_similar_items = similarities_dict.get(item_id, [])[:5]
             raw_prompt = prepare_prompt(
@@ -1590,7 +1664,7 @@ def main():
         # --- Papyrus API path ---
         print("\nBuilding prompts for Papyrus API ...")
         papyrus_inputs = []
-        for item in tqdm(data, desc="Building prompts"):
+        for item in tqdm(data, desc="Building prompts", mininterval=30):
             item_id = item["id"]
             top_similar_items = similarities_dict.get(item_id, [])[:5]
             raw_prompt = prepare_prompt(
