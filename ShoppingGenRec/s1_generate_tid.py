@@ -1,8 +1,8 @@
 """Step 1: Generate Product Summaries & Build ID-to-Metadata Mapping
 
 Supports two inference backends:
-1. vLLM offline inference (when --summary_model points to a valid local model)
-2. GitHub Copilot API (when --summary_model is empty or path doesn't exist)
+1. GitHub Copilot API
+2. Papyrus API
 
 Both backends support checkpoint/resume: intermediate results are saved to
 a checkpoint directory so that interrupted runs can continue from where they
@@ -21,23 +21,23 @@ Outputs:
     - statistics.json                 : word frequency & conflict stats
     - failed_items.json               : items that did not produce 7 words
 
-Usage (vLLM - local model):
-    python s1_generate_tid.py \\
-        --item_file ./raw_data/merged_clean_item.json \\
-        --similarity_file ./processed/similarities.json \\
-        --output_dir ./processed/ \\
-        --summary_model /path/to/Qwen3-8B \\
-        --num_gpus 2
-
 Usage (Copilot API):
     python s1_generate_tid.py \\
         --item_file ./raw_data/merged_clean_item.json \\
         --similarity_file ./processed/similarities.json \\
         --output_dir ./processed/ \\
-        --summary_model "" \\
         --token_file ./resources/tokens.txt \\
         --copilot_model gpt-5.4 \\
         --copilot_workers 20
+
+Usage (Papyrus API):
+    python s1_generate_tid.py \\
+        --item_file ./raw_data/merged_clean_item.json \\
+        --similarity_file ./processed/similarities.json \\
+        --output_dir ./processed/ \\
+        --inference_backend papyrus \\
+        --papyrus_model gpt-5-chat-shortco-2025-08-07-Bing \\
+        --papyrus_workers 40
 """
 
 import os
@@ -106,8 +106,8 @@ def build_product_info_text(item):
 
     description = item.get("description", "")
     if description:
-        if len(description) > 150:
-            description = description[:150] + "..."
+        if len(description) > 500:
+            description = description[:500] + "..."
         info_lines.append(f"Description: {description}")
 
     categories = item.get("categories", "")
@@ -119,14 +119,11 @@ def build_product_info_text(item):
     brand = attributes.get("Brand", "")
     if isinstance(brand, str):
         brand = " ".join(brand.split())
+        if brand:
+            info_lines.append(f"Brand: {brand}")
     seller = attributes.get("Seller", "")
     if isinstance(seller, str):
         seller = " ".join(seller.split())
-    if brand and seller and brand.lower() == seller.lower():
-        info_lines.append(f"Brand/Seller: {brand}")
-    else:
-        if brand:
-            info_lines.append(f"Brand: {brand}")
         if seller:
             info_lines.append(f"Seller: {seller}")
     for attr_name in ["Color", "Size"]:
@@ -289,10 +286,87 @@ def parse_summary_words(content: str) -> list:
 
 
 # =============================================================================
+# Seller Validation
+# =============================================================================
+
+def _normalize_for_comparison(text):
+    """Normalize text for seller comparison: normalize_term + lowercase."""
+    if not text:
+        return ""
+    return normalize_term(text).lower().strip()
+
+
+def validate_seller_in_terms(item, summary_words):
+    """Check whether the seller appears in the last 2 terms of summary_words.
+
+    Args:
+        item: Item dict with product metadata (has 'attributes.Seller').
+        summary_words: List of 7 summary word strings.
+
+    Returns:
+        (is_valid, seller_raw):
+            is_valid = True if seller is empty/missing OR seller matches
+                       one of the last 2 terms (after normalization).
+            seller_raw = the raw seller string (for logging).
+    """
+    attributes = item.get("attributes", {})
+    seller = attributes.get("Seller", "")
+    if isinstance(seller, str):
+        seller = " ".join(seller.split())
+    if not seller:
+        return True, ""
+
+    seller_norm = _normalize_for_comparison(seller)
+    if not seller_norm:
+        return True, seller
+
+    # Check last 2 terms
+    if len(summary_words) < 7:
+        return False, seller
+
+    for term in summary_words[-2:]:
+        term_norm = _normalize_for_comparison(term)
+        if term_norm == seller_norm:
+            return True, seller
+
+    return False, seller
+
+
+def is_result_valid(item, result, check_seller=True):
+    """Check whether a result is valid (7 non-empty words + seller check).
+
+    Args:
+        item: Item dict with product metadata.
+        result: Result dict with 'summary_words'.
+        check_seller: Whether to also validate seller presence.
+
+    Returns:
+        (is_valid, reason):
+            is_valid: True if result passes all checks.
+            reason: None if valid, else 'not_7_words', 'non_product',
+                    or 'seller_mismatch'.
+    """
+    words = result.get("summary_words", [])
+    non_empty = [w for w in words if w]
+
+    if len(words) == 0:
+        return False, "non_product"
+    if len(non_empty) != 7:
+        return False, "not_7_words"
+
+    if check_seller:
+        seller_ok, _ = validate_seller_in_terms(item, words)
+        if not seller_ok:
+            return False, "seller_mismatch"
+
+    return True, None
+
+
+# =============================================================================
 # Statistics
 # =============================================================================
 
-def analyze_statistics(all_items):
+def analyze_statistics(all_items, check_seller=True):
     """Analyze summary statistics, separating products from non-products."""
     print("\n" + "=" * 50)
     print("Statistical Analysis Results")
@@ -301,6 +375,7 @@ def analyze_statistics(all_items):
     product_items = []
     non_product_items = []
     failed_items = []
+    seller_mismatch_items = []
 
     for item in all_items:
         words = item.get("summary_words", [])
@@ -308,6 +383,11 @@ def analyze_statistics(all_items):
         if len(words) == 0:
             non_product_items.append(item)
         elif len(non_empty_words) == 7:
+            if check_seller:
+                seller_ok, seller_raw = validate_seller_in_terms(item, words)
+                if not seller_ok:
+                    seller_mismatch_items.append(item)
+                    continue
             product_items.append(item)
         else:
             failed_items.append(item)
@@ -321,6 +401,9 @@ def analyze_statistics(all_items):
           f"({len(non_product_items) / total * 100:.2f}%)")
     print(f"   Failed parsing:           {len(failed_items):>10,} "
           f"({len(failed_items) / total * 100:.2f}%)")
+    if check_seller:
+        print(f"   Seller mismatch:          {len(seller_mismatch_items):>10,} "
+              f"({len(seller_mismatch_items) / total * 100:.2f}%)")
 
     all_words = []
     word_freq = Counter()
@@ -363,6 +446,14 @@ def analyze_statistics(all_items):
             print(f"     ID={item['id']}, Title={item.get('title', 'N/A')}")
             print(f"       LLM output: {item.get('llm_output', 'N/A')[:100]}")
 
+    if seller_mismatch_items:
+        print(f"\n5. Seller mismatch examples (first 5):")
+        for item in seller_mismatch_items[:5]:
+            _, seller_raw = validate_seller_in_terms(
+                item, item.get("summary_words", []))
+            print(f"     ID={item['id']}, Seller={seller_raw}, "
+                  f"Terms={item.get('summary_words', [])[-2:]}")
+
     return {
         "word_frequency": dict(word_freq.most_common()),
         "position_frequency": [
@@ -372,19 +463,19 @@ def analyze_statistics(all_items):
         "valid_product_count": len(product_items),
         "non_product_count": len(non_product_items),
         "failed_count": len(failed_items),
+        "seller_mismatch_count": len(seller_mismatch_items),
         "total_items": total,
-    }, failed_items, non_product_items
+    }, failed_items, non_product_items, seller_mismatch_items
 
 
 # =============================================================================
-# vLLM Checkpoint Helpers (stores full result dicts, not just text)
+# Checkpoint Helpers
 # =============================================================================
 
-def _load_vllm_checkpoint(checkpoint_dir):
-    """Load vLLM checkpoint results (full item dicts keyed by item id).
+def _load_jsonl_checkpoint(checkpoint_dir):
+    """Load checkpoint results stored as JSONL (full item dicts keyed by item id).
 
-    Only loads records that have 'llm_output' key, which distinguishes
-    vLLM format (full item dicts) from Copilot format ({"id", "result"}).
+    Loads records that have 'llm_output' and 'id' keys.
     """
     completed = {}
     if not os.path.exists(checkpoint_dir):
@@ -397,8 +488,6 @@ def _load_vllm_checkpoint(checkpoint_dir):
                     line = line.strip()
                     if line:
                         result = json.loads(line)
-                        # Only accept vLLM format (has llm_output);
-                        # skip Copilot format (has 'result' instead)
                         if 'llm_output' in result and 'id' in result:
                             completed[result['id']] = result
     if completed:
@@ -407,181 +496,13 @@ def _load_vllm_checkpoint(checkpoint_dir):
     return completed
 
 
-def _save_vllm_checkpoint(results, checkpoint_dir, chunk_idx):
-    """Save vLLM results (list of full item dicts) to checkpoint."""
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    fpath = os.path.join(checkpoint_dir, f"chunk_{chunk_idx:05d}.jsonl")
-    with open(fpath, 'w', encoding='utf-8') as f:
-        for result in results:
-            f.write(json.dumps(result, ensure_ascii=False) + "\n")
-    print(f"  [CHECKPOINT] Saved chunk {chunk_idx}: {fpath} ({len(results)} items)")
-
-
-# =============================================================================
-# Inference Mode Detection
-# =============================================================================
-
-def should_use_copilot(summary_model):
-    """Determine whether to use Copilot API or vLLM.
-
-    Returns True if summary_model is empty or path doesn't exist.
-    """
-    if not summary_model or not summary_model.strip():
-        print("  [INFO] summary_model is empty, using Copilot API")
-        return True
-    if not os.path.exists(summary_model):
-        print(f"  [INFO] Model path not found: {summary_model}, using Copilot API")
-        return True
-    return False
-
-
 def determine_backend(args):
     """Determine which inference backend to use.
 
     Returns:
-        str: One of 'vllm', 'copilot', 'papyrus'.
+        str: One of 'copilot', 'papyrus'.
     """
-    backend = args.inference_backend
-    if backend == "auto":
-        if should_use_copilot(args.summary_model):
-            return "copilot"
-        return "vllm"
-    return backend
-
-
-# =============================================================================
-# vLLM Inference
-# =============================================================================
-
-def build_all_prompts_vllm(data, similarities_dict, all_items_dict, prompt_template,
-                           model_name, enable_thinking=False):
-    """Build formatted prompts for vLLM using tokenizer's chat template.
-
-    Args:
-        data: List of item dicts.
-        similarities_dict: Dict of item_id -> similar items list.
-        all_items_dict: Dict of item_id -> item dict.
-        prompt_template: Prompt template string from prompts.yaml.
-        model_name: Path to the model (for tokenizer loading).
-        enable_thinking: Whether to enable thinking/reasoning in template.
-
-    Returns:
-        List of formatted prompt strings ready for vLLM generate().
-    """
-    from transformers import AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    prompts = []
-    for item in tqdm(data, desc="Building prompts", mininterval=30):
-        item_id = item["id"]
-        top_similar_items = similarities_dict.get(item_id, [])[:5]
-        raw_prompt = prepare_prompt(item, top_similar_items, all_items_dict,
-                                    prompt_template)
-        messages = [{"role": "user", "content": raw_prompt}]
-        formatted = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=enable_thinking,
-        )
-        prompts.append(formatted)
-    return prompts
-
-
-def run_vllm_inference(
-    prompts,
-    model_name,
-    num_gpus,
-    gpu_memory_utilization,
-    max_model_len,
-    max_tokens=80,
-    chunk_size=100000,
-    data=None,
-    similarities_dict=None,
-    checkpoint_dir=None,
-):
-    """Run vLLM offline inference on all prompts with checkpoint support.
-
-    Args:
-        prompts: List of formatted prompt strings.
-        model_name: Path to the model.
-        num_gpus: Number of GPUs for tensor parallelism.
-        gpu_memory_utilization: Fraction of GPU memory to use (0-1).
-        max_model_len: Maximum context length for the model.
-        max_tokens: Maximum number of output tokens per prompt.
-        chunk_size: Number of prompts per generate() call.
-        data: List of item dicts (for checkpoint saving).
-        similarities_dict: Similarities dict (for checkpoint saving).
-        checkpoint_dir: Directory for checkpoint files (optional).
-
-    Returns:
-        List of generated text strings, aligned with input prompts.
-    """
-    from vllm import LLM, SamplingParams
-
-    print(f"\nInitializing vLLM engine ...")
-    print(f"  Model: {model_name}")
-    print(f"  Tensor parallel size: {num_gpus}")
-    print(f"  GPU memory utilization: {gpu_memory_utilization}")
-    print(f"  Max model length: {max_model_len}")
-    print(f"  Max output tokens: {max_tokens}")
-
-    llm = LLM(
-        model=model_name,
-        tensor_parallel_size=num_gpus,
-        gpu_memory_utilization=gpu_memory_utilization,
-        max_model_len=max_model_len,
-        trust_remote_code=True,
-        seed=SEED,
-    )
-
-    sampling_params = SamplingParams(max_tokens=max_tokens, temperature=0, top_p=1.0)
-
-    all_outputs = []
-    total = len(prompts)
-    num_chunks = (total + chunk_size - 1) // chunk_size
-
-    for chunk_idx in range(num_chunks):
-        start = chunk_idx * chunk_size
-        end = min(start + chunk_size, total)
-        chunk_prompts = prompts[start:end]
-        print(f"\nProcessing chunk {chunk_idx + 1}/{num_chunks} "
-              f"(items {start:,}-{end - 1:,}, size={len(chunk_prompts):,}) ...")
-
-        chunk_start_time = time.time()
-        outputs = llm.generate(chunk_prompts, sampling_params)
-        chunk_elapsed = time.time() - chunk_start_time
-
-        throughput = len(chunk_prompts) / chunk_elapsed if chunk_elapsed > 0 else 0
-        print(f"  Chunk done in {chunk_elapsed:.1f}s "
-              f"({throughput:.1f} items/s)")
-
-        chunk_texts = []
-        for output in outputs:
-            generated_text = output.outputs[0].text.strip()
-            chunk_texts.append(generated_text)
-
-        all_outputs.extend(chunk_texts)
-
-        # Save checkpoint after each vLLM chunk
-        if checkpoint_dir and data and similarities_dict:
-            chunk_data = data[start:end]
-            chunk_results = []
-            for item, gen_text in zip(chunk_data, chunk_texts):
-                words = parse_summary_words(gen_text)
-                item_id = item["id"]
-                similar_item_ids = [
-                    sim["item_id"]
-                    for sim in similarities_dict.get(item_id, [])[:5]
-                ]
-                result = item.copy()
-                result["llm_output"] = gen_text
-                result["summary_words"] = words
-                result["similar_item_ids"] = similar_item_ids
-                chunk_results.append(result)
-            _save_vllm_checkpoint(chunk_results, checkpoint_dir, chunk_idx)
-
-    return all_outputs
+    return args.inference_backend
 
 
 # =============================================================================
@@ -590,78 +511,38 @@ def run_vllm_inference(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate 7-word product summaries using vLLM or Copilot API"
+        description="Generate 7-word product summaries using Copilot or Papyrus API"
     )
     parser.add_argument(
         "--item_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/",
         help="Directory to save summaries and statistics",
-    )
-    parser.add_argument(
-        "--summary_model",
-        type=str,
-        default="",
-        #default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/Qwen3.5-9B",
-        help="Path to local LLM for vLLM inference. Set to empty string "
-             "or non-existent path to use Copilot API instead.",
     )
     parser.add_argument(
         "--inference_backend",
         type=str,
         default="copilot",
-        choices=["auto", "vllm", "copilot", "papyrus"],
-        help="Inference backend: 'auto' selects vLLM if summary_model "
-             "exists, else Copilot.",
+        choices=["copilot", "papyrus"],
+        help="Inference backend: 'copilot' or 'papyrus'.",
     )
     parser.add_argument(
         "--prompt_file",
         type=str,
         default=os.path.join(SCRIPT_DIR, "prompts", "term_generation.md"),
         help="Path to prompt template file (.md/.txt) with {placeholders}",
-    )
-    # --- vLLM-specific args ---
-    parser.add_argument(
-        "--num_gpus",
-        type=int,
-        default=None,
-        help="Number of GPUs for tensor parallelism (default: all available)",
-    )
-    parser.add_argument(
-        "--gpu_memory_utilization",
-        type=float,
-        default=0.90,
-        help="Fraction of GPU memory for vLLM KV-cache (default: 0.90)",
-    )
-    parser.add_argument(
-        "--max_model_len",
-        type=int,
-        default=4096,
-        help="Maximum model context length (default: 4096)",
-    )
-    parser.add_argument(
-        "--chunk_size",
-        type=int,
-        default=200000,
-        help="Number of prompts per vLLM generate() call (default: 200000)",
-    )
-    parser.add_argument(
-        "--enable_thinking",
-        action="store_true",
-        default=False,
-        help="Enable thinking/reasoning mode in chat template",
     )
     # --- Copilot API-specific args ---
     parser.add_argument(
@@ -737,6 +618,15 @@ def parse_args():
         help="Maximum number of output tokens per prompt",
     )
     parser.add_argument(
+        "--check_seller",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Validate that seller appears in the last 2 terms of the "
+             "summary. Items failing this check are treated as invalid "
+             "and will be re-processed on resume. Use --no-check_seller "
+             "to disable. (default: enabled)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         default=False,
@@ -766,9 +656,9 @@ def parse_args():
     parser.add_argument(
         "--prompts_chunk_size",
         type=int,
-        default=90000,
+        default=900000,
         help="Number of prompts per file when using --export_prompts_only "
-             "(default: 90000)",
+             "(default: 900000)",
     )
     parser.add_argument(
         "--prompts_input_file",
@@ -798,17 +688,11 @@ def parse_args():
              "s1 is still running in another process.",
     )
     parser.add_argument(
-        "--global_offer_only",
-        action="store_true",
-        default=False,
-        help="Only process GlobalOfferID items (IDs not starting with 'P')",
-    )
-    parser.add_argument(
         "--resume_from_multi_path",
         type=str,
         nargs="*",
-        #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/summaries_with_similarity.jsonl"],
+        default=[],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl or .json files from previous runs "
              "to resume from. Supports both JSONL (one record per line) and "
@@ -820,8 +704,10 @@ def parse_args():
         "--checkpoint_dirs",
         type=str,
         nargs="*",
-        default=[],
-        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed/_s1_checkpoint"],
+        #default=[],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_1_checkpoint",
+                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_5_checkpoint",
+                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_9_checkpoint"],
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",
@@ -834,7 +720,7 @@ def parse_args():
 # =============================================================================
 
 def save_all_outputs(all_results, output_dir, id2meta_file=None,
-                     output_prefix=None):
+                     output_prefix=None, check_seller=True):
     """Save all output files from a list of result dicts.
 
     Saves: summaries_with_similarity.jsonl, id2meta.json, id2words.tsv,
@@ -846,6 +732,7 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
         id2meta_file: Optional custom path for id2meta.json.
         output_prefix: Optional prefix for output filenames. If provided,
                        files are named <prefix>_summaries.jsonl, etc.
+        check_seller: Whether to validate seller presence in last 2 terms.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -860,7 +747,8 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
     # ---- Statistics ----
-    stats, failed_items, non_product_items = analyze_statistics(all_results)
+    stats, failed_items, non_product_items, seller_mismatch_items = \
+        analyze_statistics(all_results, check_seller=check_seller)
 
     if output_prefix:
         stats_file = os.path.join(output_dir, f"{output_prefix}_statistics.json")
@@ -887,6 +775,17 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
             "reason": "non_product",
             "llm_output": item.get("llm_output", ""),
         })
+    for item in seller_mismatch_items:
+        _, seller_raw = validate_seller_in_terms(
+            item, item.get("summary_words", []))
+        all_problematic.append({
+            "id": item["id"],
+            "title": item.get("title", ""),
+            "reason": "seller_mismatch",
+            "seller": seller_raw,
+            "summary_words": item.get("summary_words", []),
+            "llm_output": item.get("llm_output", ""),
+        })
 
     if output_prefix:
         failed_file = os.path.join(output_dir, f"{output_prefix}_failed_items.json")
@@ -897,19 +796,26 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
     print(f"Failed/non-product items saved to: {failed_file} "
           f"({len(all_problematic)} items)")
 
-    # ---- Build id2meta mapping ----
+    # ---- Build id2meta mapping (only valid items) ----
     print("\nBuilding id2meta mapping ...")
+    # Collect IDs of seller-mismatch items for exclusion
+    seller_mismatch_ids = {item["id"] for item in seller_mismatch_items}
     id2meta = {}
-    skipped_count = 0
+    skip_bad_summary = 0
+    skip_seller = 0
     for item in all_results:
         words = item.get("summary_words", [])
         non_empty_words = [w for w in words if w]
         if len(non_empty_words) != 7:
-            skipped_count += 1
+            skip_bad_summary += 1
             continue
         item_id = item.get("id")
-        if item_id:
+        if item_id and item_id not in seller_mismatch_ids:
             id2meta[item_id] = item
+        elif item_id in seller_mismatch_ids:
+            skip_seller += 1
+        else:
+            skip_bad_summary += 1
 
     if id2meta_file:
         id2meta_path = id2meta_file
@@ -919,20 +825,46 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
         id2meta_path = os.path.join(output_dir, "id2meta.json")
     with open(id2meta_path, "w", encoding="utf-8") as f:
         json.dump(id2meta, f, ensure_ascii=False, indent=2)
+    skipped_total = skip_bad_summary + skip_seller
     print(f"id2meta saved to: {id2meta_path}")
     print(f"  Mapped items: {len(id2meta):,} "
-          f"(skipped {skipped_count:,} without valid 7-word summary)")
+          f"(skipped {skipped_total:,}: "
+          f"{skip_bad_summary:,} invalid summary, "
+          f"{skip_seller:,} seller mismatch)")
 
-    # ---- Build id2meta_with_norm (add summary_words_norm) ----
+    # ---- Build id2meta_with_norm (parallel normalization) ----
     print("\nBuilding id2meta_with_norm (normalizing summary_words) ...")
+    # Only pass (item_id, words) to workers — NOT full item dicts —
+    # to avoid pickle/memory overhead that causes OOM with large datasets.
+    items_words_list = [(item_id, item.get("summary_words", []))
+                        for item_id, item in id2meta.items()]
+    num_norm_workers = min(16, os.cpu_count() or 4,
+                           max(1, len(items_words_list) // 1000))
+    if num_norm_workers > 1 and len(items_words_list) >= 1000:
+        norm_batch_size = max(1, len(items_words_list) // num_norm_workers)
+        norm_batches = [
+            items_words_list[i:i + norm_batch_size]
+            for i in range(0, len(items_words_list), norm_batch_size)
+        ]
+        norm_map = {}  # item_id -> normalized_words
+        print(f"  Normalizing {len(items_words_list):,} items with "
+              f"{num_norm_workers} workers ...")
+        with ProcessPoolExecutor(max_workers=num_norm_workers) as executor:
+            for batch_result in executor.map(
+                    _normalize_words_batch, norm_batches):
+                for item_id, norm_words in batch_result:
+                    norm_map[item_id] = norm_words
+    else:
+        norm_map = {}
+        for item_id, words in items_words_list:
+            norm_map[item_id] = [normalize_term(w) for w in words]
+    # Reconstruct id2meta_norm from id2meta + normalized words
     id2meta_norm = {}
     for item_id, item in id2meta.items():
         item_copy = dict(item)
-        words = item_copy.get("summary_words", [])
-        item_copy["summary_words_norm"] = [
-            normalize_term(w) for w in words
-        ]
+        item_copy["summary_words_norm"] = norm_map.get(item_id, [])
         id2meta_norm[item_id] = item_copy
+    del norm_map
 
     if output_prefix:
         norm_path = os.path.join(output_dir,
@@ -975,6 +907,62 @@ def _build_result_batch(batch):
     return results
 
 
+def _normalize_words_batch(batch):
+    """Normalize summary_words for a batch of (item_id, words_list) pairs.
+    Returns list of (item_id, normalized_words_list)."""
+    return [(item_id, [normalize_term(w) for w in words])
+            for item_id, words in batch]
+
+
+def _parallel_build_results(items_with_text, similarities_dict):
+    """Build result dicts with parallel parse_summary_words.
+
+    Args:
+        items_with_text: List of (idx, item_dict, gen_text) tuples.
+        similarities_dict: Dict mapping item_id -> list of similar items.
+
+    Returns:
+        List of result dicts in original order.
+    """
+    if not items_with_text:
+        return []
+
+    num_workers = min(os.cpu_count() or 4,
+                      max(1, len(items_with_text) // 500))
+    batch_size = max(1, len(items_with_text) // max(1, num_workers))
+    batches = [
+        items_with_text[i:i + batch_size]
+        for i in range(0, len(items_with_text), batch_size)
+    ]
+
+    results_indexed = {}
+    if num_workers > 1 and len(items_with_text) >= 500:
+        print(f"  Building results: {len(items_with_text):,} items, "
+              f"{num_workers} workers, {len(batches)} batches ...")
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            for batch_result in executor.map(_build_result_batch, batches):
+                for idx, item_id, result in batch_result:
+                    result["similar_item_ids"] = [
+                        sim["item_id"]
+                        for sim in similarities_dict.get(item_id, [])[:5]
+                    ]
+                    results_indexed[idx] = result
+    else:
+        for idx, item, gen_text in items_with_text:
+            words = parse_summary_words(gen_text)
+            item_id = item["id"]
+            result = item.copy()
+            result["llm_output"] = gen_text
+            result["summary_words"] = words
+            result["similar_item_ids"] = [
+                sim["item_id"]
+                for sim in similarities_dict.get(item_id, [])[:5]
+            ]
+            results_indexed[idx] = result
+
+    return [results_indexed[idx] for idx in sorted(results_indexed.keys())]
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -998,28 +986,6 @@ def main():
         print(f"  Workers: {args.papyrus_workers}")
         print(f"  Quota ID: {args.papyrus_quota_id or '(default)'}")
         print("=" * 60)
-    else:  # vllm
-        # Skip GPU initialization for non-inference modes
-        if args.export_prompts_only or args.save_intermediate_only:
-            num_gpus = args.num_gpus or 1
-            print("=" * 60)
-            print("Inference mode: vLLM (local model) — skipped GPU init "
-                  "(export/save-only mode)")
-            print("=" * 60)
-        else:
-            import torch
-            available_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-            num_gpus = args.num_gpus if args.num_gpus is not None else max(available_gpus, 1)
-            print("=" * 60)
-            print("Inference mode: vLLM (local model)")
-            print(f"  PyTorch: {torch.__version__}, "
-                  f"CUDA: {torch.cuda.is_available()}, "
-                  f"HIP: {getattr(torch.version, 'hip', 'N/A')}")
-            if torch.cuda.is_available():
-                for i in range(torch.cuda.device_count()):
-                    print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
-            print(f"  Using {num_gpus} GPU(s) for tensor parallelism")
-            print("=" * 60)
 
     debug = args.debug
     if debug:
@@ -1038,10 +1004,6 @@ def main():
         full_data = load_data(args.item_file)
         print(f"Loaded {len(full_data)} items")
         all_items_dict = {item["id"]: item for item in full_data}
-
-        if args.global_offer_only:
-            full_data = [item for item in full_data if not item["id"].startswith("P")]
-            print(f"Filtered to GlobalOfferID items: {len(full_data)} items")
 
         print(f"Loading similarities: {args.similarity_file}")
         similarities_dict = load_similarities(args.similarity_file)
@@ -1160,6 +1122,47 @@ def main():
             print(f"  Loaded {len(previous_results):,} items from "
                   f"{len(valid_resume_files)} resume files in {resume_elapsed:.1f}s")
 
+        # Also load checkpoint directories if specified
+        extra_ckpt_dirs = args.checkpoint_dirs or []
+        for ckpt_dir_path in extra_ckpt_dirs:
+            if not ckpt_dir_path or not os.path.exists(ckpt_dir_path):
+                continue
+            # Try JSONL checkpoint format
+            ckpt_loaded = _load_jsonl_checkpoint(ckpt_dir_path)
+            if ckpt_loaded:
+                new_from_ckpt = 0
+                for cid, cresult in ckpt_loaded.items():
+                    if cid not in previous_results and cid not in merged_outputs:
+                        previous_results[cid] = cresult
+                        new_from_ckpt += 1
+                if new_from_ckpt > 0:
+                    print(f"  [CHECKPOINT-JSONL] Loaded {new_from_ckpt:,} items "
+                          f"from {ckpt_dir_path}")
+            # Try Copilot checkpoint format
+            copilot_ckpt = _load_checkpoint_raw(ckpt_dir_path)
+            if copilot_ckpt:
+                new_from_copilot = 0
+                for cid, response_text in copilot_ckpt.items():
+                    if cid not in previous_results and cid not in merged_outputs:
+                        if cid in all_items_dict:
+                            item = all_items_dict[cid]
+                            words = parse_summary_words(response_text)
+                            similar_item_ids = [
+                                sim["item_id"]
+                                for sim in similarities_dict.get(cid, [])[:5]
+                            ]
+                            result = item.copy()
+                            result["llm_output"] = response_text
+                            result["summary_words"] = words
+                            result["similar_item_ids"] = similar_item_ids
+                            previous_results[cid] = result
+                            new_from_copilot += 1
+                if new_from_copilot > 0:
+                    print(f"  [CHECKPOINT-Copilot] Loaded {new_from_copilot:,} items "
+                          f"from {ckpt_dir_path}")
+        if extra_ckpt_dirs:
+            print(f"  Total from resume + checkpoints: {len(previous_results):,} items")
+
         # Build full result dicts (PARALLEL parse_summary_words)
         build_start = time.time()
         # Separate items into three buckets
@@ -1216,11 +1219,13 @@ def main():
 
         # Save all output files
         stats = save_all_outputs(all_results, args.output_dir,
-                                 id2meta_file=args.id2meta_file)
+                                 id2meta_file=args.id2meta_file,
+                                 check_seller=args.check_seller)
         print(f"\nCompleted! Total: {len(all_results)}, "
               f"Products: {stats['valid_product_count']}, "
               f"Non-products: {stats['non_product_count']}, "
-              f"Failed: {stats['failed_count']}")
+              f"Failed: {stats['failed_count']}, "
+              f"Seller mismatch: {stats['seller_mismatch_count']}")
         return
 
     # ---- Prompts input file mode (--prompts_input_file) ----
@@ -1330,11 +1335,6 @@ def main():
     # Build full items dict BEFORE trimming, so similarity lookups work
     all_items_dict = {item["id"]: item for item in full_data}
 
-    # Filter to GlobalOfferID items only (IDs not starting with 'P')
-    if args.global_offer_only:
-        full_data = [item for item in full_data if not item["id"].startswith("P")]
-        print(f"Filtered to GlobalOfferID items: {len(full_data)} items")
-
     if debug:
         data = random.sample(full_data, min(args.debug_sample_size, len(full_data)))
         print(f"DEBUG: randomly sampled {len(data)} items for processing")
@@ -1414,19 +1414,32 @@ def main():
             print(f"  [RESUME] Repaired {repaired_count:,} records "
                   f"(re-parsed llm_output)")
 
-        # Filter out failed items (no valid 7-word summary) so they
-        # get re-processed; keep only items with exactly 7 non-empty words
+        # Filter out failed items (no valid 7-word summary or seller mismatch)
+        # so they get re-processed
         prev_total_raw = len(previous_results)
         failed_ids = set()
+        seller_mismatch_count = 0
+        not_7_words_count = 0
         for rid, result in previous_results.items():
-            words = result.get("summary_words", [])
-            non_empty = [w for w in words if w]
-            if len(non_empty) != 7:
+            if rid in all_items_dict:
+                item_for_check = all_items_dict[rid]
+            else:
+                item_for_check = result
+            valid, reason = is_result_valid(
+                item_for_check, result, check_seller=args.check_seller)
+            if not valid:
                 failed_ids.add(rid)
+                if reason == "seller_mismatch":
+                    seller_mismatch_count += 1
+                else:
+                    not_7_words_count += 1
         for rid in failed_ids:
             del previous_results[rid]
-        print(f"  [RESUME] Filtered out {len(failed_ids):,} failed items "
-              f"(no valid 7-word summary) for re-processing")
+        print(f"  [RESUME] Filtered out {len(failed_ids):,} invalid items "
+              f"for re-processing")
+        print(f"    Not valid 7 words: {not_7_words_count:,}")
+        if args.check_seller:
+            print(f"    Seller mismatch:   {seller_mismatch_count:,}")
 
         # Only keep results that are in the current data set
         current_ids = {item["id"] for item in data}
@@ -1474,13 +1487,13 @@ def main():
         print("  [DEBUG] Skipping resume loading")
 
     # ---- Load checkpoint results from interrupted previous runs ----
-    # Handles both vLLM checkpoint format (full item dicts with 'id' key)
+    # Handles both JSONL checkpoint format (full item dicts with 'id' key)
     # and Copilot checkpoint format ({"id": item_id, "result": response_text})
     if not _skip_inference and not debug:
         # Build a quick lookup for item data by id
         data_by_id = {item["id"]: item for item in data}
 
-        # Try vLLM format first: each line is a full result dict
+        # Load from checkpoint directories
         all_ckpt_dirs = [checkpoint_dir]
         extra_ckpt_dirs = args.checkpoint_dirs or []
         for d in extra_ckpt_dirs:
@@ -1488,7 +1501,7 @@ def main():
                 all_ckpt_dirs.append(d)
 
         for ckpt_dir_path in all_ckpt_dirs:
-            ckpt_loaded = _load_vllm_checkpoint(ckpt_dir_path)
+            ckpt_loaded = _load_jsonl_checkpoint(ckpt_dir_path)
             if ckpt_loaded:
                 remaining_ids = {item["id"] for item in data}
                 new_from_ckpt = 0
@@ -1497,7 +1510,7 @@ def main():
                         previous_results[cid] = cresult
                         new_from_ckpt += 1
                 if new_from_ckpt > 0:
-                    print(f"  [CHECKPOINT-vLLM] Recovered {new_from_ckpt:,} items "
+                    print(f"  [CHECKPOINT-JSONL] Recovered {new_from_ckpt:,} items "
                           f"from {ckpt_dir_path}")
 
             # Also try Copilot format: {"id": item_id, "result": response_text}
@@ -1546,6 +1559,7 @@ def main():
         save_all_outputs(
             list(previous_results.values()), args.output_dir,
             id2meta_file=args.id2meta_file,
+            check_seller=args.check_seller,
         )
         # Only clean checkpoint if we're about to run inference
         # (not in export_prompts_only or save_intermediate_only mode)
@@ -1646,21 +1660,12 @@ def main():
 
         # Convert (item_id, llm_output) results to full result dicts
         copilot_map = {item_id: gen_text for item_id, gen_text in copilot_results}
-        all_results = []
-        for item in data:
-            item_id = item["id"]
-            gen_text = copilot_map.get(item_id, "")
-            words = parse_summary_words(gen_text)
-            similar_item_ids = [
-                sim["item_id"]
-                for sim in similarities_dict.get(item_id, [])[:5]
-            ]
-            result = item.copy()
-            result["llm_output"] = gen_text
-            result["summary_words"] = words
-            result["similar_item_ids"] = similar_item_ids
-            all_results.append(result)
-    elif backend == "papyrus":
+        items_to_build = [
+            (idx, item, copilot_map.get(item["id"], ""))
+            for idx, item in enumerate(data)
+        ]
+        all_results = _parallel_build_results(items_to_build, similarities_dict)
+    else:  # papyrus
         # --- Papyrus API path ---
         print("\nBuilding prompts for Papyrus API ...")
         papyrus_inputs = []
@@ -1699,85 +1704,11 @@ def main():
             )
 
         papyrus_map = {item_id: gen_text for item_id, gen_text in papyrus_results}
-        all_results = []
-        for item in data:
-            item_id = item["id"]
-            gen_text = papyrus_map.get(item_id, "")
-            words = parse_summary_words(gen_text)
-            similar_item_ids = [
-                sim["item_id"]
-                for sim in similarities_dict.get(item_id, [])[:5]
-            ]
-            result = item.copy()
-            result["llm_output"] = gen_text
-            result["summary_words"] = words
-            result["similar_item_ids"] = similar_item_ids
-            all_results.append(result)
-    else:
-        # --- vLLM path (with checkpoint/resume) ---
-        # Load checkpoint to skip already-processed items
-        completed = _load_vllm_checkpoint(checkpoint_dir)
-        remaining_data = [item for item in data if item["id"] not in completed]
-
-        if not remaining_data:
-            print(f"  All {len(data)} items already completed from checkpoint")
-            all_results = [completed[item["id"]] for item in data]
-        else:
-            if completed:
-                print(f"  Items to process: {len(remaining_data)} "
-                      f"(skipped {len(completed)} from checkpoint)")
-
-            # Build prompts for remaining items
-            print(f"\nBuilding prompts (enable_thinking={args.enable_thinking}) ...")
-            prompts = build_all_prompts_vllm(
-                remaining_data, similarities_dict, all_items_dict,
-                prompt_template, args.summary_model, args.enable_thinking
-            )
-            print(f"Built {len(prompts)} prompts")
-
-            if debug:
-                print(f"\n{'='*60}")
-                print("[DEBUG] Full sample prompt (first item):")
-                print(prompts[0])
-                print(f"{'='*60}")
-                for idx in range(1, min(5, len(prompts))):
-                    print(f"\n[DEBUG] Prompt #{idx+1} "
-                          f"(item ID: {remaining_data[idx]['id']}):")
-                    print(prompts[idx])
-                    print(f"{'='*60}")
-                print()
-
-            # Run vLLM inference with checkpoint saving
-            generated_texts = run_vllm_inference(
-                prompts,
-                model_name=args.summary_model,
-                num_gpus=num_gpus,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                max_model_len=args.max_model_len,
-                max_tokens=args.max_tokens,
-                chunk_size=args.chunk_size,
-                data=remaining_data,
-                similarities_dict=similarities_dict,
-                checkpoint_dir=checkpoint_dir,
-            )
-
-            # Parse results for remaining items
-            print("\nParsing LLM outputs ...")
-            for item, gen_text in zip(remaining_data, generated_texts):
-                words = parse_summary_words(gen_text)
-                item_id = item["id"]
-                similar_item_ids = [
-                    sim["item_id"]
-                    for sim in similarities_dict.get(item_id, [])[:5]
-                ]
-                result = item.copy()
-                result["llm_output"] = gen_text
-                result["summary_words"] = words
-                result["similar_item_ids"] = similar_item_ids
-                completed[item_id] = result
-
-            # Merge: build all_results in original data order
-            all_results = [completed[item["id"]] for item in data]
+        items_to_build = [
+            (idx, item, papyrus_map.get(item["id"], ""))
+            for idx, item in enumerate(data)
+        ]
+        all_results = _parallel_build_results(items_to_build, similarities_dict)
 
     if not _skip_inference:
         inference_time = time.time() - start_time
@@ -1785,7 +1716,7 @@ def main():
               f"({len(data) / inference_time:.1f} items/s)")
 
         # Merge with previous results if resuming
-        if valid_resume_files and previous_results:
+        if previous_results:
             print(f"\n[RESUME] Merging {len(previous_results):,} previous + "
                   f"{len(all_results):,} new results")
             merged = dict(previous_results)  # start with previous
@@ -1804,12 +1735,14 @@ def main():
     if not debug:
         print(f"\n[FINAL-SAVE] Saving {len(all_results):,} merged results ...")
         stats = save_all_outputs(all_results, args.output_dir,
-                                 id2meta_file=args.id2meta_file)
+                                 id2meta_file=args.id2meta_file,
+                                 check_seller=args.check_seller)
         cleanup_checkpoint(checkpoint_dir)
         print(f"\nCompleted! Total: {len(all_results)}, "
               f"Products: {stats['valid_product_count']}, "
               f"Non-products: {stats['non_product_count']}, "
-              f"Failed: {stats['failed_count']}")
+              f"Failed: {stats['failed_count']}, "
+              f"Seller mismatch: {stats['seller_mismatch_count']}")
 
     # Print first few examples
     num_debug_show = len(all_results) if debug else 3
@@ -1821,4 +1754,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-     
+                                                                                                                                                                                                                                                                                                                                                                                                                                  

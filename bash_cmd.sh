@@ -1,26 +1,34 @@
 
 cd GRLM/ShoppingGenRec/
 nohup python -u cook_journey_data/step0_combine_item_data.py > logs/step0.out 2>&1 &
+nohup python -u cook_journey_data/step1_init_item_emb.py > logs/step1.out 2>&1 &
+nohup bash -c 'sleep 7200 && python -u cook_journey_data/step1_init_item_emb.py' > logs/step1_20M.out 2>&1 &
 nohup python -u cook_journey_data/step2_0_filter_user_events.py > logs/step2_0.out 2>&1 &
 nohup python -u cook_journey_data/step2_construct_shopping_profile.py > logs/step2.out 2>&1 &
 nohup python -u cook_journey_data/step3_generate_journey_query.py --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks --max_users 100000 > logs/step3_100K.out 2>&1 &
 nohup python -u cook_journey_data/step3_generate_journey_query.py > logs/step3.out 2>&1 &
-nohup python -u cook_journey_data/step3_generate_journey_query.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks/UserEvents_clean_profiles_results_100K_1.tsv --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks > logs/step3_chunk_1.out 2>&1 &
+nohup python -u cook_journey_data/step3_generate_journey_query.py --resume_checkpoint_dir "" --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks/UserEvents_clean_profiles_results_100K_1.tsv --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks > logs/step3_chunk_1.out 2>&1 &
+nohup python -u cook_journey_data/step3_generate_journey_query.py --merge_results_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks > logs/step3_merge.out 2>&1 &
+nohup python -u s1_generate_tid.py --export_prompts_only > logs/s1_split.out 2>&1 &
+nohup bash -c 'for i in $(seq 1 4); do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/item_prompts_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_1_4.out 2>&1 &
+nohup python -u s1_generate_tid.py --prompt_results_dir="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/" > logs/s1_merge_20260516.out 2>&1 &
+nohup python -u cook_journey_data/step4_InferIndexEmbAndAnnBuild.py > logs/step4_20260516.out 2>&1 &
+nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py > logs/step5.out 2>&1 &
+nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py --resume --keep_chunks --ann_in_memory > logs/step5_resume.out 2>&1 &
+nohup python -u cook_journey_data/step6_call_LLM_ranker.py --debug > logs/step6_debug.out 2>&1 &
+nohup python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000 > logs/step6_900K.out 2>&1 &
+nohup python -u cook_journey_data/step6_call_LLM_ranker.py --merge_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/ > logs/step6_merge.out 2>&1 &
+nohup python -u cook_journey_data/step7_stats.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv > logs/step7_stats_after_step3.out 2>&1 &
+nohup bash cook_journey_data/run_vip_case_study.sh > logs/vip_pipeline.out 2>&1 &
 
-nohup python -u preprocess_raw_data/pre_s0_combine_item_data.py > logs/pre_s0.out 2>&1 &
+
 export LD_LIBRARY_PATH="/scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/build/faiss:/home/aiscuser/.local/lib/python3.12/site-packages/faiss:${LD_LIBRARY_PATH}"
 nohup python -u s0_init_emb.py > logs/s0_init_emb.out 2>&1 &
 nohup bash -c 'source /scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/env.sh && python -u s0_init_emb.py' > logs/s0_init_emb.out 2>&1 &
-nohup python -u cook_data/step0_0_build_input.py > logs/step0_0_build.out 2>&1 &
-nohup python -u cook_data/step0_1_merge_inputs.py > logs/step0_1_merge.out 2>&1 &
-nohup python -u cook_data/step0_2_generate_journey.py --max_users=60000 > logs/step0_split.out 2>&1 &
-nohup python -u cook_data/step3_eval_ranker_results.py --input_folder=/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/ > logs/step3_profile.out 2>&1 &
-nohup python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py > logs/pre_s1.out 2>&1 &
 nohup python -u s5_journey_eval.py > logs/s5_eval.out 2>&1 &
 nohup python -u cook_data/step3_eval_ranker_results.py > logs/step3.out 2>&1 &
 nohup python -u preprocess_raw_data/pre_s2_construct_shopping_journey.py > logs/pre_s2.out 2>&1 &
-nohup python -u s1_generate_tid.py --export_prompts_only > logs/s1_split.out 2>&1 &
-nohup python -u s1_generate_tid.py --prompt_results_dir="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/" > logs/s1_merge.out 2>&1 &
+
 nohup python -u s4_merge_sft_data.py > logs/s4.out 2>&1 &
 
 nohup bash -c 'for i in 1 3; do echo "=== Chunk $i start $(date) ==="; python -u cook_data/step0_generate_journey.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/CookData/Step1_ShoppingJourney_HisLarge_100_200K_80K_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/step0.out 2>&1 &
@@ -28,7 +36,6 @@ nohup bash -c 'for i in 8; do echo "=== Chunk $i start $(date) ==="; python -u c
 nohup bash -c 'for i in 1 2 3 4 5 6; do echo "=== Chunk $i start $(date) ==="; python -u preprocess_raw_data/pre_s1_construct_shopping_profile.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/pre_s1.out 2>&1 &
 nohup bash -c 'for i in 53 54 55 56 57; do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_prompts_${i}.tsv --token_file="./resources/tokens_shopping.txt" --copilot_workers=20; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_continue.out 2>&1 &
 nohup bash -c 'for i in 1 10 13 7 8 9; do echo "=== Chunk $i start $(date) ==="; python -u cook_data/step2_ann_search_and_output.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/0128_0301/CookData/ShoppingJourney_Input_80K_${i}_results.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/step2.out 2>&1 &
-nohup bash -c 'for i in $(seq 17 100); do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/prompts/item_prompts_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_17_100.out 2>&1 &
 
 nohup bash -c 'while kill -0 1623855 2>/dev/null; do sleep 60; done; echo "=== step2.8_9 done, starting s1 rerun $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_rerun_other_prompts.tsv' > logs/s1_rerun_other.out 2>&1 &
 nohup bash -c 'while kill -0 1827277 2>/dev/null; do sleep 60; done; echo "=== s1 rerun done, starting s1 continue $(date) ==="; for i in 53 54 55 56 57; do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed/prompts/item_prompts_${i}.tsv --token_file="./resources/tokens_shopping.txt" --copilot_workers=20; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_continue.out 2>&1 &

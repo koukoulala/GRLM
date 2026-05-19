@@ -32,20 +32,16 @@ def prepare_data(item: dict) -> dict:
 
     title = item.get("title", "")
     if title:
-        if len(title) > 150:
-            title = title[:150] + "..."
         info_lines.append(f"Title: {title}")
 
     description = item.get("description", "")
     if description:
-        if len(description) > 150:
-            description = description[:150] + "..."
+        if len(description) > 500:
+            description = description[:500] + "..."
         info_lines.append(f"Description: {description}")
 
     categories = item.get("categories", "")
     if categories:
-        if len(categories) > 150:
-            categories = categories[:150] + "..."
         info_lines.append(f"Categories: {categories}")
 
     # Append structured attributes (from s6 enrichment)
@@ -53,14 +49,11 @@ def prepare_data(item: dict) -> dict:
     brand = attributes.get("Brand", "")
     if isinstance(brand, str):
         brand = " ".join(brand.split())
+        if brand:
+            info_lines.append(f"Brand: {brand}")
     seller = attributes.get("Seller", "")
     if isinstance(seller, str):
         seller = " ".join(seller.split())
-    if brand and seller and brand.lower() == seller.lower():
-        info_lines.append(f"Brand/Seller: {brand}")
-    else:
-        if brand:
-            info_lines.append(f"Brand: {brand}")
         if seller:
             info_lines.append(f"Seller: {seller}")
     for attr_name in ["Color", "Size"]:

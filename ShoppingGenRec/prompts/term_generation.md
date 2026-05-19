@@ -39,35 +39,41 @@ If Step 1 confirms the input is a real, specific product, generate exactly **7 s
 
 ### Priority Order for the 7 Slots
 
-Fill the 7 slots using as many of the following aspects as are truly available, in this priority order:
+Each slot has a designated role. Fill all 7 slots in order:
 
-1. Main product category or type
+**Slot 1 — Product Category**
+Main product category or type.
 Examples: headphone, sneaker, cream, laptop
 
-2. Key function or primary capability
+**Slot 2 — Core Function**
+Key function or primary capability.
 Examples: noise-canceling, dimmable, anti-aging, convertible
 
-3. Distinctive feature, form factor, or subtype
+**Slot 3 — Form Factor / Subtype**
+Distinctive feature, form factor, or subtype.
 Examples: over-ear, sphere, spf-15, wireless
 
-4. Additional key attribute of the product itself
+**Slot 4 — Distinguishing Attribute**
+Additional key attribute that differentiates this product from similar items.
 Examples: rechargeable, ceramic, stainless, lightweight
-Use this slot to add information that helps differentiate this product from similar items.
 
-5. Brand or platform ecosystem
-MUST include if explicitly provided.
-Keep the original brand form. Do not translate, split, normalize, or rewrite it.
+**Slot 5 — Audience / Context**
+Target audience has the HIGHEST PRIORITY for this slot.
+- If a specific target audience is explicitly stated (e.g., kids, women, men, professional, cat, baby, toddler), it MUST occupy this slot.
+- Exclude generic audience values like "unisex" or "adult".
+- If no specific audience exists, fill with style, occasion, or use scenario instead: e.g., holiday, outdoor, formal, budget-friendly.
+- If none of the above applies, use any remaining informative product attribute.
 
-6. Seller or retailer
-MUST include if explicitly provided and meaningfully different from the brand.
-Keep the original seller form. Do not translate, split, normalize, or rewrite it.
-If brand and seller are the same or nearly the same, do NOT repeat — use this slot for the next available aspect instead.
+**Slot 6 — Brand**
+Brand or platform ecosystem.
+MUST include if explicitly provided. Keep the original brand form — do not translate, split, normalize, or rewrite.
+If no brand is available, use any remaining informative product attribute.
 
-7. Target audience (PRIORITY), style, occasion, use scenario, or distinctive selling point
-- Target audience has the HIGHEST PRIORITY for this slot: if a specific target audience is explicitly stated (e.g., kids, women, men, professional, cat, baby, toddler), it MUST occupy this slot — do not use it for style or other attributes.
-- Exclude generic audience values like "unisex" or "adult" — these do not count as specific.
-- Style/occasion (ONLY if NO specific target audience exists): e.g., holiday, outdoor, waterproof, budget-friendly
-- If neither specific audience nor style applies, use this slot for any remaining informative attribute from the product.
+**Slot 7 — Seller / Retailer**
+Seller or retailer name.
+MUST include if explicitly provided and meaningfully different from the brand. Keep the original seller form — do not translate, split, normalize, or rewrite.
+If brand and seller are the same or nearly the same, do NOT repeat — use this slot for any remaining informative product attribute.
+
 
 ## Rules
 
@@ -103,9 +109,9 @@ Use hyphens only when natural and helpful, mainly in English descriptive entries
 All 7 slots must be different. If brand and seller are identical or nearly identical, include them only once. Use the freed slot for another informative aspect (style, audience, or additional product detail).
 
 ### Rule 7 — Required Aspects
+- If a specific target audience is explicitly present, it must appear.
 - If brand is explicitly present, it must appear.
 - If seller is explicitly present and different from brand, it must appear.
-- If a specific target audience is explicitly present, it must appear.
 
 Only omit an aspect if it is genuinely absent or too uncertain.
 
@@ -126,9 +132,9 @@ Do not use a hypernym and a hyponym that convey the same meaning. For example, d
 1. Is this a real, specific product? If not, output `[]`
 2. Are there exactly 7 slots?
 3. Are slots 1–4 ALL product-descriptive?
-4. If brand exists, is it included in the slots?
-5. If seller exists and differs from brand, is it included in the slots?
-6. If a specific audience is explicitly provided, is it included?
+4. If a specific audience is explicitly provided, is it included?
+5. If brand exists, is it included in the slots?
+6. If seller exists and differs from brand, is it included in the slots?
 7. Are all 7 slots distinct (no duplicates, no hypernym+hyponym pairs)?
 8. Are proper nouns kept intact and untranslated?
 9. Are descriptive entries in the product's primary language?

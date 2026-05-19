@@ -631,7 +631,7 @@ def parse_args():
         help="Copilot model name",
     )
     parser.add_argument(
-        "--num_workers", type=int, default=80,
+        "--num_workers", type=int, default=40,
         help="Number of parallel workers for Copilot API calls",
     )
 
@@ -673,12 +673,18 @@ def parse_args():
         help="Maximum number of events to keep per user",
     )
     parser.add_argument(
-        "--random_event_window", action=argparse.BooleanOptionalAction,
+        "--random_event_window", action="store_true",
         default=True,
+        dest="random_event_window",
         help="Randomly filter events to 7/14/30/all days with equal "
              "probability. Profile captures long-term interests while "
              "events capture variable-length short-term signals. "
              "(default: True, use --no-random_event_window to disable)",
+    )
+    parser.add_argument(
+        "--no-random_event_window", action="store_false",
+        dest="random_event_window",
+        help="Disable random event window filtering.",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -690,6 +696,11 @@ def parse_args():
         help="If >0, split the filtered input into chunks of this size, "
              "save each chunk as a separate TSV file, and stop (no LLM "
              "inference). If <=0, read all data and run normally.",
+    )
+    parser.add_argument(
+        "--split_subdir", type=str, default="split_chunks",
+        help="Subdirectory name under output_dir for split chunk files. "
+             "If provided, chunks are written to output_dir/split_subdir/.",
     )
 
     # --- Debug ---
@@ -704,12 +715,11 @@ def parse_args():
 
     # --- Checkpoint & merge ---
     parser.add_argument(
-        "--resume_checkpoint_dir", type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec"
-                "/Data/LLMTrainingData/20260513/raw_data/_journey_checkpoint_UserEvents_clean_profiles_results",
-        help="Path to a checkpoint directory from a previous run. "
-             "If provided and valid, loads completed user IDs from it "
-             "so they can be skipped during split or inference. "
+        "--resume_checkpoint_dir", type=str, nargs="*",
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/_journey_checkpoint_UserEvents_clean_profiles_results",],
+        help="One or more checkpoint directories from previous runs. "
+             "All completed results are loaded and merged. "
+             "Pass flag with no arguments to disable loading. "
              "The working checkpoint is always auto-created in output_dir.",
     )
     parser.add_argument(
@@ -723,6 +733,17 @@ def parse_args():
              "files. Finds and merges them into a single output TSV and "
              "exits. No LLM inference is run.",
     )
+    parser.add_argument(
+        "--combine_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec"
+                "/Data/LLMTrainingData/20260513/raw_data"
+                "/v3_Step0_UserProfile_500KEnUsHisRandom0408_500K_Journey.tsv",
+        help="Path to an existing results TSV to combine with the current "
+             "output. Produces an additional *_combined.tsv file that "
+             "merges rows from this file and the current output (current "
+             "results take priority for duplicate UserIds). "
+             "Set to empty string to disable. (default: 500K_Journey.tsv)",
+    )
 
     return parser.parse_args()
 
@@ -730,6 +751,70 @@ def parse_args():
 # =============================================================================
 # Merge Results
 # =============================================================================
+
+def combine_with_existing(current_file, combine_file, combined_output):
+    """Combine current results with an existing results file.
+
+    Current results take priority for duplicate UserIds.
+    Prints detailed row-count statistics.
+
+    Args:
+        current_file: Path to the current run's output TSV.
+        combine_file: Path to the existing results TSV to combine with.
+        combined_output: Path for the combined output TSV.
+
+    Returns:
+        int: Total rows in the combined output.
+    """
+    # Read combine file
+    combine_rows = {}  # uid -> row
+    combine_header = None
+    with open(combine_file, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f, delimiter="\t")
+        combine_header = next(reader, None)
+        for row in reader:
+            if row and row[0].strip():
+                combine_rows[row[0].strip()] = row
+
+    # Read current file
+    current_rows = {}  # uid -> row
+    current_header = None
+    with open(current_file, "r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f, delimiter="\t")
+        current_header = next(reader, None)
+        for row in reader:
+            if row and row[0].strip():
+                current_rows[row[0].strip()] = row
+
+    # Merge: combine_file first, then current overrides
+    merged = dict(combine_rows)
+    merged.update(current_rows)
+
+    # Stats
+    overlap = set(combine_rows.keys()) & set(current_rows.keys())
+    only_combine = len(combine_rows) - len(overlap)
+    only_current = len(current_rows) - len(overlap)
+
+    print(f"  Combine file:    {len(combine_rows):>10,} rows  ({combine_file})")
+    print(f"  Current output:  {len(current_rows):>10,} rows  ({current_file})")
+    print(f"  Overlap (current wins): {len(overlap):>7,}")
+    print(f"  Only in combine file:   {only_combine:>7,}")
+    print(f"  Only in current output: {only_current:>7,}")
+    print(f"  Combined total:  {len(merged):>10,} rows")
+
+    # Write combined file
+    header = current_header or combine_header
+    with open(combined_output, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+        if header:
+            writer.writerow(header)
+        for row in merged.values():
+            writer.writerow(row)
+
+    file_size_mb = os.path.getsize(combined_output) / (1024 * 1024)
+    print(f"  Combined output: {combined_output} ({file_size_mb:.1f} MB)")
+    return len(merged)
+
 
 def merge_result_files(result_files, output_file):
     """Merge multiple Journey_Results TSV files into one.
@@ -778,27 +863,78 @@ def merge_result_files(result_files, output_file):
 
 
 # =============================================================================
+# Results Output
+# =============================================================================
+
+def save_results_tsv(output_file, all_rows, result_map):
+    """Write results TSV for all input rows, filling OUTPUT from result_map.
+
+    Args:
+        output_file: Output TSV file path.
+        all_rows: List of row dicts (from read_raw_input).
+        result_map: Dict of {user_id: raw_llm_output_text}.
+
+    Returns:
+        Tuple of (written, success_count, json_valid_count, json_invalid_ids).
+    """
+    output_header = OUTPUT_COLUMNS + [OUTPUT_COL_NAME]
+
+    success_count = 0
+    json_valid_count = 0
+    json_invalid_ids = []
+    written = 0
+
+    with open(output_file, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+        writer.writerow(output_header)
+
+        for row_data in all_rows:
+            uid = row_data["user_id"]
+            raw_output = result_map.get(uid, "")
+
+            if raw_output:
+                success_count += 1
+
+            clean_json = extract_and_validate_journey_json(raw_output)
+            if clean_json:
+                json_valid_count += 1
+                output_val = clean_json
+            elif raw_output:
+                json_invalid_ids.append(uid)
+                output_val = raw_output.replace("\n", " ").replace("\t", " ")
+            else:
+                output_val = ""
+
+            out_events = row_data["events_text"].replace("\n", "#N#")
+            out_row = [
+                uid,
+                out_events,
+                row_data["profile_text"],
+                row_data["request_time"],
+                row_data["his_count"],
+                output_val,
+            ]
+            writer.writerow(out_row)
+            written += 1
+
+    file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+    print(f"  Written {written:,} rows ({file_size_mb:.1f} MB)")
+    print(f"  With results:    {success_count}/{len(all_rows)}")
+    print(f"  Valid JSON:      {json_valid_count}/{success_count}")
+    if json_invalid_ids:
+        preview = json_invalid_ids[:10]
+        print(f"  Invalid JSON ({len(json_invalid_ids)} users): "
+              f"{preview}{'...' if len(json_invalid_ids) > 10 else ''}")
+
+    return written, success_count, json_valid_count, json_invalid_ids
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
 def main():
     args = parse_args()
-
-    # ---- Merge mode: find and merge result files from a directory ----
-    if args.merge_results_dir:
-        pattern = os.path.join(args.merge_results_dir, "*_Results*.tsv")
-        result_files = sorted(glob.glob(pattern))
-        if not result_files:
-            print(f"No *_Results*.tsv files found in: {args.merge_results_dir}")
-            return
-        print(f"Found {len(result_files)} result files in {args.merge_results_dir}")
-        if args.output_name:
-            out_name = args.output_name
-        else:
-            out_name = "Journey_Results_Merged.tsv"
-        output_file = os.path.join(args.output_dir, out_name)
-        merge_result_files(result_files, output_file)
-        return
 
     print("=" * 70)
     print("Step 3: Generate Shopping Journeys (with Profile)")
@@ -811,8 +947,12 @@ def main():
     print(f"  Random event window: {args.random_event_window}")
     if args.max_users > 0:
         print(f"  Max users:     {args.max_users} (split mode, no inference)")
+    if args.merge_results_dir:
+        print(f"  Merge results: {args.merge_results_dir}")
     if args.exclude_files:
         print(f"  Exclude files: {len(args.exclude_files)} file(s)")
+    if args.combine_file:
+        print(f"  Combine file:  {args.combine_file}")
     print()
 
     if args.debug:
@@ -848,25 +988,105 @@ def main():
     checkpoint_dir = os.path.join(
         args.output_dir, f"_journey_checkpoint_{input_base}")
 
-    # ---- Load completed users from resume checkpoint if provided ----
-    completed_ids = set()
-    resume_dir = args.resume_checkpoint_dir
-    if resume_dir and os.path.isdir(resume_dir):
-        completed = load_checkpoint(resume_dir)
-        completed_ids = set(completed.keys())
-        print(f"  Resumed from checkpoint: {len(completed_ids):,} users already done")
-        print(f"  Resume checkpoint dir: {resume_dir}")
+    # ---- Load completed users from resume checkpoints ----
+    completed_results = {}  # uid -> result text (for output merging)
+    resume_dirs = args.resume_checkpoint_dir or []
+    for resume_dir in resume_dirs:
+        if resume_dir and os.path.isdir(resume_dir):
+            completed = load_checkpoint(resume_dir)
+            new_count = len(set(completed.keys()) - set(completed_results.keys()))
+            completed_results.update(completed)
+            print(f"  Loaded checkpoint: +{new_count:,} users from {resume_dir}")
     # Also check the working checkpoint dir itself (for auto-resume)
-    if os.path.isdir(checkpoint_dir) and checkpoint_dir != resume_dir:
+    if os.path.isdir(checkpoint_dir) and checkpoint_dir not in resume_dirs:
         completed_work = load_checkpoint(checkpoint_dir)
-        new_ids = set(completed_work.keys()) - completed_ids
+        new_ids = set(completed_work.keys()) - set(completed_results.keys())
         if new_ids:
-            completed_ids.update(new_ids)
-            print(f"  Working checkpoint: +{len(new_ids):,} users "
-                  f"(total {len(completed_ids):,} done)")
+            completed_results.update(completed_work)
+            print(f"  Working checkpoint: +{len(new_ids):,} users")
+    if completed_results:
+        print(f"  Total loaded from all checkpoints: {len(completed_results):,}")
+        # Validate: only keep users with valid ContinuedJourneys JSON
+        pre_count = len(completed_results)
+        completed_results = {
+            uid: text for uid, text in completed_results.items()
+            if extract_and_validate_journey_json(text)
+        }
+        invalid_ckpt = pre_count - len(completed_results)
+        if invalid_ckpt > 0:
+            print(f"  [VALIDATE] Filtered {invalid_ckpt:,} invalid JSON, "
+                  f"keeping {len(completed_results):,} valid")
+        else:
+            print(f"  [VALIDATE] All {len(completed_results):,} have valid JSON")
+
+    # ---- Load completed results from merge_results_dir (TSV files) ----
+    if args.merge_results_dir and os.path.isdir(args.merge_results_dir):
+        pattern = os.path.join(args.merge_results_dir, "*_Results*.tsv")
+        result_files = sorted(glob.glob(pattern))
+        if result_files:
+            print(f"\n[MERGE] Loading results from {len(result_files)} "
+                  f"TSV files in {args.merge_results_dir} ...")
+            merge_new = 0
+            merge_override = 0
+            merge_invalid = 0
+            for fpath in result_files:
+                file_count = 0
+                with open(fpath, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.reader(f, delimiter="\t")
+                    file_header = next(reader, None)
+                    if file_header is None:
+                        continue
+                    col_map = {name.strip(): idx
+                               for idx, name in enumerate(file_header)}
+                    uid_idx = col_map.get(COL_USER_ID, 0)
+                    output_idx = col_map.get(OUTPUT_COL_NAME)
+                    if output_idx is None:
+                        output_idx = len(file_header) - 1
+                    for row in reader:
+                        if len(row) > max(uid_idx, output_idx):
+                            uid = row[uid_idx].strip()
+                            output_text = row[output_idx]
+                            if uid and output_text:
+                                clean = extract_and_validate_journey_json(
+                                    output_text)
+                                if not clean:
+                                    merge_invalid += 1
+                                    continue
+                                if uid in completed_results:
+                                    merge_override += 1
+                                else:
+                                    merge_new += 1
+                                completed_results[uid] = output_text
+                                file_count += 1
+                print(f"    {os.path.basename(fpath)}: {file_count:,} valid rows")
+            print(f"  From merge dir: {merge_new:,} new, "
+                  f"{merge_override:,} overriding checkpoint, "
+                  f"{merge_invalid:,} skipped (invalid JSON)")
+        else:
+            print(f"\n[MERGE] No *_Results*.tsv files found in: "
+                  f"{args.merge_results_dir}")
+
+    if completed_results:
+        print(f"  Total completed from all sources: {len(completed_results):,}")
+    completed_ids = set(completed_results.keys())
+
+    # ---- Determine output file path ----
+    if args.output_name:
+        out_name = args.output_name
+    else:
+        base = os.path.splitext(os.path.basename(args.input_file))[0]
+        suffix = "_debug" if args.debug else ""
+        out_name = f"{base}_Journey_Results{suffix}.tsv"
+    output_file = os.path.join(args.output_dir, out_name)
 
     # ---- If max_users > 0, split REMAINING users into chunks ----
     if args.max_users > 0 and not args.debug:
+        # Save preliminary results (checkpoint data) before splitting
+        if completed_results:
+            print(f"\nSaving preliminary results (from checkpoints) ...")
+            save_results_tsv(output_file, rows, dict(completed_results))
+            print(f"  Saved to: {output_file}")
+
         # Filter out already-completed users
         remaining_rows = [r for r in rows if r["user_id"] not in completed_ids]
         print(f"\n  Total users: {len(rows):,}")
@@ -876,6 +1096,13 @@ def main():
         if not remaining_rows:
             print("\n  All users already completed! Nothing to split.")
             return
+
+        # Determine split output directory
+        if args.split_subdir:
+            split_dir = os.path.join(args.output_dir, args.split_subdir)
+            os.makedirs(split_dir, exist_ok=True)
+        else:
+            split_dir = args.output_dir
 
         base_name = input_base
         chunk_size = args.max_users
@@ -891,7 +1118,7 @@ def main():
             else:
                 suffix = f"_{chunk_k}K"
             chunk_file = os.path.join(
-                args.output_dir, f"{base_name}{suffix}.tsv")
+                split_dir, f"{base_name}{suffix}.tsv")
             with open(chunk_file, "w", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f, delimiter="\t", lineterminator="\n")
                 writer.writerow(header)
@@ -901,11 +1128,11 @@ def main():
             print(f"  Chunk {ci + 1}/{num_chunks}: {len(chunk):,} rows "
                   f"({chunk_mb:.1f} MB) -> {chunk_file}")
 
-        print(f"\nDone! Split into {num_chunks} file(s).")
+        print(f"\nDone! Split into {num_chunks} file(s) in {split_dir}")
         print(f"Run each chunk with:")
         print(f"  python step3_generate_journey_query.py \\")
         print(f"    --input_file <chunk_file> \\")
-        print(f"    --output_dir {args.output_dir}")
+        print(f"    --output_dir {split_dir}")
         return
 
     # Show sample
@@ -921,16 +1148,19 @@ def main():
         print(f"    ... ({len(event_lines) - 3} more)")
 
     # ---- Filter out already-completed users before inference ----
+    all_rows = rows  # keep all rows for final output
     if completed_ids:
-        before = len(rows)
         rows = [r for r in rows if r["user_id"] not in completed_ids]
-        skipped = before - len(rows)
+        skipped = len(all_rows) - len(rows)
         if skipped > 0:
             print(f"\n  Skipped {skipped:,} already-completed users "
                   f"(from checkpoint), {len(rows):,} remaining")
-        if not rows:
-            print("  All users already completed! Nothing to run.")
-            return
+
+    # ---- Save preliminary results (checkpoint snapshot) before inference ----
+    if completed_results:
+        print(f"\nSaving preliminary results (checkpoint snapshot) ...")
+        save_results_tsv(output_file, all_rows, dict(completed_results))
+        print(f"  Saved to: {output_file}")
 
     # ---- Load prompt template ----
     print(f"\nLoading prompt from: {args.prompt_file}")
@@ -940,114 +1170,56 @@ def main():
     # ---- Setup output ----
     # (checkpoint_dir already resolved above)
 
-    # ---- Run LLM inference ----
-    print(f"\nStarting journey generation ({len(rows):,} users) ...")
-    start_time = time.time()
-
-    if args.inference_backend == "copilot":
-        print(f"  Model:   {args.copilot_model}")
-        print(f"  Workers: {args.num_workers}")
-        results = run_journey_generation_copilot(
-            rows=rows,
-            prompt_template=prompt_template,
-            token_file=args.token_file,
-            copilot_model=args.copilot_model,
-            num_workers=args.num_workers,
-            max_tokens=args.max_tokens,
-            checkpoint_dir=checkpoint_dir,
-            chunk_size=args.chunk_size,
-        )
+    # ---- Run LLM inference (only for non-completed users) ----
+    if not rows:
+        print("\n  All users already completed! Skipping inference.")
+        results = []
     else:
-        print(f"  Model:   {args.papyrus_model}")
-        print(f"  Workers: {args.papyrus_workers}")
-        results = run_journey_generation_papyrus(
-            rows=rows,
-            prompt_template=prompt_template,
-            papyrus_endpoint=args.papyrus_endpoint,
-            papyrus_model=args.papyrus_model,
-            papyrus_quota_id=args.papyrus_quota_id,
-            papyrus_timeout_ms=args.papyrus_timeout_ms,
-            papyrus_workers=args.papyrus_workers,
-            max_tokens=args.max_tokens,
-            checkpoint_dir=checkpoint_dir,
-            chunk_size=args.chunk_size,
-            debug=args.debug,
-        )
+        print(f"\nStarting journey generation ({len(rows):,} users) ...")
+        start_time = time.time()
 
-    elapsed = time.time() - start_time
-    print(f"\nLLM inference done in {elapsed:.1f}s "
-          f"({len(rows) / elapsed:.1f} users/s)")
+        if args.inference_backend == "copilot":
+            print(f"  Model:   {args.copilot_model}")
+            print(f"  Workers: {args.num_workers}")
+            results = run_journey_generation_copilot(
+                rows=rows,
+                prompt_template=prompt_template,
+                token_file=args.token_file,
+                copilot_model=args.copilot_model,
+                num_workers=args.num_workers,
+                max_tokens=args.max_tokens,
+                checkpoint_dir=checkpoint_dir,
+                chunk_size=args.chunk_size,
+            )
+        else:
+            print(f"  Model:   {args.papyrus_model}")
+            print(f"  Workers: {args.papyrus_workers}")
+            results = run_journey_generation_papyrus(
+                rows=rows,
+                prompt_template=prompt_template,
+                papyrus_endpoint=args.papyrus_endpoint,
+                papyrus_model=args.papyrus_model,
+                papyrus_quota_id=args.papyrus_quota_id,
+                papyrus_timeout_ms=args.papyrus_timeout_ms,
+                papyrus_workers=args.papyrus_workers,
+                max_tokens=args.max_tokens,
+                checkpoint_dir=checkpoint_dir,
+                chunk_size=args.chunk_size,
+                debug=args.debug,
+            )
 
-    # ---- Validate and save output ----
-    # Build user_id -> result mapping
-    result_map = {uid: text for uid, text in results}
+        elapsed = time.time() - start_time
+        print(f"\nLLM inference done in {elapsed:.1f}s "
+              f"({len(rows) / elapsed:.1f} users/s)")
 
-    # Determine output filename
-    if args.output_name:
-        out_name = args.output_name
-    else:
-        base = os.path.splitext(os.path.basename(args.input_file))[0]
-        suffix = "_debug" if args.debug else ""
-        out_name = f"{base}_Journey_Results{suffix}.tsv"
+    # ---- Validate and save final output ----
+    # Build user_id -> result mapping (checkpoint results + new results)
+    result_map = dict(completed_results)
+    result_map.update({uid: text for uid, text in results})
 
-    output_file = os.path.join(args.output_dir, out_name)
-
-    print(f"\nSaving results to: {output_file}")
-
-    # Output: UserId, ReadableUserEvents, ShoppingProfile, RequestTime, HisCount, OUTPUT
-    output_header = OUTPUT_COLUMNS + [OUTPUT_COL_NAME]
-
-    success_count = 0
-    json_valid_count = 0
-    json_invalid_ids = []
-    written = 0
-
-    with open(output_file, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-        writer.writerow(output_header)
-
-        for row_data in rows:
-            uid = row_data["user_id"]
-            raw_output = result_map.get(uid, "")
-
-            if raw_output:
-                success_count += 1
-
-            # Validate and clean JSON
-            clean_json = extract_and_validate_journey_json(raw_output)
-            if clean_json:
-                json_valid_count += 1
-                output_val = clean_json
-            elif raw_output:
-                json_invalid_ids.append(uid)
-                # Save raw text with newlines/tabs escaped as fallback
-                output_val = raw_output.replace("\n", " ").replace("\t", " ")
-            else:
-                output_val = ""
-
-            # Write output columns: UserId, ReadableUserEvents,
-            # ShoppingProfile, RequestTime, HisCount, OUTPUT
-            # ReadableUserEvents uses the processed (truncated/filtered) events
-            out_events = row_data["events_text"].replace("\n", "#N#")
-            out_row = [
-                uid,
-                out_events,
-                row_data["profile_text"],
-                row_data["request_time"],
-                row_data["his_count"],
-                output_val,
-            ]
-            writer.writerow(out_row)
-            written += 1
-
-    file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
-    print(f"  Written {written:,} rows ({file_size_mb:.1f} MB)")
-    print(f"  API success:     {success_count}/{len(rows)}")
-    print(f"  Valid JSON:      {json_valid_count}/{success_count}")
-    if json_invalid_ids:
-        preview = json_invalid_ids[:10]
-        print(f"  Invalid JSON ({len(json_invalid_ids)} users): "
-              f"{preview}{'...' if len(json_invalid_ids) > 10 else ''}")
+    print(f"\nSaving final results to: {output_file}")
+    written, success_count, json_valid_count, json_invalid_ids = \
+        save_results_tsv(output_file, all_rows, result_map)
 
     # ---- Show sample outputs ----
     num_show = min(3, len(results))
@@ -1059,6 +1231,16 @@ def main():
         print(f"  [{label}] {uid}: {display}")
         print()
 
+    # ---- Combine with existing results file (if specified) ----
+    if args.combine_file and os.path.exists(args.combine_file):
+        combined_name = out_name.replace(".tsv", "_combined.tsv")
+        combined_file = os.path.join(args.output_dir, combined_name)
+        print(f"\nCombining with existing results file ...")
+        combine_with_existing(output_file, args.combine_file, combined_file)
+    elif args.combine_file:
+        print(f"\n  [WARNING] Combine file not found, skipping: "
+              f"{args.combine_file}")
+
     # ---- Cleanup checkpoint ----
     if args.cleanup_checkpoint:
         cleanup_checkpoint(checkpoint_dir)
@@ -1068,7 +1250,7 @@ def main():
 
     print(f"\nStep 3 Done!")
     print(f"  Output file: {output_file}")
-    print(f"  Valid journeys: {json_valid_count}/{len(rows)}")
+    print(f"  Valid journeys: {json_valid_count}/{len(all_rows)}")
 
 
 if __name__ == "__main__":

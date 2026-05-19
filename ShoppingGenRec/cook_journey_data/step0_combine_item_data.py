@@ -26,17 +26,33 @@ Rules:
 
 import argparse
 import csv
+import gc
 import json
-import multiprocessing
 import os
 import random
 import re
 import sys
-from collections import defaultdict
+import time
 from datetime import datetime
+from tqdm import tqdm
 
 # Increase CSV field size limit to handle very large fields
 csv.field_size_limit(sys.maxsize)
+
+
+def _fast_json_save(obj, file_path):
+    """Save JSON using orjson (fast, compact) with fallback to stdlib json."""
+    t0 = time.time()
+    try:
+        import orjson
+        raw = orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_INDENT_2)
+    except ImportError:
+        raw = json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+    with open(file_path, "wb") as f:
+        f.write(raw)
+    elapsed = time.time() - t0
+    size_mb = len(raw) / (1024 * 1024)
+    print(f"  Saved {file_path} ({size_mb:.2f} MB) in {elapsed:.1f}s")
 
 # Attribute fields to extract, in canonical order.
 # Category is stored as a top-level "categories" field, not here.
@@ -70,6 +86,53 @@ def load_seller_blocklist(filepath):
             if seller:
                 sellers.add(seller.lower())
     return sellers
+
+
+def load_category_blocklist(filepath):
+    """Load category blocklist from a TSV file.
+
+    The TSV has columns: CategoryId, CategorHierarchy, CategoryName.
+    First column (CategoryId) is loaded into a blocked set.
+    Skips the header row.
+
+    Returns:
+        Set of blocked CategoryId strings.
+    """
+    blocked = set()
+    if not filepath or not os.path.isfile(filepath):
+        return blocked
+    with open(filepath, "r", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        header = next(reader, None)  # skip header
+        for row in reader:
+            if not row:
+                continue
+            cat_id = row[0].strip()
+            if cat_id:
+                blocked.add(cat_id)
+    return blocked
+
+
+def is_category_blocked(llm_cat_id, blocked_categories):
+    """Check if a category is blocked.
+
+    If LLMCatId is pipe-separated (hierarchy), checks each component.
+    Empty LLMCatId is NOT blocked (not all items have a category).
+
+    Args:
+        llm_cat_id: LLMCatId string from the data.
+        blocked_categories: Set of blocked CategoryId strings.
+
+    Returns:
+        The matched CategoryId string if blocked, or None.
+    """
+    if not llm_cat_id or not llm_cat_id.strip():
+        return None
+    for cat_id in llm_cat_id.split("|"):
+        cat_id = cat_id.strip()
+        if cat_id and cat_id in blocked_categories:
+            return cat_id
+    return None
 
 
 def load_title_blocklist(filepath, language="en"):
@@ -110,7 +173,7 @@ _RE_NORM_V3 = re.compile(r"[-!+/_\s,.;:?\"']+")
 
 
 def normalize_title(text):
-    """Normalize title text for blocklist matching (equivalent to C# NormalizeV3).
+    r"""Normalize title text for blocklist matching (equivalent to C# NormalizeV3).
 
     Replaces specific punctuation [-!+/_\s,.;:?"'] with spaces,
     lowercases, and wraps with leading/trailing space for word-boundary
@@ -202,36 +265,93 @@ def parse_date(date_str):
     return datetime.min
 
 
-def read_tsv(filepath, expected_columns=None):
+def read_tsv(filepath, expected_columns=None, sample_rows=0, seed=42):
     """Read a TSV file and return rows as list of dicts.
+
+    Uses streaming line-by-line reading with tqdm progress bar based on
+    file size. Memory-efficient: never loads the entire file into memory.
 
     Args:
         filepath: Path to the TSV file.
         expected_columns: Optional list of column names. If provided, will be
             used as header instead of first row.
+        sample_rows: If > 0, use reservoir sampling to keep only this many
+            rows in memory. The entire file is still scanned but memory usage
+            is bounded by sample_rows.
+        seed: Random seed for reservoir sampling reproducibility.
 
     Returns:
-        A list of dicts, one per row.
+        A list of dicts, one per row (or sample_rows rows if sampling).
     """
+    file_size = os.path.getsize(filepath)
+    t0 = time.time()
     rows = []
-    with open(filepath, "r", encoding="utf-8") as f:
-        reader = csv.reader(f, delimiter="\t")
+    bytes_read = 0
+    total_lines = 0
+    use_reservoir = sample_rows > 0
+    if use_reservoir:
+        rng = random.Random(seed)
+
+    with open(filepath, "r", encoding="utf-8", buffering=128 * 1024 * 1024) as f:
+        pbar = tqdm(total=file_size, unit="B", unit_scale=True,
+                    desc=f"    Reading {os.path.basename(filepath)}",
+                    mininterval=2)
+
+        # Parse header
+        first_line = f.readline()
+        bytes_read += len(first_line.encode("utf-8"))
+        pbar.update(bytes_read)
+
         if expected_columns:
-            next(reader, None)  # skip header
             columns = expected_columns
         else:
-            header = next(reader, None)
-            if header is None:
+            header_fields = first_line.rstrip("\r\n").split("\t")
+            if not header_fields or not header_fields[0]:
+                pbar.close()
                 return rows
-            columns = header
+            columns = header_fields
 
-        for row in reader:
-            if len(row) < len(columns):
-                row.extend([""] * (len(columns) - len(row)))
-            elif len(row) > len(columns):
-                row = row[:len(columns)]
-            rows.append(dict(zip(columns, row)))
+        num_cols = len(columns)
 
+        # Stream lines
+        for line in f:
+            bytes_read += len(line.encode("utf-8"))
+            if bytes_read % (64 * 1024 * 1024) < len(line.encode("utf-8")):
+                pbar.update(bytes_read - pbar.n)
+
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            fields = line.split("\t")
+            nf = len(fields)
+            if nf < num_cols:
+                fields.extend([""] * (num_cols - nf))
+            elif nf > num_cols:
+                fields = fields[:num_cols]
+
+            row = dict(zip(columns, fields))
+            total_lines += 1
+
+            if use_reservoir:
+                # Reservoir sampling (Algorithm R)
+                if len(rows) < sample_rows:
+                    rows.append(row)
+                else:
+                    j = rng.randint(0, total_lines - 1)
+                    if j < sample_rows:
+                        rows[j] = row
+            else:
+                rows.append(row)
+
+        pbar.update(file_size - pbar.n)  # ensure 100%
+        pbar.close()
+
+    elapsed = time.time() - t0
+    if use_reservoir:
+        print(f"    Scanned {total_lines:,} rows, sampled {len(rows):,} rows "
+              f"(reservoir) in {elapsed:.1f}s")
+    else:
+        print(f"    Parsed {len(rows):,} rows in {elapsed:.1f}s")
     return rows
 
 
@@ -295,12 +415,22 @@ def build_item(row, category_key="CategoryName"):
             except (ValueError, TypeError):
                 attrs["Price"] = orig_price
 
-    return {
+    # URLs for product display
+    offer_url = row.get("OfferURL", row.get("OfferUrl", "")).strip()
+    image_url = row.get("ImageUrl", "").strip()
+
+    item = {
         "title": title,
         "description": description,
         "categories": categories,
         "attributes": attrs,
     }
+    if offer_url:
+        item["offer_url"] = offer_url
+    if image_url:
+        item["image_url"] = image_url
+
+    return item
 
 
 def parse_args():
@@ -311,9 +441,11 @@ def parse_args():
         "--journey_product_files",
         type=str,
         nargs="+",
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product.tsv",
-                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_UpdatedBlocklist.tsv",
-                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0509.tsv"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product.tsv",
+        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_UpdatedBlocklist.tsv",
+        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0509.tsv",
+        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0512.tsv"],
         help="Path(s) to JourneyProduct TSV files. Multiple files will be "
              "merged; duplicate GlobalOfferIds are resolved by keeping the "
              "row with the latest Date.",
@@ -321,7 +453,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -332,6 +464,15 @@ def parse_args():
         help="Path to seller blocklist file (one seller per line). "
              "Items whose Seller matches a blocklisted seller will be removed. "
              "Set to empty string to disable.",
+    )
+    parser.add_argument(
+        "--category_blocklist",
+        type=str,
+        default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "resources", "CELA.Category.Blocklist.Clean.tsv"),
+        help="Path to category blocklist TSV file (CategoryId as first column). "
+             "Items whose LLMCatId matches a blocked CategoryId will be removed. "
+             "Also used to look up CategoryName when not in data.",
     )
     parser.add_argument(
         "--title_blocklist",
@@ -347,6 +488,42 @@ def parse_args():
         default=1000,
         help="Maximum allowed character length for title/description. "
              "Items exceeding this are removed (default: 1000)",
+    )
+    parser.add_argument(
+        "--sample_rows",
+        type=int,
+        default=20000000,
+        help="If > 0, use reservoir sampling to only keep this many rows "
+             "during TSV reading. Drastically reduces memory usage. "
+             "The full file is still scanned but only sample_rows rows are "
+             "kept in memory. (default: 0 = read all rows)",
+    )
+    parser.add_argument(
+        "--sample_count",
+        type=int,
+        default=20000000,
+        help="If > 0, also output an item_sample_{x}.json with x randomly "
+             "sampled items for lighter downstream processing.",
+    )
+    parser.add_argument(
+        "--sample_only",
+        action="store_true",
+        default=False,
+        help="If set, only write the sampled subset (skip full item.json). "
+             "Useful when the full dataset is too large to serialize.",
+    )
+    parser.add_argument(
+        "--skip_filter",
+        action="store_true",
+        default=False,
+        help="If set, skip all blocklist filtering (category/seller/title). "
+             "Useful for quick sampling without waiting for filtering.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible sampling (default: 42).",
     )
     return parser.parse_args()
 
@@ -370,7 +547,7 @@ def main():
         first_fields = first_line.split("\t")
         if "GlobalOfferId" in first_fields:
             print(f"    Detected header row: {first_fields[:5]}...")
-            rows = read_tsv(filepath)  # uses its own header
+            rows = read_tsv(filepath, sample_rows=args.sample_rows, seed=args.seed)
         else:
             print(f"    No header detected, using predefined columns")
             journey_columns_fallback = [
@@ -378,7 +555,8 @@ def main():
                 "OriginalPrice", "LLMCatId", "CategoryName", "AgeGroup",
                 "Brand", "Description", "OfferUrl", "ImageUrl",
             ]
-            rows = read_tsv(filepath, expected_columns=journey_columns_fallback)
+            rows = read_tsv(filepath, expected_columns=journey_columns_fallback,
+                           sample_rows=args.sample_rows, seed=args.seed)
         print(f"    Rows: {len(rows):,}")
         if rows:
             print(f"    Columns: {list(rows[0].keys())}")
@@ -399,13 +577,14 @@ def main():
 
     before_dedup = len(all_rows)
     deduped_rows = dedup_rows_by_date(all_rows)
+    del all_rows  # free memory (~hundreds of GB)
     after_dedup = len(deduped_rows)
     print(f"  Rows before dedup:  {before_dedup:>10,}")
     print(f"  Rows after dedup:   {after_dedup:>10,}")
     print(f"  Duplicates removed: {before_dedup - after_dedup:>10,}")
 
     # Per-file GID contribution after dedup
-    from collections import Counter
+    from collections import Counter  # local import to avoid top-level
     file_gid_counts = Counter(row.get("_source_file", "unknown") for row in deduped_rows)
     print(f"\n  Per-file GID contribution (after dedup):")
     for fpath in args.journey_product_files:
@@ -439,6 +618,7 @@ def main():
     items = {}
     stats = {
         "no_title": 0,
+        "category_blocked": 0,
         "truncated_title": 0,
         "truncated_description": 0,
         "truncated_categories": 0,
@@ -448,10 +628,34 @@ def main():
     # Attribute coverage counters
     attr_counts = {field: 0 for field in ATTRIBUTE_FIELDS}
 
-    for row in deduped_rows:
+    # Load category blocklist
+    cat_blocked_ids = set()
+    has_cat_id_col = False
+    if not args.skip_filter:
+        cat_blocked_ids = load_category_blocklist(args.category_blocklist)
+        if cat_blocked_ids:
+            print(f"\n  Category blocklist: {len(cat_blocked_ids):,} blocked CategoryIds loaded")
+        # Check if data has LLMCatId column
+        has_cat_id_col = len(deduped_rows) > 0 and "LLMCatId" in deduped_rows[0]
+        if has_cat_id_col:
+            print(f"  LLMCatId column detected, will apply category blocklist")
+        else:
+            print(f"  LLMCatId column not found, skipping category blocklist")
+    else:
+        print(f"\n  --skip_filter: skipping all blocklist filtering")
+
+    for idx, row in enumerate(deduped_rows):
         gid = row.get("GlobalOfferId", "").strip()
         if not gid:
             continue
+
+        # Category blocklist check (only if LLMCatId column exists)
+        if cat_blocked_ids and has_cat_id_col:
+            llm_cat_id = row.get("LLMCatId", "").strip()
+            matched = is_category_blocked(llm_cat_id, cat_blocked_ids)
+            if matched:
+                stats["category_blocked"] += 1
+                continue
 
         item = build_item(row, category_key="CategoryName")
         if item is None:
@@ -471,70 +675,66 @@ def main():
 
         items[gid] = item
 
+        # Periodically clear processed rows to free memory
+        deduped_rows[idx] = None
+
+    del deduped_rows  # free remaining references
+    gc.collect()
+    print(f"  Built {len(items):,} items, freed raw row memory")
+
     # ----- Seller blocklist filtering -----
-    seller_blocklist = load_seller_blocklist(args.seller_blocklist)
     seller_blocked_count = 0
-    if seller_blocklist:
-        print(f"\n  Applying seller blocklist ({len(seller_blocklist):,} sellers loaded)")
-        gids_to_remove = []
-        for gid, item in items.items():
-            seller = item["attributes"].get("Seller", "").lower()
-            if seller and seller in seller_blocklist:
-                gids_to_remove.append(gid)
-        for gid in gids_to_remove:
-            del items[gid]
-        seller_blocked_count = len(gids_to_remove)
-        print(f"  Items removed by seller blocklist:          {seller_blocked_count:>10,}")
-    else:
-        print(f"\n  Seller blocklist: not applied (no valid file)")
-
-    # ----- Title blocklist filtering (parallel) -----
-    title_blocklist_tokens = load_title_blocklist(args.title_blocklist, language="en")
-    title_blocklist_regex = build_title_blocklist_regex(title_blocklist_tokens)
     title_blocked_count = 0
-    blocked_items = []  # only title-blocked items for report
-    if title_blocklist_regex:
-        print(f"\n  Applying title blocklist ({len(title_blocklist_tokens):,} keywords loaded)")
+    blocked_items = []
 
-        # Prepare data for parallel processing
-        all_pairs = [
-            (gid, item["title"], item["attributes"].get("Seller", ""),
-             item["categories"])
-            for gid, item in items.items()
-        ]
+    if not args.skip_filter:
+        seller_blocklist = load_seller_blocklist(args.seller_blocklist)
+        if seller_blocklist:
+            print(f"\n  Applying seller blocklist ({len(seller_blocklist):,} sellers loaded)")
+            gids_to_remove = []
+            for gid, item in items.items():
+                seller = item["attributes"].get("Seller", "").lower()
+                if seller and seller in seller_blocklist:
+                    gids_to_remove.append(gid)
+            for gid in gids_to_remove:
+                del items[gid]
+            seller_blocked_count = len(gids_to_remove)
+            print(f"  Items removed by seller blocklist:          {seller_blocked_count:>10,}")
+        else:
+            print(f"\n  Seller blocklist: not applied (no valid file)")
 
-        # Split into chunks for multiprocessing
-        num_workers = min(multiprocessing.cpu_count(), 16)
-        chunk_size = max(1, len(all_pairs) // num_workers)
-        batches = [all_pairs[i:i + chunk_size]
-                   for i in range(0, len(all_pairs), chunk_size)]
+        # ----- Title blocklist filtering (single-process, memory-efficient) -----
+        title_blocklist_tokens = load_title_blocklist(args.title_blocklist, language="en")
+        title_blocklist_regex = build_title_blocklist_regex(title_blocklist_tokens)
+        if title_blocklist_regex:
+            print(f"\n  Applying title blocklist ({len(title_blocklist_tokens):,} keywords loaded)")
 
-        print(f"  Using {num_workers} workers, {len(batches)} batches "
-              f"({chunk_size:,} items/batch)")
+            gids_to_remove = []
+            for gid, item in items.items():
+                title = item["title"]
+                if not title:
+                    continue
+                norm_title = normalize_title(title)
+                m = title_blocklist_regex.search(norm_title)
+                if m:
+                    gids_to_remove.append(gid)
+                    blocked_items.append((
+                        gid, title,
+                        item["attributes"].get("Seller", ""),
+                        item["categories"],
+                        m.group(0),
+                    ))
 
-        # Run in parallel
-        pattern_str = title_blocklist_regex.pattern
-        with multiprocessing.Pool(
-            num_workers, initializer=_init_worker,
-            initargs=(pattern_str,)
-        ) as pool:
-            batch_results = pool.map(_check_title_batch, batches)
-
-        # Collect results
-        gids_to_remove = []
-        for batch_blocked in batch_results:
-            for gid, title, seller, categories, matched_kw in batch_blocked:
-                gids_to_remove.append(gid)
-                blocked_items.append((gid, title, seller, categories, matched_kw))
-
-        for gid in gids_to_remove:
-            del items[gid]
-        title_blocked_count = len(gids_to_remove)
-        print(f"  Items removed by title blocklist:           {title_blocked_count:>10,}")
-    else:
-        print(f"\n  Title blocklist: not applied (no valid file)")
+            for gid in gids_to_remove:
+                del items[gid]
+            title_blocked_count = len(gids_to_remove)
+            print(f"  Items removed by title blocklist:           {title_blocked_count:>10,}")
+        else:
+            print(f"\n  Title blocklist: not applied (no valid file)")
 
     print(f"  Items removed (missing title):             {stats['no_title']:>10,}")
+    if cat_blocked_ids and has_cat_id_col:
+        print(f"  Items removed (blocked category):          {stats['category_blocked']:>10,}")
     print(f"  Titles truncated (over {max_field_len} chars):       {stats['truncated_title']:>10,}")
     print(f"  Descriptions truncated (over {max_field_len} chars): {stats['truncated_description']:>10,}")
     print(f"  Categories truncated (over {max_field_len} chars):   {stats['truncated_categories']:>10,}")
@@ -560,6 +760,13 @@ def main():
 
     print()
     total = len(items)
+    # Recount attribute coverage after filtering (skip if no filtering was done)
+    if not args.skip_filter:
+        attr_counts = {field: 0 for field in ATTRIBUTE_FIELDS}
+        for item in items.values():
+            for field in ATTRIBUTE_FIELDS:
+                if field in item["attributes"]:
+                    attr_counts[field] += 1
     print(f"  {'Attribute':<20s} {'Count':>10s} {'Coverage':>10s}")
     print(f"  {'-'*20} {'-'*10} {'-'*10}")
     for field in ATTRIBUTE_FIELDS:
@@ -578,14 +785,49 @@ def main():
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    output_path = os.path.join(args.output_dir, "item.json")
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(items, f, indent=2, ensure_ascii=False)
 
-    file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  Output: {output_path}")
-    print(f"  Size:   {file_size_mb:.2f} MB")
-    print(f"  Total items: {len(items):,}")
+    # Sample first (before writing full json, to allow freeing memory)
+    total_item_count = len(items)
+    sampled_items = None
+    sample_n = 0
+    count_str = ""
+    if args.sample_count > 0:
+        sample_n = min(args.sample_count, len(items))
+        random.seed(args.seed)
+        sampled_keys = random.sample(list(items.keys()), sample_n)
+        sampled_items = {k: items[k] for k in sampled_keys}
+        # Human-readable count for filename: 10000000 -> 10M, 500000 -> 500K
+        if sample_n >= 1_000_000 and sample_n % 1_000_000 == 0:
+            count_str = f"{sample_n // 1_000_000}M"
+        elif sample_n >= 1_000 and sample_n % 1_000 == 0:
+            count_str = f"{sample_n // 1_000}K"
+        else:
+            count_str = str(sample_n)
+        print(f"  Sampled {sample_n:,} items (seed={args.seed})")
+
+    items_freed = False
+    if args.sample_only:
+        # Free the full dict to save memory before writing
+        del items
+        items_freed = True
+        gc.collect()
+        print(f"  --sample_only mode: skipping full item.json, freed full dict")
+        if sampled_items:
+            sample_path = os.path.join(args.output_dir, f"item_sample_{count_str}.json")
+            _fast_json_save(sampled_items, sample_path)
+            print(f"  Sample items:  {sample_n:,}")
+        else:
+            print(f"  WARNING: --sample_only set but --sample_count is 0, nothing to write!")
+    else:
+        # Write full item.json
+        output_path = os.path.join(args.output_dir, "item.json")
+        _fast_json_save(items, output_path)
+        print(f"  Total items: {total_item_count:,}")
+        # Write sampled subset
+        if sampled_items:
+            sample_path = os.path.join(args.output_dir, f"item_sample_{count_str}.json")
+            _fast_json_save(sampled_items, sample_path)
+            print(f"  Sample items:  {sample_n:,}")
 
     # Write blocked items report
     if blocked_items:
@@ -610,32 +852,36 @@ def main():
     print("Step 6: Sample entries")
     print("=" * 70)
 
-    # Pick samples: some with attributes, some without
-    all_keys = list(items.keys())
-    with_attrs = [k for k in all_keys if items[k]["attributes"]]
-    without_attrs = [k for k in all_keys if not items[k]["attributes"]]
+    # Use sampled_items for display if full items was freed
+    display_items = sampled_items if items_freed else items
 
-    sample_keys = []
-    if with_attrs:
-        sample_keys.extend(random.sample(with_attrs, min(3, len(with_attrs))))
-    if without_attrs:
-        sample_keys.extend(random.sample(without_attrs, min(2, len(without_attrs))))
-    sample_keys = sample_keys[:5]
+    if display_items:
+        # Pick samples: some with attributes, some without
+        all_keys = list(display_items.keys())
+        with_attrs = [k for k in all_keys if display_items[k]["attributes"]]
+        without_attrs = [k for k in all_keys if not display_items[k]["attributes"]]
 
-    for idx, key in enumerate(sample_keys, 1):
-        info = items[key]
-        print(f"\n--- Sample {idx} (GlobalOfferId={key}) ---")
-        print(f"  title:        {info['title'][:120]}")
-        desc = info["description"]
-        print(f"  description:  {desc[:100]}{'...' if len(desc) > 100 else ''}")
-        print(f"  categories:   {info['categories'][:100]}")
-        attrs = info["attributes"]
-        if attrs:
-            print(f"  attributes:")
-            for af, av in attrs.items():
-                print(f"    {af}: {av}")
-        else:
-            print(f"  attributes:   {{}}")
+        sample_keys = []
+        if with_attrs:
+            sample_keys.extend(random.sample(with_attrs, min(3, len(with_attrs))))
+        if without_attrs:
+            sample_keys.extend(random.sample(without_attrs, min(2, len(without_attrs))))
+        sample_keys = sample_keys[:5]
+
+        for idx, key in enumerate(sample_keys, 1):
+            info = display_items[key]
+            print(f"\n--- Sample {idx} (GlobalOfferId={key}) ---")
+            print(f"  title:        {info['title'][:120]}")
+            desc = info["description"]
+            print(f"  description:  {desc[:100]}{'...' if len(desc) > 100 else ''}")
+            print(f"  categories:   {info['categories'][:100]}")
+            attrs = info["attributes"]
+            if attrs:
+                print(f"  attributes:")
+                for af, av in attrs.items():
+                    print(f"    {af}: {av}")
+            else:
+                print(f"  attributes:   {{}}")
 
     # =========================================================================
     # Summary
@@ -644,14 +890,19 @@ def main():
     print("=" * 70)
     print("Summary")
     print("=" * 70)
-    print(f"  Total items:               {len(items):>10,}")
+    print(f"  Total items:               {total_item_count:>10,}")
     print(f"  Removed (missing title):   {stats['no_title']:>10,}")
+    if cat_blocked_ids and has_cat_id_col:
+        print(f"  Removed (blocked category):{stats['category_blocked']:>10,}")
     print(f"  Removed (seller blocklist):{seller_blocked_count:>10,}")
     print(f"  Removed (title blocklist): {title_blocked_count:>10,}")
     print(f"  With description:          {has_desc:>10,}")
     print(f"  With categories:           {has_cat:>10,}")
     print(f"  With attributes:           {has_attrs:>10,}")
-    print(f"  Output: {output_path}")
+    if args.sample_only:
+        print(f"  Mode: sample_only (full item.json skipped)")
+        print(f"  Sample count:  {sample_n:,}")
+    print(f"  Output dir: {args.output_dir}")
     print()
     print("Done!")
 

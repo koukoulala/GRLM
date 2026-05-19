@@ -48,15 +48,73 @@ torch.backends.cudnn.benchmark = False
 
 
 def load_data(file_path: str) -> List[Dict]:
-    """Load JSON file and convert to list of dictionaries."""
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    """Load JSON file and convert to list of dictionaries.
+
+    Uses orjson (Rust-based, ~5-10x faster than stdlib json) with a
+    progress bar on the file read. Falls back to stdlib json.
+    """
+    file_size = os.path.getsize(file_path)
+    print(f"  File size: {file_size / 1e9:.2f} GB")
+
+    # Read raw bytes with progress bar
+    print(f"  Reading file into memory ...")
+    buf = bytearray()
+    with open(file_path, "rb") as f:
+        with tqdm(total=file_size, unit="B", unit_scale=True,
+                  desc="  Reading", mininterval=2) as pbar:
+            while True:
+                chunk = f.read(64 * 1024 * 1024)  # 64MB chunks
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                pbar.update(len(chunk))
+
+    # Parse JSON
+    print(f"  Parsing JSON ({len(buf) / 1e9:.2f} GB) ...")
+    parse_start = time.time()
+    try:
+        import orjson
+        data = orjson.loads(buf)
+    except ImportError:
+        data = json.loads(buf)
+    del buf  # free memory
+    parse_elapsed = time.time() - parse_start
+    print(f"  Parsed in {parse_elapsed:.1f}s")
+
+    # Convert {id: {...}} dict to [{"id": id, ...}] list
     result_list = []
     for key, value in data.items():
-        new_item = {"id": key}
-        new_item.update(value)
-        result_list.append(new_item)
+        value["id"] = key
+        result_list.append(value)
+    del data
     return result_list
+
+
+def _fast_json_load(file_path: str):
+    """Load JSON using orjson (fast) with fallback to stdlib json."""
+    t0 = time.time()
+    with open(file_path, "rb") as f:
+        raw = f.read()
+    try:
+        import orjson
+        result = orjson.loads(raw)
+    except ImportError:
+        result = json.loads(raw)
+    print(f"  Loaded {file_path} ({len(raw) / 1e6:.1f} MB) in {time.time() - t0:.1f}s")
+    return result
+
+
+def _fast_json_save(obj, file_path: str):
+    """Save JSON using orjson (fast, compact) with fallback to stdlib json."""
+    t0 = time.time()
+    try:
+        import orjson
+        raw = orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS)
+    except ImportError:
+        raw = json.dumps(obj, ensure_ascii=False, separators=(',', ':')).encode("utf-8")
+    with open(file_path, "wb") as f:
+        f.write(raw)
+    print(f"  Saved {file_path} ({len(raw) / 1e6:.1f} MB) in {time.time() - t0:.1f}s")
 
 
 def prepare_text_for_embedding(item: Dict, max_field_len: int = 500) -> str:
@@ -496,12 +554,28 @@ def compute_similarities_faiss(
 
     # Save the trained CPU index to disk for later reuse
     if index_output_path:
-        # If training happened on GPU, copy back to CPU before saving
-        if use_gpu and index is not cpu_index:
-            cpu_index = faiss.index_gpu_to_cpu(index)
-            cpu_index.nprobe = min(nprobe, effective_nlist)
-        faiss.write_index(cpu_index, index_output_path)
-        print(f"  Saved FAISS index to: {index_output_path}")
+        try:
+            if use_gpu and index is not cpu_index:
+                # GPU->CPU transfer can fail for very large indices
+                # (std::vector max_size limit). Fall back to rebuilding
+                # a CPU index from scratch.
+                try:
+                    cpu_index = faiss.index_gpu_to_cpu(index)
+                except RuntimeError:
+                    print(f"  index_gpu_to_cpu failed (index too large), "
+                          f"rebuilding CPU index for saving...")
+                    quantizer_cpu = faiss.IndexFlatIP(dim)
+                    cpu_index = faiss.IndexIVFFlat(
+                        quantizer_cpu, dim, effective_nlist,
+                        faiss.METRIC_INNER_PRODUCT)
+                    cpu_index.train(embeddings)
+                    cpu_index.add(embeddings)
+                cpu_index.nprobe = min(nprobe, effective_nlist)
+            faiss.write_index(cpu_index, index_output_path)
+            print(f"  Saved FAISS index to: {index_output_path}")
+        except Exception as e:
+            print(f"  WARNING: Failed to save FAISS index: {e}")
+            print(f"  Continuing with search (index saving is optional)...")
 
     # Batch search: search k+1 to exclude self, then filter
     print(f"  Searching top-{k+1} neighbors for {num_queries} queries ...")
@@ -577,15 +651,15 @@ def parse_args():
     parser.add_argument(
         "--item_file",
         type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/raw_data/item.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/raw_data/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/item.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260324/processed_v4_2/",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260509/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/",
         help="Directory to save similarity results",
     )
     parser.add_argument(
@@ -600,7 +674,7 @@ def parse_args():
         default=None,
         help="Number of GPUs (default: all available)",
     )
-    parser.add_argument("--batch_size", type=int, default=512, help="Batch size per GPU")
+    parser.add_argument("--batch_size", type=int, default=2048, help="Batch size per GPU")
     parser.add_argument(
         "--top_k", type=int, default=8, help="Top-k similar items to compute"
     )
@@ -631,7 +705,7 @@ def parse_args():
     parser.add_argument(
         "--resume_from_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260430/processed/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed/",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
     return parser.parse_args()
@@ -766,8 +840,8 @@ def main():
 
     # Save embeddings
     np.save(emb_file, embeddings)
-    with open(ids_file, "w", encoding="utf-8") as f:
-        json.dump(item_ids, f, ensure_ascii=False)
+    print(f"  Saving item IDs to: {ids_file}")
+    _fast_json_save(item_ids, ids_file)
     print(f"Saved embeddings to: {emb_file} ({embeddings.nbytes / 1e9:.2f} GB)")
     print(f"Saved item IDs to: {ids_file}")
 
@@ -779,8 +853,7 @@ def main():
     prev_similarities = {}
     if resume_dir and new_id_set and os.path.exists(resume_sim_file):
         print(f"\n[RESUME] Loading previous similarities from: {resume_sim_file}")
-        with open(resume_sim_file, "r", encoding="utf-8") as f:
-            prev_similarities = json.load(f)
+        prev_similarities = _fast_json_load(resume_sim_file)
         print(f"  Previous similarity entries: {len(prev_similarities):,}")
 
         # Filter: keep only entries for items still in current data
@@ -839,8 +912,7 @@ def main():
         )
 
     print(f"Saving similarity results to: {output_file}")
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(similarity_results, f, ensure_ascii=False, indent=2)
+    _fast_json_save(similarity_results, output_file)
 
     # Clean up temp dir
     tmp_dir = os.path.join(args.output_dir, "_emb_tmp")
@@ -854,3 +926,4 @@ def main():
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     main()
+                                                                                                                                                                                                                                                                                                                                                                                                    
