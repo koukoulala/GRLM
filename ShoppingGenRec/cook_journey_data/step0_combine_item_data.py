@@ -441,11 +441,11 @@ def parse_args():
         "--journey_product_files",
         type=str,
         nargs="+",
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product.tsv",
         #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_UpdatedBlocklist.tsv",
-        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0509.tsv",
-        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0512.tsv"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0509.tsv",
+                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0512.tsv"],
         help="Path(s) to JourneyProduct TSV files. Multiple files will be "
              "merged; duplicate GlobalOfferIds are resolved by keeping the "
              "row with the latest Date.",
@@ -453,7 +453,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data_PG",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data_v2",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -492,25 +493,11 @@ def parse_args():
     parser.add_argument(
         "--sample_rows",
         type=int,
-        default=20000000,
+        default=22000000,
         help="If > 0, use reservoir sampling to only keep this many rows "
              "during TSV reading. Drastically reduces memory usage. "
              "The full file is still scanned but only sample_rows rows are "
              "kept in memory. (default: 0 = read all rows)",
-    )
-    parser.add_argument(
-        "--sample_count",
-        type=int,
-        default=20000000,
-        help="If > 0, also output an item_sample_{x}.json with x randomly "
-             "sampled items for lighter downstream processing.",
-    )
-    parser.add_argument(
-        "--sample_only",
-        action="store_true",
-        default=False,
-        help="If set, only write the sampled subset (skip full item.json). "
-             "Useful when the full dataset is too large to serialize.",
     )
     parser.add_argument(
         "--skip_filter",
@@ -785,49 +772,12 @@ def main():
     print("=" * 70)
 
     os.makedirs(args.output_dir, exist_ok=True)
-
-    # Sample first (before writing full json, to allow freeing memory)
     total_item_count = len(items)
-    sampled_items = None
-    sample_n = 0
-    count_str = ""
-    if args.sample_count > 0:
-        sample_n = min(args.sample_count, len(items))
-        random.seed(args.seed)
-        sampled_keys = random.sample(list(items.keys()), sample_n)
-        sampled_items = {k: items[k] for k in sampled_keys}
-        # Human-readable count for filename: 10000000 -> 10M, 500000 -> 500K
-        if sample_n >= 1_000_000 and sample_n % 1_000_000 == 0:
-            count_str = f"{sample_n // 1_000_000}M"
-        elif sample_n >= 1_000 and sample_n % 1_000 == 0:
-            count_str = f"{sample_n // 1_000}K"
-        else:
-            count_str = str(sample_n)
-        print(f"  Sampled {sample_n:,} items (seed={args.seed})")
 
-    items_freed = False
-    if args.sample_only:
-        # Free the full dict to save memory before writing
-        del items
-        items_freed = True
-        gc.collect()
-        print(f"  --sample_only mode: skipping full item.json, freed full dict")
-        if sampled_items:
-            sample_path = os.path.join(args.output_dir, f"item_sample_{count_str}.json")
-            _fast_json_save(sampled_items, sample_path)
-            print(f"  Sample items:  {sample_n:,}")
-        else:
-            print(f"  WARNING: --sample_only set but --sample_count is 0, nothing to write!")
-    else:
-        # Write full item.json
-        output_path = os.path.join(args.output_dir, "item.json")
-        _fast_json_save(items, output_path)
-        print(f"  Total items: {total_item_count:,}")
-        # Write sampled subset
-        if sampled_items:
-            sample_path = os.path.join(args.output_dir, f"item_sample_{count_str}.json")
-            _fast_json_save(sampled_items, sample_path)
-            print(f"  Sample items:  {sample_n:,}")
+    # Write full item.json
+    output_path = os.path.join(args.output_dir, "item.json")
+    _fast_json_save(items, output_path)
+    print(f"  Total items: {total_item_count:,}")
 
     # Write blocked items report
     if blocked_items:
@@ -852,8 +802,7 @@ def main():
     print("Step 6: Sample entries")
     print("=" * 70)
 
-    # Use sampled_items for display if full items was freed
-    display_items = sampled_items if items_freed else items
+    display_items = items
 
     if display_items:
         # Pick samples: some with attributes, some without
@@ -899,9 +848,6 @@ def main():
     print(f"  With description:          {has_desc:>10,}")
     print(f"  With categories:           {has_cat:>10,}")
     print(f"  With attributes:           {has_attrs:>10,}")
-    if args.sample_only:
-        print(f"  Mode: sample_only (full item.json skipped)")
-        print(f"  Sample count:  {sample_n:,}")
     print(f"  Output dir: {args.output_dir}")
     print()
     print("Done!")

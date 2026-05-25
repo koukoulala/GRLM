@@ -61,13 +61,30 @@ import time
 
 from tqdm import tqdm
 
+# Use orjson for 5-10x faster JSON parsing/serialization when available
+try:
+    import orjson
+    def _json_loads(s):
+        if isinstance(s, str):
+            return orjson.loads(s.encode("utf-8") if isinstance(s, str) else s)
+        return orjson.loads(s)
+    def _json_dumps_compact(obj):
+        return orjson.dumps(obj, option=orjson.OPT_NON_STR_KEYS).decode("utf-8")
+    _JSON_ENGINE = "orjson"
+except ImportError:
+    _json_loads = json.loads
+    def _json_dumps_compact(obj):
+        return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
+    _JSON_ENGINE = "stdlib"
+
 csv.field_size_limit(sys.maxsize)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, os.path.join(PROJECT_DIR, "resources"))
 from llm_utils import (run_llm_parallel_with_checkpoint,
-                        load_checkpoint, cleanup_checkpoint)
+                        run_llm_parallel, load_tokens, validate_tokens,
+                        load_checkpoint, save_checkpoint, cleanup_checkpoint)
 
 
 # ============================================================================ #
@@ -101,8 +118,9 @@ def _fix_backslash_json(text):
     text = text.strip()
     # Try direct parse first
     try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
+        return _json_loads(text)
+    except (json.JSONDecodeError, TypeError, orjson.JSONDecodeError
+            if _JSON_ENGINE == "orjson" else json.JSONDecodeError):
         pass
     # Iterative backslash fix
     _BS = chr(92)
@@ -116,8 +134,9 @@ def _fix_backslash_json(text):
         cur = cur.replace(_BS + _Q, _Q)
         cur = cur.replace(_PH, _BS + _Q)
         try:
-            return json.loads(cur)
-        except (json.JSONDecodeError, TypeError):
+            return _json_loads(cur)
+        except (json.JSONDecodeError, TypeError, orjson.JSONDecodeError
+                if _JSON_ENGINE == "orjson" else json.JSONDecodeError):
             pass
     return None
 
@@ -126,7 +145,7 @@ def _clean_json_field(text):
     """Parse JSON with backslash fix, then re-serialize cleanly."""
     obj = _fix_backslash_json(text)
     if obj is not None:
-        return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
+        return _json_dumps_compact(obj)
     return text  # fallback: return as-is
 
 
@@ -137,7 +156,9 @@ def load_step5_and_flatten(input_file, max_journeys=0):
     """Read step5 output TSV and flatten to per-journey rows.
 
     Optimized for large files:
-      - Uses 8 MB binary read buffer for NFS performance
+      - Uses 64 MB binary read buffer for NFS performance
+      - str.split('\\t') instead of csv.reader (faster)
+      - orjson for JSON parse/serialize when available
       - Skips unused columns (ShoppingJourneys) to save I/O + memory
       - Does NOT store user_rows during inference/split (only user_rows
         is populated during merge, which calls run_merge separately)
@@ -154,8 +175,6 @@ def load_step5_and_flatten(input_file, max_journeys=0):
         is_split_format: True if input is already per-journey format.
     """
     journey_rows = []
-    # user_rows is NOT populated here — it's only needed by merge mode,
-    # which reads the file separately in run_merge().
     user_rows = {}
 
     try:
@@ -163,15 +182,13 @@ def load_step5_and_flatten(input_file, max_journeys=0):
     except OSError:
         file_size = 0
 
-    # Use binary mode with large buffer for NFS performance, then decode
-    # line by line. This avoids the Python default 8KB buffer which causes
-    # thousands of tiny NFS reads on /cosmos.
-    with open(input_file, "rb", buffering=8 << 20) as fb:
+    # 64 MB buffer for better NFS throughput
+    with open(input_file, "rb", buffering=64 << 20) as fb:
         header_line = fb.readline()
         if not header_line:
             return [], {}, False
-        header_text = header_line.decode("utf-8", errors="replace")
-        header = next(csv.reader([header_text], delimiter="\t"))
+        header_text = header_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        header = header_text.split("\t")
 
         # Detect format: split chunk has JourneyKey column
         is_split = "JourneyKey" in header
@@ -183,8 +200,6 @@ def load_step5_and_flatten(input_file, max_journeys=0):
         idx_profile = col_idx.get("ShoppingProfile", -1)
         idx_jkey = col_idx.get("JourneyKey", -1)
         idx_jidx = col_idx.get("JourneyIdx", -1)
-        # NOTE: ShoppingJourneys is intentionally NOT read — it's unused
-        # by step6 and constitutes ~3-5% of file size.
 
         pbar = tqdm(total=file_size or None, unit="B", unit_scale=True,
                     desc="[load] reading", mininterval=60, smoothing=0.1)
@@ -196,7 +211,13 @@ def load_step5_and_flatten(input_file, max_journeys=0):
         for line_bytes in fb:
             pbar.update(len(line_bytes))
             line = line_bytes.decode("utf-8", errors="replace")
-            fields = next(csv.reader([line], delimiter="\t"))
+            if is_split:
+                # Split format is clean TSV, safe to use str.split
+                fields = line.rstrip("\r\n").split("\t")
+            else:
+                # Step5 per-user format: JWP JSON may contain quoted
+                # fields with tabs/newlines, must use csv.reader.
+                fields = next(csv.reader([line], delimiter="\t"))
             nf = len(fields)
 
             if is_split:
@@ -205,10 +226,10 @@ def load_step5_and_flatten(input_file, max_journeys=0):
                     "UserId": fields[idx_uid] if idx_uid < nf else "",
                     "JourneyIdx": int(fields[idx_jidx])
                         if idx_jidx < nf and fields[idx_jidx].strip() else 0,
-                    "ShoppingProfile": _clean_json_field(
-                        fields[idx_profile] if idx_profile < nf else ""),
-                    "JourneyWithProducts": _clean_json_field(
-                        fields[idx_jwp] if idx_jwp < nf else ""),
+                    "ShoppingProfile": fields[idx_profile]
+                        if idx_profile < nf else "",
+                    "JourneyWithProducts": fields[idx_jwp]
+                        if idx_jwp < nf else "",
                 }
                 journey_rows.append(jr)
                 if max_journeys > 0 and len(journey_rows) >= max_journeys:
@@ -243,8 +264,7 @@ def load_step5_and_flatten(input_file, max_journeys=0):
                     "UserId": uid,
                     "JourneyIdx": idx,
                     "ShoppingProfile": profile,
-                    "JourneyWithProducts": json.dumps(
-                        journey, ensure_ascii=False, separators=(',', ':')),
+                    "JourneyWithProducts": _json_dumps_compact(journey),
                 })
                 if max_journeys > 0 and len(journey_rows) >= max_journeys:
                     break
@@ -255,11 +275,129 @@ def load_step5_and_flatten(input_file, max_journeys=0):
 
     return journey_rows, user_rows, is_split
 
-    return journey_rows, user_rows, False
+
+# ============================================================================ #
+# Chunked journey reader (for streaming inference)                             #
+# ============================================================================ #
+def _iter_journey_chunks(input_file, chunk_size, max_journeys=0):
+    """Generator: stream-read input file and yield chunks of journey_rows.
+
+    Each chunk is a list of dicts with keys matching SPLIT_COLUMNS.
+    Memory usage is O(chunk_size) instead of O(total_journeys).
+
+    Args:
+        input_file: Path to step5 output TSV or split chunk TSV.
+        chunk_size: Max journeys per yielded chunk.
+        max_journeys: If >0, stop after this many total journeys.
+
+    Yields:
+        list[dict]: Chunk of journey rows.
+    """
+    try:
+        file_size = os.path.getsize(input_file)
+    except OSError:
+        file_size = 0
+
+    chunk = []
+    total = 0
+
+    with open(input_file, "rb", buffering=64 << 20) as fb:
+        header_line = fb.readline()
+        if not header_line:
+            return
+        header_text = header_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        header = header_text.split("\t")
+
+        is_split = "JourneyKey" in header
+        col_idx = {name: i for i, name in enumerate(header)}
+        idx_uid = col_idx.get("UserId", -1)
+        idx_jwp = col_idx.get("JourneyWithProducts", -1)
+        idx_profile = col_idx.get("ShoppingProfile", -1)
+        idx_jkey = col_idx.get("JourneyKey", -1)
+        idx_jidx = col_idx.get("JourneyIdx", -1)
+
+        pbar = tqdm(total=file_size or None, unit="B", unit_scale=True,
+                    desc="[load] streaming", mininterval=60, smoothing=0.1)
+        pbar.update(len(header_line))
+
+        uid_profile_cache = {}
+
+        for line_bytes in fb:
+            pbar.update(len(line_bytes))
+            line = line_bytes.decode("utf-8", errors="replace")
+
+            if is_split:
+                fields = line.rstrip("\r\n").split("\t")
+            else:
+                fields = next(csv.reader([line], delimiter="\t"))
+            nf = len(fields)
+
+            if is_split:
+                jr = {
+                    "JourneyKey": fields[idx_jkey] if idx_jkey < nf else "",
+                    "UserId": fields[idx_uid] if idx_uid < nf else "",
+                    "JourneyIdx": int(fields[idx_jidx])
+                        if idx_jidx < nf and fields[idx_jidx].strip() else 0,
+                    "ShoppingProfile": fields[idx_profile]
+                        if idx_profile < nf else "",
+                    "JourneyWithProducts": fields[idx_jwp]
+                        if idx_jwp < nf else "",
+                }
+                chunk.append(jr)
+                total += 1
+                if max_journeys > 0 and total >= max_journeys:
+                    yield chunk
+                    pbar.close()
+                    return
+                if len(chunk) >= chunk_size:
+                    yield chunk
+                    chunk = []
+                continue
+
+            # Step5 per-user format
+            uid = (fields[idx_uid] if idx_uid < nf else "").strip()
+            if not uid:
+                continue
+            jwp_raw = (fields[idx_jwp] if idx_jwp < nf else "").strip()
+            if not jwp_raw:
+                continue
+            jwp = _fix_backslash_json(jwp_raw)
+            if not jwp or "ContinuedJourneys" not in jwp:
+                continue
+
+            if uid not in uid_profile_cache:
+                raw_prof = fields[idx_profile] if idx_profile < nf else ""
+                uid_profile_cache[uid] = _clean_json_field(raw_prof)
+            profile = uid_profile_cache[uid]
+
+            for idx, journey in enumerate(jwp["ContinuedJourneys"]):
+                if not isinstance(journey, dict):
+                    continue
+                key = f"{uid}_{idx}"
+                chunk.append({
+                    "JourneyKey": key,
+                    "UserId": uid,
+                    "JourneyIdx": idx,
+                    "ShoppingProfile": profile,
+                    "JourneyWithProducts": _json_dumps_compact(journey),
+                })
+                total += 1
+                if max_journeys > 0 and total >= max_journeys:
+                    yield chunk
+                    pbar.close()
+                    return
+                if len(chunk) >= chunk_size:
+                    yield chunk
+                    chunk = []
+
+        pbar.close()
+
+    if chunk:
+        yield chunk
 
 
 # ============================================================================ #
-# Split mode                                                                   #
+# Split mode (in-memory, for small files)                                      #
 # ============================================================================ #
 def run_split(journey_rows, output_dir, split_n, input_basename):
     """Write journey rows into chunk TSVs of split_n journeys each."""
@@ -286,6 +424,247 @@ def run_split(journey_rows, output_dir, split_n, input_basename):
               f"({sz:.1f} MB) -> {chunk_file}")
 
     print(f"\n[split] Done. Run each chunk with:")
+    print(f"  python step6_call_LLM_ranker.py "
+          f"--input_file <chunk_file> --output_dir {output_dir}")
+
+
+# ============================================================================ #
+# Streaming split mode (constant memory, for large files)                      #
+# ============================================================================ #
+def _count_existing_splits(output_dir, input_basename, split_n):
+    """Scan output_dir for existing split files and count completed journeys.
+
+    Returns (skip_journeys, resume_chunk_idx):
+      - skip_journeys: number of journeys in fully completed chunks to skip
+      - resume_chunk_idx: chunk index to resume writing from (0-based)
+
+    The last split file is deleted if it has fewer than split_n rows,
+    since it may be a partial write from a crashed run.
+    """
+    pattern = os.path.join(
+        output_dir, f"{input_basename}_split_*.tsv")
+    existing = sorted(glob.glob(pattern))
+    if not existing:
+        return 0, 0
+
+    skip = 0
+    last_chunk_idx = 0
+    for fpath in existing:
+        # Extract chunk index from filename: ..._split_003.tsv -> 3
+        base = os.path.splitext(os.path.basename(fpath))[0]
+        try:
+            ci = int(base.rsplit("_", 1)[-1])
+        except (ValueError, IndexError):
+            continue
+        # Count data rows (exclude header)
+        n_rows = 0
+        with open(fpath, "r", encoding="utf-8") as f:
+            for i, _ in enumerate(f):
+                pass
+            n_rows = i  # i is 0-indexed, last line index = total-1 = data rows
+        last_chunk_idx = max(last_chunk_idx, ci)
+
+        if n_rows < split_n:
+            # Incomplete chunk — delete and re-do from this point
+            print(f"  [resume] Incomplete chunk ({n_rows:,}/{split_n:,} rows),"
+                  f" will re-write: {os.path.basename(fpath)}")
+            os.remove(fpath)
+        else:
+            skip += n_rows
+            print(f"  [resume] Complete chunk ({n_rows:,} rows): "
+                  f"{os.path.basename(fpath)}")
+
+    # resume_chunk_idx = number of complete chunks
+    complete_chunks = skip // split_n
+    return skip, complete_chunks
+
+
+def run_split_streaming(input_file, output_dir, split_n):
+    """Stream-read step5 TSV and write split chunk files on the fly.
+
+    Supports resume: on restart, scans output_dir for existing complete
+    split files, skips the corresponding journeys in the input, and
+    continues writing from the next chunk.
+
+    Optimizations vs naive approach:
+      - 64 MB binary read buffer (better NFS throughput)
+      - str.split('\\t') instead of csv.reader (no per-line object creation)
+      - No _clean_json_field during split (raw passthrough for profile)
+      - orjson for JSON parse/serialize when available
+      - Lightweight skip: during resume, skipped rows only count journeys
+        without building dicts
+
+    Memory usage is O(split_n) instead of O(total_journeys).
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    input_basename = os.path.splitext(os.path.basename(input_file))[0]
+    print(f"  JSON engine: {_JSON_ENGINE}")
+
+    # ---- Resume: detect existing complete chunks ----
+    skip_journeys, resume_chunk_idx = _count_existing_splits(
+        output_dir, input_basename, split_n)
+    if skip_journeys > 0:
+        print(f"\n[split-stream] Resuming: skipping first {skip_journeys:,} "
+              f"journeys ({resume_chunk_idx} complete chunks found)")
+
+    try:
+        file_size = os.path.getsize(input_file)
+    except OSError:
+        file_size = 0
+
+    chunk_buf = []       # current chunk buffer
+    chunk_idx = resume_chunk_idx  # continue numbering from last complete chunk
+    total_journeys = 0   # journeys processed (including skipped)
+    written_journeys = 0 # journeys actually written in this run
+    n_users = 0          # approximate user count (avoid set overhead)
+    uid_seen = set()
+
+    def _flush_chunk():
+        """Write current buffer to a chunk TSV file."""
+        nonlocal chunk_buf, chunk_idx, written_journeys
+        if not chunk_buf:
+            return
+        chunk_idx += 1
+        chunk_file = os.path.join(
+            output_dir, f"{input_basename}_split_{chunk_idx:03d}.tsv")
+        # Write using raw tab-join for speed (avoid csv.DictWriter overhead)
+        with open(chunk_file, "w", encoding="utf-8",
+                  buffering=8 << 20) as f:
+            f.write("\t".join(SPLIT_COLUMNS) + "\n")
+            for jr in chunk_buf:
+                f.write(f"{jr[0]}\t{jr[1]}\t{jr[2]}\t{jr[3]}\t{jr[4]}\n")
+        written_journeys += len(chunk_buf)
+        sz = os.path.getsize(chunk_file) / (1024 * 1024)
+        print(f"  Chunk {chunk_idx}: {len(chunk_buf):,} journeys "
+              f"({sz:.1f} MB) -> {chunk_file}")
+        chunk_buf = []
+
+    # Use 64 MB buffer for better NFS throughput
+    BUF_SIZE = 64 << 20
+
+    with open(input_file, "rb", buffering=BUF_SIZE) as fb:
+        header_line = fb.readline()
+        if not header_line:
+            print("[split-stream] Empty input file!")
+            return
+        header_text = header_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        header = header_text.split("\t")
+
+        is_split = "JourneyKey" in header
+        col_idx = {name: i for i, name in enumerate(header)}
+        idx_uid = col_idx.get("UserId", -1)
+        idx_jwp = col_idx.get("JourneyWithProducts", -1)
+        idx_profile = col_idx.get("ShoppingProfile", -1)
+        idx_jkey = col_idx.get("JourneyKey", -1)
+        idx_jidx = col_idx.get("JourneyIdx", -1)
+        n_cols = len(header)
+
+        desc = "[split-stream] reading"
+        if skip_journeys > 0:
+            desc = "[split-stream] scanning+writing"
+        pbar = tqdm(total=file_size or None, unit="B", unit_scale=True,
+                    desc=desc, mininterval=60, smoothing=0.1)
+        pbar.update(len(header_line))
+
+        for line_bytes in fb:
+            pbar.update(len(line_bytes))
+
+            # --- Fast path: skip phase (resume) ---
+            # During skip, do minimal work: just count journeys, don't
+            # build dicts or parse profile JSON.
+            if total_journeys + 50 <= skip_journeys and not is_split:
+                line = line_bytes.decode("utf-8", errors="replace")
+                # Use csv.reader for step5 format — JWP JSON may contain
+                # tabs/quotes that str.split('\t') can't handle correctly.
+                fields = next(csv.reader([line], delimiter="\t"))
+                nf = len(fields)
+                uid = (fields[idx_uid] if idx_uid < nf else "").strip()
+                if not uid:
+                    continue
+                jwp_raw = (fields[idx_jwp] if idx_jwp < nf else "").strip()
+                if not jwp_raw:
+                    continue
+                jwp = _fix_backslash_json(jwp_raw)
+                if not jwp or "ContinuedJourneys" not in jwp:
+                    continue
+                n_j = sum(1 for j in jwp["ContinuedJourneys"]
+                          if isinstance(j, dict))
+                total_journeys += n_j
+                continue
+
+            line = line_bytes.decode("utf-8", errors="replace")
+
+            if is_split:
+                # Split format is clean TSV (no embedded tabs), safe to
+                # use str.split.
+                fields = line.rstrip("\r\n").split("\t")
+            else:
+                # Step5 per-user format: JWP JSON may contain quoted
+                # fields with tabs/newlines, must use csv.reader.
+                fields = next(csv.reader([line], delimiter="\t"))
+            nf = len(fields)
+
+            if is_split:
+                total_journeys += 1
+                if total_journeys <= skip_journeys:
+                    continue
+                # For already-split format: pass through as-is (no JSON re-parse)
+                jkey = fields[idx_jkey] if idx_jkey < nf else ""
+                uid = fields[idx_uid] if idx_uid < nf else ""
+                jidx = fields[idx_jidx] if idx_jidx < nf else "0"
+                profile = fields[idx_profile] if idx_profile < nf else ""
+                jwp = fields[idx_jwp] if idx_jwp < nf else ""
+                # Tuple instead of dict for lower memory + faster write
+                chunk_buf.append((jkey, uid, jidx, profile, jwp))
+                if len(chunk_buf) >= split_n:
+                    _flush_chunk()
+                continue
+
+            # Step5 per-user format — flatten to per-journey rows
+            uid = (fields[idx_uid] if idx_uid < nf else "").strip()
+            if not uid:
+                continue
+
+            jwp_raw = (fields[idx_jwp] if idx_jwp < nf else "").strip()
+            if not jwp_raw:
+                continue
+
+            jwp = _fix_backslash_json(jwp_raw)
+            if not jwp or "ContinuedJourneys" not in jwp:
+                continue
+
+            # Raw profile passthrough — no _clean_json_field (saves parse+dump)
+            if uid not in uid_seen:
+                uid_seen.add(uid)
+                n_users += 1
+            profile_raw = fields[idx_profile] if idx_profile < nf else ""
+
+            for idx, journey in enumerate(jwp["ContinuedJourneys"]):
+                if not isinstance(journey, dict):
+                    continue
+                total_journeys += 1
+                if total_journeys <= skip_journeys:
+                    continue
+                key = f"{uid}_{idx}"
+                # Tuple: (JourneyKey, UserId, JourneyIdx, Profile, JWP)
+                chunk_buf.append((
+                    key, uid, str(idx), profile_raw,
+                    _json_dumps_compact(journey),
+                ))
+                if len(chunk_buf) >= split_n:
+                    _flush_chunk()
+
+        pbar.close()
+
+    # Flush remaining
+    _flush_chunk()
+
+    print(f"\n[split-stream] Done: {total_journeys:,} total journeys from "
+          f"{n_users:,} users -> {chunk_idx} chunks total")
+    if skip_journeys > 0:
+        print(f"  Resumed from chunk {resume_chunk_idx + 1}, "
+              f"wrote {written_journeys:,} new journeys")
+    print(f"  Run each chunk with:")
     print(f"  python step6_call_LLM_ranker.py "
           f"--input_file <chunk_file> --output_dir {output_dir}")
 
@@ -376,109 +755,307 @@ def extract_ranked_journey(raw_text):
 
 
 # ============================================================================ #
-# Inference mode                                                               #
+# Pre-inference dedup: remove duplicate/variant products per journey           #
 # ============================================================================ #
-def run_inference(journey_rows, prompt_template, args):
-    """Run LLM inference for each journey and save results TSV."""
-    # Build (key, prompt) inputs
-    print(f"\n[infer] Building prompts for {len(journey_rows):,} journeys ...")
-    inputs = []
-    for jr in journey_rows:
-        prompt = build_ranker_prompt(
-            jr["ShoppingProfile"],
-            jr["JourneyWithProducts"],
-            prompt_template,
-        )
-        inputs.append((jr["JourneyKey"], prompt))
+_DEDUP_SIZE_RE = re.compile(
+    r',?\s*\b(?:XXS|XS|XXL|XL|2XL|3XL|4XL|5XL|2XLarge|3XLarge|XLarge'
+    r'|Small|Medium|Large|Womens|Women\'s|Men\'s|Mens)\b'
+    r'|,\s*\b[SML]\b'
+    r'|\bEU\s*\d{2,3}\b'                   # EU 32, EU 38, EU 42
+    r'|\bUS\s*\d{1,2}(?:\.\d)?\b'          # US 6, US 10.5
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:Petite|Tall|Regular|Short)\b',  # 8 Petite
+    re.IGNORECASE)
+_DEDUP_NUMSIZE_RE = re.compile(
+    r',?\s*Size:?\s*\d{1,2}(?:\.\d)?(?:\s*[A-Z]{1,3})?\b'  # Size 6, Size: 9.5M
+    r'|\bSize\s+\d{1,2}(?:\.\d)?(?:\s*[A-Z]{1,3})?\b'
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:[MW]{1,2})\b'               # 9.5M, 8.5WW
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:Regular|Wide|Narrow|D - Medium|4E|EE)\b'
+    r'|:\s*\d{1,2}(?:\.\d)?\s*$',                           # trailing ": 6"
+    re.IGNORECASE)
+_DEDUP_COLOR_RE = re.compile(
+    r'\b(?:Black|White|Blue|Red|Grey|Gray|Navy|Green|Brown|Orange|Yellow|'
+    r'Purple|Pink|Silver|Gold|Beige|Ivory|Charcoal|Titanium|Platinum|'
+    r'Indigo|Slate|Taupe|Coral|Cream|Nude|Peach|Teal|Burgundy|Maroon|'
+    r'Olive|Sage|Rust|Lilac|Lavender|Mauve|Mint|Khaki|Tan|Camel|Wine|'
+    r'Light Beige|Light Blue|Light Brown|Light Grey|Off White|'
+    r'Slate Blue|Dark Blue|Dark Brown|Dark Grey|Rose Gold)\b'
+    r'|(?<=\s)(?:Petal|Blush|Driftwood|Moonstone|Alpine|Chai|'
+    r'Midnight|Storm|Frost|Sand|Oat|Espresso|Cognac|Mocha|'
+    r'Truffle|Biscuit|Mushroom|Pewter)(?:\s|$)',
+    re.IGNORECASE)
 
-    prompt_lens = [len(p) for _, p in inputs]
-    print(f"  Prompt lengths: min={min(prompt_lens):,}  "
-          f"max={max(prompt_lens):,}  "
-          f"avg={sum(prompt_lens) / len(prompt_lens):,.0f}")
 
-    # Checkpoint dir
+def _dedup_normalize_title(title):
+    """Normalize product title for same-seller variant dedup."""
+    t = _DEDUP_SIZE_RE.sub('', title)
+    t = _DEDUP_NUMSIZE_RE.sub('', t)
+    t = _DEDUP_COLOR_RE.sub('', t)
+    t = re.sub(r'\s+(?:upper|suede|leather|fabric)\b.*$', '', t,
+               flags=re.IGNORECASE)
+    # Strip trailing material/color descriptors after comma
+    t = re.sub(r',\s*(?:Leather|Suede|Canvas|Mesh|Knit|Satin|Silk)\s+\w+.*$',
+               '', t, flags=re.IGNORECASE)
+    t = re.sub(r'[,\-\s:]+$', '', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def dedup_journey_products(jwp_json_str):
+    """Remove duplicate products from a journey's JourneyWithProducts JSON.
+
+    Two layers:
+      1. Exact OfferId dedup (cross-query): same product returned by
+         multiple queries → keep first occurrence.
+      2. Same-seller size/color variant dedup: same seller + normalized
+         title → keep first occurrence (highest ANN score).
+
+    Modifies the journey JSON in-place and returns the updated string.
+    Also returns (n_oid_dup, n_variant_dup) counts.
+    """
+    try:
+        jwp = _json_loads(jwp_json_str)
+    except Exception:
+        return jwp_json_str, 0, 0
+
+    if not isinstance(jwp, dict) or "Queries" not in jwp:
+        return jwp_json_str, 0, 0
+
+    seen_oids = set()
+    seen_norm = set()
+    n_oid_dup = 0
+    n_variant_dup = 0
+
+    for q in jwp.get("Queries", []):
+        if not isinstance(q, dict):
+            continue
+        products = q.get("Products", [])
+        if not isinstance(products, list):
+            continue
+
+        deduped = []
+        for p in products:
+            if not isinstance(p, dict):
+                continue
+            oid = str(p.get("OfferId", ""))
+
+            # Layer 1: exact OfferId dedup
+            if oid and oid in seen_oids:
+                n_oid_dup += 1
+                continue
+            if oid:
+                seen_oids.add(oid)
+
+            # Layer 2: same-seller variant dedup
+            title = p.get("Title", "")
+            seller = p.get("Seller", "")
+            norm_key = (_dedup_normalize_title(title), seller)
+            if norm_key[0] and norm_key in seen_norm:
+                n_variant_dup += 1
+                continue
+            if norm_key[0]:
+                seen_norm.add(norm_key)
+
+            deduped.append(p)
+
+        q["Products"] = deduped
+
+    return _json_dumps_compact(jwp), n_oid_dup, n_variant_dup
+
+
+# ============================================================================ #
+# Inference mode (streaming, memory-efficient)                                 #
+# ============================================================================ #
+def run_inference_streaming(prompt_template, args):
+    """Memory-efficient streaming inference.
+
+    Reads input file in chunks of args.chunk_size, deduplicates products
+    (sequential, no multiprocessing fork), builds prompts, calls LLM,
+    and writes results — all per chunk. Then frees the chunk before
+    reading the next one.
+
+    Peak memory: O(chunk_size) instead of O(total_journeys).
+    For chunk_size=10,000 with avg 50KB prompts: ~1.5 GB per chunk
+    vs ~120 GB for 900K journeys loaded all at once.
+
+    Supports checkpoint/resume: on restart, previously completed LLM
+    calls are loaded from checkpoint files and skipped.
+    """
     input_base = os.path.splitext(os.path.basename(args.input_file))[0]
     checkpoint_dir = os.path.join(args.output_dir,
                                   f"_ranker_ckpt_{input_base}")
-
-    # Run LLM
-    print(f"\n[infer] Calling LLM ({args.copilot_model}, "
-          f"{args.num_workers} workers) ...")
-    t0 = time.time()
-    results = run_llm_parallel_with_checkpoint(
-        inputs=inputs,
-        token_file=args.token_file,
-        checkpoint_dir=checkpoint_dir,
-        num_workers=args.num_workers,
-        model=args.copilot_model,
-        temperature=0,
-        max_tokens=args.max_tokens,
-        chunk_size=args.chunk_size,
-    )
-    elapsed = time.time() - t0
-    print(f"[infer] Done in {elapsed:.1f}s "
-          f"({len(inputs) / max(elapsed, 1):.1f} journeys/s)")
-
-    # Build key -> journey_row lookup
-    key_to_jr = {jr["JourneyKey"]: jr for jr in journey_rows}
-
-    # Write results TSV
-    output_file = os.path.join(
-        args.output_dir,
-        f"{input_base}_Results.tsv")
+    output_file = os.path.join(args.output_dir, f"{input_base}_Results.tsv")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    success = 0
-    valid_json = 0
-    empty_products = 0
+    # Load checkpoint for resume
+    completed = load_checkpoint(checkpoint_dir)
+
+    # Load and validate tokens once
+    tokens = load_tokens(args.token_file)
+    tokens = validate_tokens(tokens, model=args.copilot_model)
+
+    # Determine checkpoint chunk offset (continue numbering)
+    existing_ckpt = []
+    if os.path.exists(checkpoint_dir):
+        existing_ckpt = [f for f in os.listdir(checkpoint_dir)
+                         if f.endswith('.jsonl')]
+    chunk_offset = len(existing_ckpt)
+
+    max_j = args.debug_rows if args.debug else 0
+
+    # Stats
+    total_journeys = 0
+    total_success = 0
+    total_valid_json = 0
+    total_empty_products = 0
+    total_failed = 0
+    total_oid_dup = 0
+    total_variant_dup = 0
     fail_keys = []
 
-    with open(output_file, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS,
-                                delimiter="\t",
-                                extrasaction="ignore")
+    t0_all = time.time()
+    chunk_num = 0
+    sample_shown = False
+
+    print(f"\n[infer] Streaming inference (chunk_size={args.chunk_size:,}) ...")
+
+    # Always write output from scratch (checkpoint handles LLM resume)
+    with open(output_file, "w", encoding="utf-8", newline="") as fout:
+        writer = csv.DictWriter(fout, fieldnames=RESULT_COLUMNS,
+                                delimiter="\t", extrasaction="ignore")
         writer.writeheader()
-        for key, raw_result in results:
-            jr = key_to_jr[key]
-            if not raw_result:
-                fail_keys.append(key)
+
+        for chunk_rows in _iter_journey_chunks(args.input_file,
+                                               args.chunk_size,
+                                               max_journeys=max_j):
+            chunk_num += 1
+            n = len(chunk_rows)
+            total_journeys += n
+
+            # Show sample from first chunk
+            if not sample_shown:
+                sample = chunk_rows[0]
+                print(f"\n  Sample journey: {sample['JourneyKey']}")
+                try:
+                    j_obj = json.loads(sample["JourneyWithProducts"])
+                    n_q = len(j_obj.get("Queries", []))
+                    n_p = sum(len(q.get("Products", []))
+                              for q in j_obj.get("Queries", []))
+                    print(f"    Title: {j_obj.get('Title', '')[:80]}")
+                    print(f"    Queries: {n_q}, Products: {n_p}")
+                except (json.JSONDecodeError, TypeError):
+                    print(f"    JWP: (parse error)")
+                sample_shown = True
+
+            # --- Sequential dedup + build prompts (skip checkpoint items) ---
+            inputs = []
+            for jr in chunk_rows:
+                key = jr["JourneyKey"]
+                if key in completed:
+                    continue  # skip dedup + prompt for already-done items
+                cleaned, n_oid, n_var = dedup_journey_products(
+                    jr["JourneyWithProducts"])
+                jr["JourneyWithProducts"] = cleaned
+                total_oid_dup += n_oid
+                total_variant_dup += n_var
+                prompt = build_ranker_prompt(
+                    jr["ShoppingProfile"],
+                    jr["JourneyWithProducts"],
+                    prompt_template,
+                )
+                inputs.append((key, prompt))
+
+            # --- Call LLM for new items ---
+            skipped = n - len(inputs)
+            if inputs:
+                print(f"\n  Chunk {chunk_num} ({n:,} journeys): "
+                      f"{len(inputs):,} to infer"
+                      + (f", {skipped:,} from checkpoint" if skipped else ""))
+                t0 = time.time()
+                results = run_llm_parallel(
+                    inputs=inputs,
+                    num_workers=args.num_workers,
+                    model=args.copilot_model,
+                    temperature=0,
+                    max_tokens=args.max_tokens,
+                    _tokens=tokens,
+                )
+                elapsed = time.time() - t0
+
+                # Save checkpoint
+                chunk_results = []
+                for key, response in results:
+                    completed[key] = response
+                    chunk_results.append((key, response))
+                save_checkpoint(chunk_results, checkpoint_dir,
+                                chunk_offset + chunk_num - 1)
+
+                success_n = sum(1 for _, r in chunk_results if r)
+                print(f"  Chunk done in {elapsed:.1f}s "
+                      f"({len(inputs) / max(elapsed, 1):.1f} items/s), "
+                      f"{success_n}/{len(inputs)} succeeded")
+                del results, chunk_results
+            else:
+                print(f"\n  Chunk {chunk_num} ({n:,} journeys): "
+                      f"all {skipped:,} from checkpoint")
+
+            # --- Write results for this chunk ---
+            for jr in chunk_rows:
+                key = jr["JourneyKey"]
+                raw_result = completed.get(key, "")
+
+                if not raw_result:
+                    total_failed += 1
+                    fail_keys.append(key)
+                    writer.writerow({
+                        "JourneyKey": key,
+                        "UserId": jr["UserId"],
+                        "JourneyIdx": jr["JourneyIdx"],
+                        "OUTPUT": "",
+                    })
+                    continue
+
+                total_success += 1
+                clean = extract_ranked_journey(raw_result)
+                if clean:
+                    try:
+                        obj = json.loads(clean)
+                        if not obj.get("Products"):
+                            total_empty_products += 1
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    total_valid_json += 1
+                    output_val = clean
+                else:
+                    output_val = raw_result.replace("\n", " ").replace(
+                        "\t", " ")
+
                 writer.writerow({
                     "JourneyKey": key,
                     "UserId": jr["UserId"],
                     "JourneyIdx": jr["JourneyIdx"],
-                    "OUTPUT": "",
+                    "OUTPUT": output_val,
                 })
-                continue
-            success += 1
-            clean = extract_ranked_journey(raw_result)
-            if clean:
-                # Check if Products is empty
-                try:
-                    obj = json.loads(clean)
-                    if not obj.get("Products"):
-                        empty_products += 1
-                except (json.JSONDecodeError, TypeError):
-                    pass
-                valid_json += 1
-                output_val = clean
-            else:
-                output_val = raw_result.replace("\n", " ").replace("\t", " ")
-            writer.writerow({
-                "JourneyKey": key,
-                "UserId": jr["UserId"],
-                "JourneyIdx": jr["JourneyIdx"],
-                "OUTPUT": output_val,
-            })
 
+            # Free chunk memory
+            del chunk_rows, inputs
+
+    elapsed_all = time.time() - t0_all
     sz = os.path.getsize(output_file) / (1024 * 1024)
+
+    if total_oid_dup or total_variant_dup:
+        print(f"\n[infer] Dedup totals: removed {total_oid_dup:,} OfferId "
+              f"dups + {total_variant_dup:,} size/color variants "
+              f"(total {total_oid_dup + total_variant_dup:,})")
+
     print(f"\n[infer] Results: {output_file} ({sz:.1f} MB)")
-    print(f"  Total journeys:    {len(results):,}")
-    print(f"  API success:       {success:,}/{len(results):,}")
-    print(f"  Valid JSON:        {valid_json:,}/{success:,}")
-    print(f"  Empty Products:    {empty_products:,}")
-    print(f"  Inference failed:  {len(fail_keys):,}")
+    print(f"  Total journeys:    {total_journeys:,}")
+    print(f"  API success:       {total_success:,}/{total_journeys:,}")
+    print(f"  Valid JSON:        {total_valid_json:,}/{total_success:,}")
+    print(f"  Empty Products:    {total_empty_products:,}")
+    print(f"  Inference failed:  {total_failed:,}")
     if fail_keys[:10]:
         print(f"  Failed keys (first 10): {fail_keys[:10]}")
+    print(f"  Total time: {elapsed_all:.1f}s "
+          f"({total_journeys / max(elapsed_all, 1):.1f} journeys/s)")
 
     # Cleanup checkpoint
     if args.cleanup_checkpoint:
@@ -493,7 +1070,15 @@ def run_inference(journey_rows, prompt_template, args):
 # Merge mode                                                                   #
 # ============================================================================ #
 def run_merge(args):
-    """Merge all *_Results.tsv into a per-user output aligned with step5."""
+    """Merge all *_Results.tsv into a per-user output aligned with step5.
+
+    Optimized for large datasets:
+      - 64 MB read buffer for NFS throughput
+      - str.split('\\t') instead of csv.reader
+      - Single JWP parse per user (count + raw stored together)
+      - Progressive cleanup: removes used keys from all_results
+      - Uses _json_dumps_compact (orjson) for output serialization
+    """
     merge_dir = args.merge_dir
     input_file = args.input_file  # original step5 output (for user rows)
     output_dir = args.output_dir or merge_dir
@@ -507,88 +1092,41 @@ def run_merge(args):
     print(f"[merge] Found {len(result_files)} result files in {merge_dir}")
 
     # 2. Load all results: key -> OUTPUT
+    #    Results TSV is written by csv.DictWriter which quotes fields
+    #    containing quotes/tabs, so we must use csv.reader to unquote.
     all_results = {}  # JourneyKey -> OUTPUT string
     for fpath in result_files:
         count = 0
-        with open(fpath, "r", encoding="utf-8", newline="") as f:
+        with open(fpath, "r", encoding="utf-8", buffering=8 << 20) as f:
             reader = csv.DictReader(f, delimiter="\t")
             for row in reader:
-                key = row.get("JourneyKey", "").strip()
-                output = row.get("OUTPUT", "").strip()
+                key = (row.get("JourneyKey") or "").strip()
+                output = (row.get("OUTPUT") or "").strip()
                 if key and output:
                     all_results[key] = output
                     count += 1
         print(f"  {os.path.basename(fpath)}: {count:,} valid results")
     print(f"  Total unique results: {len(all_results):,}")
 
-    # 3. Load original step5 output to get per-user data
-    #    Uses binary buffered read for NFS performance.
-    #    Skips ShoppingJourneys column (unused, ~3-5% of file).
-    print(f"\n[merge] Reading original step5 output: {input_file}")
-    user_order = []  # preserve user order
-    user_data = {}   # uid -> row dict
-    user_journey_counts = {}  # uid -> number of journeys
+    # 3. Stream-read original step5 output, build per-user data, and write
+    #    merged output in a single pass. This avoids storing all user data
+    #    in memory — we process each user as we encounter them.
+    print(f"\n[merge] Reading step5 output + writing merged: {input_file}")
 
     try:
         file_size = os.path.getsize(input_file)
     except OSError:
         file_size = 0
 
-    with open(input_file, "rb", buffering=8 << 20) as fb:
-        header_line = fb.readline()
-        header = next(csv.reader(
-            [header_line.decode("utf-8", errors="replace")],
-            delimiter="\t"))
-        col_idx = {name: i for i, name in enumerate(header)}
-        idx_uid = col_idx.get("UserId", -1)
-        idx_events = col_idx.get("ReadableUserEvents", -1)
-        idx_profile = col_idx.get("ShoppingProfile", -1)
-        idx_jwp = col_idx.get("JourneyWithProducts", -1)
+    input_base = os.path.splitext(os.path.basename(input_file))[0]
+    output_file = os.path.join(output_dir, f"{input_base}_Ranked.tsv")
+    os.makedirs(output_dir, exist_ok=True)
 
-        pbar = tqdm(total=file_size or None, unit="B", unit_scale=True,
-                    desc="[merge] read users", mininterval=60)
-        pbar.update(len(header_line))
-
-        for line_bytes in fb:
-            pbar.update(len(line_bytes))
-            line = line_bytes.decode("utf-8", errors="replace")
-            fields = next(csv.reader([line], delimiter="\t"))
-            nf = len(fields)
-
-            uid = (fields[idx_uid] if idx_uid < nf else "").strip()
-            if not uid:
-                continue
-            if uid not in user_data:
-                user_order.append(uid)
-                user_data[uid] = {
-                    "UserId": uid,
-                    "ReadableUserEvents":
-                        fields[idx_events] if idx_events < nf else "",
-                    "ShoppingProfile": _clean_json_field(
-                        fields[idx_profile] if idx_profile < nf else ""),
-                    "JourneyWithProducts":
-                        fields[idx_jwp] if idx_jwp < nf else "",
-                }
-            # Count journeys
-            jwp_raw = (fields[idx_jwp] if idx_jwp < nf else "").strip()
-            jwp = _fix_backslash_json(jwp_raw)
-            if jwp and "ContinuedJourneys" in jwp:
-                user_journey_counts[uid] = len(
-                    jwp.get("ContinuedJourneys", []))
-            else:
-                user_journey_counts.setdefault(uid, 0)
-
-        pbar.close()
-
-    print(f"  Users: {len(user_order):,}, "
-          f"Total journeys: {sum(user_journey_counts.values()):,}")
-
-    # 4. Reassemble per-user RankedJourneys (with full metadata backfill)
     stats = {
-        "users_total": len(user_order),
+        "users_total": 0,
         "users_with_ranked": 0,
         "users_partial_fail": 0,
-        "journeys_total": sum(user_journey_counts.values()),
+        "journeys_total": 0,
         "journeys_ranked": 0,
         "journeys_infer_fail": 0,
         "journeys_invalid_json": 0,
@@ -600,7 +1138,7 @@ def run_merge(args):
         jwp = _fix_backslash_json(jwp_raw)
         if not jwp or "ContinuedJourneys" not in jwp:
             return []
-        result = []  # list of (journey_meta_dict, offerid_to_product, offerid_to_query)
+        result = []
         for j in jwp["ContinuedJourneys"]:
             if not isinstance(j, dict):
                 result.append(({}, {}, {}))
@@ -625,30 +1163,59 @@ def run_merge(args):
             result.append((meta, oid_to_prod, oid_to_query))
         return result
 
-    input_base = os.path.splitext(os.path.basename(input_file))[0]
-    output_file = os.path.join(output_dir, f"{input_base}_Ranked.tsv")
+    seen_uids = set()
 
-    with open(output_file, "w", encoding="utf-8",
-              buffering=8 << 20, newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=MERGE_OUTPUT_COLUMNS,
-                                delimiter="\t",
-                                extrasaction="ignore")
-        writer.writeheader()
+    with open(input_file, "rb", buffering=64 << 20) as fb, \
+         open(output_file, "w", encoding="utf-8",
+              buffering=8 << 20, newline="") as fout:
 
-        for uid in tqdm(user_order, desc="[merge] assemble",
-                        mininterval=60):
-            ud = user_data[uid]
-            n_journeys = user_journey_counts.get(uid, 0)
+        header_line = fb.readline()
+        header_text = header_line.decode("utf-8", errors="replace").rstrip("\r\n")
+        header = header_text.split("\t")
+        col_idx = {name: i for i, name in enumerate(header)}
+        idx_uid = col_idx.get("UserId", -1)
+        idx_events = col_idx.get("ReadableUserEvents", -1)
+        idx_profile = col_idx.get("ShoppingProfile", -1)
+        idx_jwp = col_idx.get("JourneyWithProducts", -1)
+
+        # Write output header
+        fout.write("\t".join(MERGE_OUTPUT_COLUMNS) + "\n")
+
+        pbar = tqdm(total=file_size or None, unit="B", unit_scale=True,
+                    desc="[merge] read+write", mininterval=60)
+        pbar.update(len(header_line))
+
+        for line_bytes in fb:
+            pbar.update(len(line_bytes))
+            line = line_bytes.decode("utf-8", errors="replace")
+            # Step5 per-user format: JWP JSON may contain quoted fields
+            # with tabs/newlines, must use csv.reader for correct parsing.
+            fields = next(csv.reader([line], delimiter="\t"))
+            nf = len(fields)
+
+            uid = (fields[idx_uid] if idx_uid < nf else "").strip()
+            if not uid or uid in seen_uids:
+                continue
+            seen_uids.add(uid)
+            stats["users_total"] += 1
+
+            # Extract fields
+            events = fields[idx_events] if idx_events < nf else ""
+            profile = fields[idx_profile] if idx_profile < nf else ""
+            jwp_raw = (fields[idx_jwp] if idx_jwp < nf else "").strip()
+
+            # Parse JWP once: get journey count + build lookup
+            jwp_lookup = _build_journey_lookup(jwp_raw) if jwp_raw else []
+            n_journeys = len(jwp_lookup)
+            stats["journeys_total"] += n_journeys
+
+            # Assemble ranked journeys for this user
             ranked_journeys = []
             has_fail = False
 
-            # Build per-journey lookup from original JWP
-            jwp_lookup = _build_journey_lookup(
-                ud.get("JourneyWithProducts", ""))
-
             for idx in range(n_journeys):
                 key = f"{uid}_{idx}"
-                raw_output = all_results.get(key, "")
+                raw_output = all_results.pop(key, "")  # pop to free memory
 
                 if not raw_output:
                     stats["journeys_infer_fail"] += 1
@@ -662,8 +1229,8 @@ def run_merge(args):
                     continue
 
                 try:
-                    obj = json.loads(clean)
-                except (json.JSONDecodeError, TypeError):
+                    obj = _json_loads(clean)
+                except Exception:
                     stats["journeys_invalid_json"] += 1
                     has_fail = True
                     continue
@@ -671,17 +1238,23 @@ def run_merge(args):
                 products = obj.get("Products", [])
                 if not products:
                     stats["journeys_empty_products"] += 1
-                    continue  # skip empty-product journeys
+                    continue
 
-                # Backfill: enrich ranked output with full metadata from JWP
+                # Backfill metadata from JWP
                 if idx < len(jwp_lookup):
                     j_meta, oid_to_prod, oid_to_query = jwp_lookup[idx]
-                    # Fill journey-level fields from original
                     for field in ("Description", "ConversationStarter",
                                   "WhyAmISeeingThis"):
                         if field not in obj or not obj[field]:
                             obj[field] = j_meta.get(field, "")
-                    # Fill product-level fields from original
+                    total_candidates = len(oid_to_prod)
+                    selected_count = len(products)
+                    if "RankingSummary" not in obj:
+                        obj["RankingSummary"] = {
+                            "totalCandidates": total_candidates,
+                            "selectedCount": selected_count,
+                            "filteredCount": total_candidates - selected_count,
+                        }
                     enriched = []
                     for p in products:
                         oid = str(p.get("OfferId", ""))
@@ -706,20 +1279,22 @@ def run_merge(args):
             if has_fail:
                 stats["users_partial_fail"] += 1
 
-            ranked_json = json.dumps(
-                {"ContinuedJourneys": ranked_journeys},
-                ensure_ascii=False, separators=(',', ':'))
+            ranked_json = _json_dumps_compact(
+                {"ContinuedJourneys": ranked_journeys})
 
-            writer.writerow({
-                "UserId": uid,
-                "ReadableUserEvents": ud["ReadableUserEvents"],
-                "ShoppingProfile": ud["ShoppingProfile"],
-                "JourneyWithProducts": ud["JourneyWithProducts"],
-                "RankedJourneys": ranked_json,
-            })
+            # Write directly with tab-join (avoid csv.DictWriter overhead)
+            # Columns: UserId, ReadableUserEvents, ShoppingProfile,
+            #          JourneyWithProducts, RankedJourneys
+            out_fields = [uid, events, profile, jwp_raw, ranked_json]
+            fout.write("\t".join(out_fields) + "\n")
+
+        pbar.close()
 
     sz = os.path.getsize(output_file) / (1024 * 1024)
     print(f"\n[merge] Output: {output_file} ({sz:.1f} MB)")
+    if all_results:
+        print(f"  WARNING: {len(all_results):,} result keys had no matching "
+              f"user in step5 input (orphaned)")
     print(f"\n{'=' * 60}")
     print(f"  Merge Statistics")
     print(f"{'=' * 60}")
@@ -832,47 +1407,18 @@ def main():
         run_merge(args)
         return
 
-    # ---- Load data ----
-    max_j = args.debug_rows if args.debug else 0
-    print("[load] Loading and flattening input ...")
-    journey_rows, user_rows, is_split = load_step5_and_flatten(
-        args.input_file, max_journeys=max_j)
-
-    n_users = len(set(jr["UserId"] for jr in journey_rows))
-    print(f"  {len(journey_rows):,} journeys from {n_users:,} users"
-          f" (split_format={is_split})")
-
-    if not journey_rows:
-        print("No journeys found!")
-        return
-
-    # ---- Split mode ----
+    # ---- Streaming split mode (constant memory) ----
     if args.split_n > 0:
-        input_base = os.path.splitext(
-            os.path.basename(args.input_file))[0]
-        run_split(journey_rows, args.output_dir, args.split_n, input_base)
+        run_split_streaming(args.input_file, args.output_dir, args.split_n)
         return
 
-    # ---- Inference mode ----
+    # ---- Inference mode (streaming, memory-efficient) ----
     os.makedirs(args.output_dir, exist_ok=True)
-    print(f"\n[infer] Loading prompt: {args.prompt_file}")
+    print(f"[infer] Loading prompt: {args.prompt_file}")
     prompt_template = load_prompt_template(args.prompt_file)
     print(f"  Template: {len(prompt_template):,} chars")
 
-    # Show sample
-    sample = journey_rows[0]
-    print(f"\n  Sample journey: {sample['JourneyKey']}")
-    try:
-        j_obj = json.loads(sample["JourneyWithProducts"])
-        n_q = len(j_obj.get("Queries", []))
-        n_p = sum(len(q.get("Products", []))
-                  for q in j_obj.get("Queries", []))
-        print(f"    Title: {j_obj.get('Title', '')[:80]}")
-        print(f"    Queries: {n_q}, Products: {n_p}")
-    except (json.JSONDecodeError, TypeError):
-        print(f"    JWP: (parse error)")
-
-    run_inference(journey_rows, prompt_template, args)
+    run_inference_streaming(prompt_template, args)
 
     print("\nStep 6 Done!")
 

@@ -29,10 +29,12 @@ Usage:
 """
 
 import argparse
+import copy
 import csv
 import html as html_module
 import json
 import os
+import re
 import sys
 import time
 from collections import Counter
@@ -56,9 +58,10 @@ PLACEHOLDER_IMG = (
 #  URL Lookup: item.json + fallback to original index TSV
 # ═══════════════════════════════════════════════════════════════════════════
 
-def load_urls_from_item_json(item_json_path):
+def load_urls_from_item_json(item_json_path, needed_gids=None):
     """Load offer_url and image_url from item.json.
 
+    If ``needed_gids`` is provided, only loads those GIDs (avoids full scan).
     Returns dict: {gid: {"offer_url": ..., "image_url": ...}} for items
     that have at least one URL field.
     """
@@ -73,15 +76,32 @@ def load_urls_from_item_json(item_json_path):
     except ImportError:
         with open(item_json_path, "r", encoding="utf-8") as f:
             items = json.load(f)
+
     url_map = {}
-    for gid, item in items.items():
+    # If we know which GIDs we need, only check those (much faster)
+    iter_keys = needed_gids if needed_gids else items.keys()
+    for gid in iter_keys:
+        gid_str = str(gid)
+        item = items.get(gid_str)
+        if item is None:
+            continue
         offer_url = item.get("offer_url", "")
         image_url = item.get("image_url", "")
         if offer_url or image_url:
-            url_map[str(gid)] = {"offer_url": offer_url, "image_url": image_url}
-    print(f"  Loaded {len(url_map):,} items with URLs "
-          f"(of {len(items):,} total) in {time.time()-t0:.1f}s")
+            url_map[gid_str] = {"offer_url": offer_url, "image_url": image_url}
+
+    n_checked = len(needed_gids) if needed_gids else len(items)
+    print(f"  Found {len(url_map):,} items with URLs "
+          f"(checked {n_checked:,} of {len(items):,}) in {time.time()-t0:.1f}s")
     del items
+
+    # Fix relative image URLs: /th?id=... → https://tse1.mm.bing.net/th?id=...
+    BING_IMG_HOST = "https://tse1.mm.bing.net"
+    for gid, entry in url_map.items():
+        img = entry.get("image_url", "")
+        if img and img.startswith("/th?"):
+            entry["image_url"] = BING_IMG_HOST + img
+
     return url_map
 
 
@@ -150,6 +170,14 @@ def load_urls_from_index_tsv(index_tsv_path, needed_gids=None):
         pbar.close()
 
     print(f"  Loaded {len(url_map):,} items with URLs in {time.time()-t0:.1f}s")
+
+    # Fix relative image URLs: /th?id=... → https://tse1.mm.bing.net/th?id=...
+    BING_IMG_HOST = "https://tse1.mm.bing.net"
+    for gid, entry in url_map.items():
+        img = entry.get("image_url", "")
+        if img and img.startswith("/th?"):
+            entry["image_url"] = BING_IMG_HOST + img
+
     return url_map
 
 
@@ -267,18 +295,42 @@ def load_step6_tsv(filepath, url_map=None):
             events_raw = row.get("ReadableUserEvents", "")
             events = events_raw.replace("#N#", "\n")
 
-            # Parse RankedJourneys
-            rj_raw = _fix_backslash_quotes(
-                row.get("RankedJourneys", ""))
+            # Parse RankedJourneys — this is clean JSON from json.dumps()
+            # in step6 merge. Do NOT apply _fix_backslash_quotes here because
+            # product titles legitimately contain \" for inches (e.g. 17.5\")
+            # which _fix_backslash_quotes would corrupt.
+            rj_raw = row.get("RankedJourneys", "")
             try:
                 rj_obj = json.loads(rj_raw) if rj_raw else {}
             except (json.JSONDecodeError, TypeError):
-                n_parse_errors += 1
-                rj_obj = {}
+                # Only try backslash fix as a last resort
+                rj_fixed = _fix_backslash_quotes(rj_raw)
+                try:
+                    rj_obj = json.loads(rj_fixed) if rj_fixed else {}
+                except (json.JSONDecodeError, TypeError):
+                    n_parse_errors += 1
+                    rj_obj = {}
+
+            # Parse JourneyWithProducts to get total candidate counts per journey
+            jwp_raw = row.get("JourneyWithProducts", "")
+            jwp_candidates = []  # total products per journey before ranking
+            try:
+                jwp_obj = json.loads(jwp_raw) if jwp_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                jwp_fixed = _fix_backslash_quotes(jwp_raw)
+                try:
+                    jwp_obj = json.loads(jwp_fixed) if jwp_fixed else {}
+                except (json.JSONDecodeError, TypeError):
+                    jwp_obj = {}
+            for jj in jwp_obj.get("ContinuedJourneys", []):
+                total = sum(len(q.get("Products", []))
+                            for q in jj.get("Queries", [])
+                            if isinstance(q, dict))
+                jwp_candidates.append(total)
 
             continued = rj_obj.get("ContinuedJourneys", [])
             journeys = []
-            for j in continued:
+            for ji, j in enumerate(continued):
                 n_journeys += 1
                 products = []
                 for p in j.get("Products", []):
@@ -313,6 +365,15 @@ def load_step6_tsv(filepath, url_map=None):
                     "conversationStarter": j.get("ConversationStarter", ""),
                     "reason": j.get("WhyAmISeeingThis", ""),
                     "products": products,
+                    "stats": {
+                        "totalCandidates": jwp_candidates[ji]
+                            if ji < len(jwp_candidates) else 0,
+                        "selectedCount": len(products),
+                        "filteredCount": max(0,
+                            (jwp_candidates[ji]
+                             if ji < len(jwp_candidates) else 0)
+                            - len(products)),
+                    },
                 })
 
             users.append({
@@ -340,13 +401,19 @@ def collect_all_offer_ids(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
-            rj_raw = _fix_backslash_quotes(
-                row.get("RankedJourneys", ""))
+            rj_raw = row.get("RankedJourneys", "")
+            # Try direct parse first (clean JSON from json.dumps),
+            # only apply _fix_backslash_quotes as fallback.
+            rj_obj = None
             try:
                 rj_obj = json.loads(rj_raw) if rj_raw else {}
             except (json.JSONDecodeError, TypeError):
-                continue
-            for j in rj_obj.get("ContinuedJourneys", []):
+                rj_fixed = _fix_backslash_quotes(rj_raw)
+                try:
+                    rj_obj = json.loads(rj_fixed) if rj_fixed else {}
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            for j in (rj_obj or {}).get("ContinuedJourneys", []):
                 for p in j.get("Products", []):
                     oid = str(p.get("OfferId", ""))
                     if oid:
@@ -391,6 +458,124 @@ def filter_excluded_sellers(products):
     return kept, dropped
 
 
+# ── Dedup helpers ───────────────────────────────────────────────────────────
+
+_SIZE_RE = re.compile(
+    r',?\s*\b(?:XXS|XS|XXL|XL|2XL|3XL|4XL|5XL'
+    r'|2XLarge|3XLarge|XLarge'
+    r'|Small|Medium|Large'
+    r'|Womens|Women\'s|Men\'s|Mens)\b'
+    r'|,\s*\b[SML]\b'
+    r'|\bEU\s*\d{2,3}\b'
+    r'|\bUS\s*\d{1,2}(?:\.\d)?\b'
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:Petite|Tall|Regular|Short)\b',
+    re.IGNORECASE)
+_NUM_SIZE_RE = re.compile(
+    r',?\s*Size:?\s+\d{1,2}(?:\.\d)?(?:\s*[A-Z]{1,3})?\b'
+    r'|\bSize\s+\d{1,2}(?:\.\d)?(?:\s*[A-Z]{1,3})?\b'
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:Regular|Wide|Narrow|D - Medium|4E|EE)\b'
+    r'|\b\d{1,2}(?:\.\d)?\s*(?:[MW]{1,2})\b'
+    r'|:\s*\d{1,2}(?:\.\d)?\s*$',
+    re.IGNORECASE)
+_COLOR_RE = re.compile(
+    r'\b(?:Black|White|Blue|Red|Grey|Gray|Navy|Green|Brown|Orange|Yellow|'
+    r'Purple|Pink|Silver|Gold|Beige|Ivory|Charcoal|Titanium|Platinum|'
+    r'Indigo|Slate|Taupe|Coral|Cream|Nude|Peach|Teal|Burgundy|Maroon|'
+    r'Olive|Sage|Rust|Lilac|Lavender|Mauve|Mint|Khaki|Tan|Camel|Wine|'
+    r'Light Beige|Light Blue|Light Brown|Light Grey|Off White|'
+    r'Slate Blue|Dark Blue|Dark Brown|Dark Grey|Rose Gold|'
+    r'Cosmic Orange|Deep Blue|Mist Blue|Sky Blue|Cloud White|Light Gold|'
+    r'Game Royal|Diffused Blue|Natural Titanium)[/\s]*'
+    r'|(?<=\s)(?:Petal|Blush|Driftwood|Moonstone|Alpine|Chai|'
+    r'Midnight|Storm|Frost|Sand|Oat|Espresso|Cognac|Mocha|'
+    r'Truffle|Biscuit|Mushroom|Pewter)(?:\s|$)',
+    re.IGNORECASE)
+# Model/SKU number patterns: e.g., "24-ct2000m", "27-cr0000m", "V15 Detect"
+_MODEL_NUM_RE = re.compile(
+    r'\d{1,3}-[a-zA-Z]{1,4}\d{2,}[a-zA-Z]*'        # e.g., 24-ct2000m, 27-cr0000m
+    r'|\b[A-Z]\d{1,3}[a-zA-Z]*\b'                    # e.g., V15, T101
+    r'|\b\d{2,3}(?:\.\d)?["\u2033]\b',                # e.g., 23.8", 27"
+    re.IGNORECASE)
+# Screen size / capacity patterns
+_SPEC_RE = re.compile(
+    r'\b\d+(?:\.\d+)?\s*(?:inch|in|gb|tb|wh|mah)\b', re.IGNORECASE)
+
+
+def _normalize_title(title, aggressive=False):
+    """Strip size / color tokens so that size-variants map to one key.
+
+    Args:
+        title: Product title string.
+        aggressive: If True, also strip model numbers and spec numbers
+                    (e.g., 24-ct2000m, 23.8", 256GB) for cross-seller
+                    near-duplicate detection.
+    """
+    t = title
+    # Apply model/spec stripping BEFORE size stripping so patterns like
+    # "24-ct2000m" are removed as a whole before the "24" gets stripped
+    # independently by _NUM_SIZE_RE.
+    if aggressive:
+        t = _MODEL_NUM_RE.sub('', t)
+        t = _SPEC_RE.sub('', t)
+    t = _SIZE_RE.sub('', t)
+    t = _NUM_SIZE_RE.sub('', t)
+    t = _COLOR_RE.sub('', t)
+    # Strip trailing material/attribute fragments like "Leather upper"
+    # that appear after size/color removal, and trailing punctuation.
+    t = re.sub(r'\s+(?:upper|suede|leather|fabric|material)\b.*$', '',
+               t, flags=re.IGNORECASE)
+    t = re.sub(r'[,\-\s]+$', '', t)
+    return re.sub(r'\s+', ' ', t).strip()
+
+
+def _dedup_products(products, cross_seller=False):
+    """Remove exact-GID duplicates and same-product size/color variants.
+
+    For exact same GID: always keep only the first (best-ranked) occurrence.
+    For near-duplicates:
+      - Default: same normalized title AND same Seller → keep first.
+      - cross_seller=True: same aggressively-normalized title AND same Brand
+        (regardless of seller) → keep first. This catches the same product
+        sold by different retailers (e.g., HP AIO from HP vs Amazon).
+
+    Returns (deduped_list, n_exact_dup, n_near_dup).
+    """
+    seen_gids = set()
+    seen_norm = set()       # (normalized_title, seller)
+    seen_cross = set()      # (aggressive_title, brand) — cross-seller
+    result = []
+    n_exact = 0
+    n_near = 0
+    for p in products:
+        gid = p.get("global_offer_id", "")
+        # exact GID dedup
+        if gid and gid in seen_gids:
+            n_exact += 1
+            continue
+        if gid:
+            seen_gids.add(gid)
+        title = p.get("Title", "")
+        seller = p.get("Seller", "")
+        brand = p.get("Brand", "")
+        # Same-seller near-dup (size/color variants)
+        norm_key = (_normalize_title(title), seller)
+        if norm_key[0] and norm_key in seen_norm:
+            n_near += 1
+            continue
+        if norm_key[0]:
+            seen_norm.add(norm_key)
+        # Cross-seller near-dup (same product different retailers)
+        if cross_seller and brand:
+            agg_key = (_normalize_title(title, aggressive=True), brand)
+            if agg_key[0] and agg_key in seen_cross:
+                n_near += 1
+                continue
+            if agg_key[0]:
+                seen_cross.add(agg_key)
+        result.append(p)
+    return result, n_exact, n_near
+
+
 def rerank_journey(
     products,
     top_k=12,
@@ -399,6 +584,8 @@ def rerank_journey(
     max_consecutive_seller=2,
     max_per_brand_total=4,
     max_consecutive_brand=2,
+    dedup=False,
+    cross_seller_dedup=False,
 ):
     """Rerank a single journey's product list.
 
@@ -410,6 +597,7 @@ def rerank_journey(
     if not products:
         return [], {
             "input_n": 0, "kept_n": 0, "excluded_seller_dropped": 0,
+            "dedup_exact": 0, "dedup_near": 0,
             "demoted_n": 0,
             "consec_seller_before": 0, "consec_seller_after": 0,
             "consec_brand_before": 0, "consec_brand_after": 0,
@@ -422,6 +610,13 @@ def rerank_journey(
 
     # 0a) Excluded-seller safety filter.
     products, excluded = filter_excluded_sellers(products)
+
+    # 0b) Dedup: optionally remove exact-GID duplicates and size/color variants.
+    n_exact_dup = 0
+    n_near_dup = 0
+    if dedup:
+        products, n_exact_dup, n_near_dup = _dedup_products(
+            products, cross_seller=cross_seller_dedup)
 
     # Pre-stats on the original (rank-sorted) Top-K.
     orig_top = products[:top_k]
@@ -563,6 +758,8 @@ def rerank_journey(
         "input_n": n_in,
         "kept_n": len(final),
         "excluded_seller_dropped": len(excluded),
+        "dedup_exact": n_exact_dup,
+        "dedup_near": n_near_dup,
         "demoted_n": len(demoted),
         "consec_seller_before": orig_consec_seller,
         "consec_seller_after": new_consec_seller,
@@ -705,28 +902,38 @@ def render_journey_block(j, ji, top_k):
             f'<div class="qc">{chips}</div></div>'
         )
 
-    # SLM ranker stats (totalCandidates / kept / filtered)
+    # SLM ranker stats: compute from actual data
+    # (totalCandidates from step5 JWP vs selectedCount from step6 ranked products)
     rsumm_html = ""
     if stats:
         total = stats.get("totalCandidates", 0)
-        kept = stats.get("selectedCount", 0)
-        filt = stats.get("filteredCount", 0)
-        rsumm_html = (
-            f'<div class="rsumm">'
-            f'<span class="rs">SLM Total: {total}</span>'
-            f'<span class="rs rsk">Kept: {kept}</span>'
-            f'<span class="rs rsf">Filtered: {filt}</span>'
-            f'</div>'
-        )
+        kept = stats.get("selectedCount", len(products))
+        filt = stats.get("filteredCount", max(0, total - kept))
+        if total > 0:
+            rsumm_html = (
+                f'<div class="rsumm">'
+                f'<span class="rs">Total: {total}</span>'
+                f'<span class="rs rsk">Kept: {kept}</span>'
+                f'<span class="rs rsf">Filtered: {filt}</span>'
+                f'</div>'
+            )
 
     # L3 rerank diagnostics
     l3_html = ""
     if rr:
+        dedup_exact = rr.get("dedup_exact", 0)
+        dedup_near = rr.get("dedup_near", 0)
+        dedup_total = dedup_exact + dedup_near
+        dedup_badge = (
+            f'<span class="l3 l3x">dedup: {dedup_total}'
+            f'({dedup_exact} exact, {dedup_near} variant)</span>'
+        ) if dedup_total > 0 else ""
         l3_html = (
             f'<div class="l3summ" title="Rule-based L3 reranker diagnostics">'
             f'<span class="l3">L3 in: {rr.get("input_n", 0)}</span>'
             f'<span class="l3 l3d">demoted: {rr.get("demoted_n", 0)}</span>'
             f'<span class="l3 l3x">excluded: {rr.get("excluded_seller_dropped", 0)}</span>'
+            f'{dedup_badge}'
             f'<span class="l3">consec-Seller: '
             f'{rr.get("consec_seller_before", 0)}→{rr.get("consec_seller_after", 0)}</span>'
             f'<span class="l3">consec-Brand: '
@@ -961,8 +1168,9 @@ def main():
                     default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
                     help="Path to item.json with offer_url/image_url fields")
     ap.add_argument("--original_index_file", 
-                    default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv",
-                    help="Fallback: original index TSV with OfferURL/ImageUrl columns. ")
+                    default="",
+                    help="Fallback: original index TSV with OfferURL/ImageUrl columns. "
+                         "Only needed when item.json lacks URL fields.")
     ap.add_argument("--top_k", type=int, default=12,
                     help="Visible Top-K window (constraints apply here)")
     ap.add_argument("--max_per_query_topk", type=int, default=6)
@@ -997,58 +1205,67 @@ def main():
     # Load users
     if fmt == "tsv":
         # --- Step6 TSV path: load URLs, then convert ---
-        print("  Loading URL data for product enrichment...")
-        url_map = {}
-
-        # 1) Try item.json first
-        if args.item_json and os.path.isfile(args.item_json):
-            url_map = load_urls_from_item_json(args.item_json)
-
-        # 2) Check coverage: if item.json has few URLs, try index TSV fallback
-        #    Collect all needed GIDs first
+        # 1) First collect all needed OfferIds (fast scan of small TSV)
         needed_gids = collect_all_offer_ids(args.input)
         print(f"  Unique OfferIds in input: {len(needed_gids):,}")
 
-        missing_gids = needed_gids - set(url_map.keys())
-        if missing_gids:
-            pct_covered = (len(needed_gids) - len(missing_gids)) / len(needed_gids) * 100 if needed_gids else 100
-            print(f"  item.json coverage: {pct_covered:.1f}% "
-                  f"({len(missing_gids):,} missing)")
+        if not needed_gids:
+            print("  No OfferIds found, skipping URL loading")
+            url_map = {}
+        else:
+            print("  Loading URL data for product enrichment...")
+            url_map = {}
 
-            # Try fallback to original index TSV
-            fallback = args.original_index_file
-            if fallback and os.path.isfile(fallback):
-                fallback_urls = load_urls_from_index_tsv(
-                    fallback, needed_gids=missing_gids)
-                url_map.update(fallback_urls)
-                new_missing = needed_gids - set(url_map.keys())
-                print(f"  After fallback: {len(new_missing):,} GIDs still missing URLs")
+            # 2) Try item.json — only check the needed GIDs (not full scan)
+            if args.item_json and os.path.isfile(args.item_json):
+                url_map = load_urls_from_item_json(
+                    args.item_json, needed_gids=needed_gids)
+
+            # 3) For GIDs still missing URLs, fallback to original index TSV
+            missing_gids = needed_gids - set(url_map.keys())
+            if missing_gids:
+                pct_covered = (len(needed_gids) - len(missing_gids)) / len(needed_gids) * 100
+                print(f"  item.json coverage: {pct_covered:.1f}% "
+                      f"({len(missing_gids):,} still missing)")
+
+                fallback = args.original_index_file
+                if fallback and os.path.isfile(fallback):
+                    fallback_urls = load_urls_from_index_tsv(
+                        fallback, needed_gids=missing_gids)
+                    url_map.update(fallback_urls)
+                    new_missing = needed_gids - set(url_map.keys())
+                    print(f"  After fallback: {len(new_missing):,} GIDs "
+                          f"still missing URLs")
+            else:
+                print(f"  All {len(needed_gids):,} GIDs have URLs from "
+                      f"item.json, skipping index TSV")
 
         print()
         users = load_step6_tsv(args.input, url_map=url_map)
-        del url_map  # free memory
+        del url_map
     else:
         users = load_jsonl_input(args.input)
 
     print(f"\nLoaded {len(users)} users")
 
-    # Rerank every journey
-    if not args.skip_rerank:
-        print(f"\n  per-query  cap: {args.max_per_query_topk} (in Top-{args.top_k})")
-        print(f"  per-seller cap: {args.max_per_seller_total} total / "
-              f"{args.max_consecutive_seller} consecutive")
-        print(f"  per-brand  cap: {args.max_per_brand_total} total / "
-              f"{args.max_consecutive_brand} consecutive")
-        print()
+    # Filter out users with 0 journeys
+    # (order from input is preserved — reorder in extract_vip_users.py)
+    users_with_journeys = [u for u in users if u.get("journeys")]
+    users_empty = [u for u in users if not u.get("journeys")]
+    if users_empty:
+        print(f"  Filtered out {len(users_empty)} users with 0 journeys")
+    users = users_with_journeys
+    print(f"  Displaying {len(users)} users")
 
-    # Rerank every journey
-    n_journeys = 0
-    sum_consec_s_before = sum_consec_s_after = 0
-    sum_consec_b_before = sum_consec_b_after = 0
-    sum_uniq_s_before = sum_uniq_s_after = 0
-    sum_excluded = sum_demoted = 0
+    # ── Helper: rerank all journeys and collect stats ──────────────────────
+    def _rerank_all(users, dedup=False, label=""):
+        n_journeys = 0
+        sum_consec_s_before = sum_consec_s_after = 0
+        sum_consec_b_before = sum_consec_b_after = 0
+        sum_uniq_s_before = sum_uniq_s_after = 0
+        sum_excluded = sum_demoted = 0
+        sum_dedup_exact = sum_dedup_near = 0
 
-    if not args.skip_rerank:
         for u in users:
             for j in u.get("journeys", []):
                 products = j.get("products", []) or []
@@ -1060,6 +1277,8 @@ def main():
                     max_consecutive_seller=args.max_consecutive_seller,
                     max_per_brand_total=args.max_per_brand_total,
                     max_consecutive_brand=args.max_consecutive_brand,
+                    dedup=dedup,
+                    cross_seller_dedup=dedup,
                 )
                 j["products"] = new_list
                 stats = j.setdefault("stats", {})
@@ -1077,52 +1296,84 @@ def main():
                 sum_uniq_s_after += rr_stats["topk_unique_sellers_after"]
                 sum_excluded += rr_stats["excluded_seller_dropped"]
                 sum_demoted += rr_stats["demoted_n"]
+                sum_dedup_exact += rr_stats.get("dedup_exact", 0)
+                sum_dedup_near += rr_stats.get("dedup_near", 0)
+
+        if n_journeys:
+            print(f"\n  [{label}] Reranked {n_journeys} journeys"
+                  f" (dedup={'ON' if dedup else 'OFF'})")
+            print(f"    Avg max-consecutive Seller in Top-{args.top_k}: "
+                  f"{sum_consec_s_before/n_journeys:.2f} → "
+                  f"{sum_consec_s_after/n_journeys:.2f}")
+            print(f"    Avg max-consecutive Brand  in Top-{args.top_k}: "
+                  f"{sum_consec_b_before/n_journeys:.2f} → "
+                  f"{sum_consec_b_after/n_journeys:.2f}")
+            print(f"    Avg unique Sellers         in Top-{args.top_k}: "
+                  f"{sum_uniq_s_before/n_journeys:.2f} → "
+                  f"{sum_uniq_s_after/n_journeys:.2f}")
+            print(f"    Excluded-seller items dropped: {sum_excluded}")
+            if dedup:
+                print(f"    Dedup removed: "
+                      f"{sum_dedup_exact + sum_dedup_near} "
+                      f"({sum_dedup_exact} exact, "
+                      f"{sum_dedup_near} size/color/cross-seller)")
+            print(f"    Items demoted to tail: {sum_demoted}")
+        return n_journeys
+
+    def _write_outputs(users, prefix, n_journeys):
+        out_jsonl = os.path.join(args.results_dir, f"{prefix}.jsonl")
+        out_html = os.path.join(args.results_dir, f"{prefix}.html")
+        with open(out_jsonl, "w", encoding="utf-8") as f:
+            for u in users:
+                u_out = dict(u)
+                u_out["journeys"] = []
+                for j in u.get("journeys", []):
+                    j_out = dict(j)
+                    j_out["products"] = (j.get("products") or [])[:args.top_k]
+                    u_out["journeys"].append(j_out)
+                f.write(json.dumps(u_out, ensure_ascii=False) + "\n")
+        sz = os.path.getsize(out_jsonl) / (1024 * 1024)
+        print(f"    JSONL: {out_jsonl} ({sz:.2f} MB)")
+        render_html(users, out_html, args.top_k)
+        return out_jsonl, out_html
+
+    # ── Rerank + output ─────────────────────────────────────────────────────
+
+    if not args.skip_rerank:
+        print(f"\n  per-query  cap: {args.max_per_query_topk} (in Top-{args.top_k})")
+        print(f"  per-seller cap: {args.max_per_seller_total} total / "
+              f"{args.max_consecutive_seller} consecutive")
+        print(f"  per-brand  cap: {args.max_per_brand_total} total / "
+              f"{args.max_consecutive_brand} consecutive")
+
+        # Save a deep copy BEFORE reranking so we can rerank twice
+        users_copy = copy.deepcopy(users)
+
+        # Pass 1: no dedup (shows raw ranker quality)
+        n_journeys = _rerank_all(users, dedup=False, label="no-dedup")
+        out_jsonl, out_html = _write_outputs(
+            users, args.output_prefix, n_journeys)
+
+        # Pass 2: with dedup (shows cleaned-up version)
+        _rerank_all(users_copy, dedup=True, label="dedup")
+        dedup_prefix = f"{args.output_prefix}_dedup"
+        out_jsonl_d, out_html_d = _write_outputs(
+            users_copy, dedup_prefix, n_journeys)
+        del users_copy
     else:
-        for u in users:
-            for j in u.get("journeys", []):
-                n_journeys += 1
-
-    if n_journeys and not args.skip_rerank:
-        print(f"\nReranked {n_journeys} journeys")
-        print(f"  Avg max-consecutive Seller in Top-{args.top_k}: "
-              f"{sum_consec_s_before/n_journeys:.2f} → "
-              f"{sum_consec_s_after/n_journeys:.2f}")
-        print(f"  Avg max-consecutive Brand  in Top-{args.top_k}: "
-              f"{sum_consec_b_before/n_journeys:.2f} → "
-              f"{sum_consec_b_after/n_journeys:.2f}")
-        print(f"  Avg unique Sellers         in Top-{args.top_k}: "
-              f"{sum_uniq_s_before/n_journeys:.2f} → "
-              f"{sum_uniq_s_after/n_journeys:.2f}")
-        print(f"  Excluded-seller items dropped: {sum_excluded}")
-        print(f"  Items demoted to tail (over caps): {sum_demoted}")
-
-    # Write outputs
-    out_jsonl = os.path.join(args.results_dir, f"{args.output_prefix}.jsonl")
-    out_html = os.path.join(args.results_dir, f"{args.output_prefix}.html")
-
-    # JSONL: keep only the visible Top-K per journey (trimmed copy so the
-    # full list is still available for HTML rendering below).
-    with open(out_jsonl, "w", encoding="utf-8") as f:
-        for u in users:
-            u_out = dict(u)
-            u_out["journeys"] = []
-            for j in u.get("journeys", []):
-                j_out = dict(j)
-                j_out["products"] = (j.get("products") or [])[:args.top_k]
-                u_out["journeys"].append(j_out)
-            f.write(json.dumps(u_out, ensure_ascii=False) + "\n")
-    sz = os.path.getsize(out_jsonl) / (1024 * 1024)
-    print(f"\n  Saved JSONL (Top-{args.top_k} per journey): "
-          f"{out_jsonl} ({sz:.2f} MB)")
-
-    render_html(users, out_html, args.top_k)
+        n_journeys = sum(
+            len(u.get("journeys", [])) for u in users)
+        out_jsonl, out_html = _write_outputs(
+            users, args.output_prefix, n_journeys)
+        out_html_d = None
 
     print("\n" + "=" * 70)
     print("  Step8 complete!")
     print(f"  Input format  : {fmt}")
-    print(f"  JSONL: {out_jsonl}")
-    print(f"  HTML : {out_html}")
     print(f"  Users: {len(users)}, Journeys: {n_journeys}")
+    print(f"  HTML (no dedup) : {out_html}")
+    if out_html_d:
+        print(f"  HTML (dedup)    : {out_html_d}")
     print("=" * 70)
 
 
