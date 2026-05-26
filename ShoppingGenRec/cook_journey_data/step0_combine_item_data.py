@@ -166,10 +166,11 @@ def load_title_blocklist(filepath, language="en"):
     return deduped
 
 
-# Pre-compiled regex for normalize_title — matches C# NormalizeV3 exactly:
-#   string patternStr = "[-!+/_\\s,.;:?\"']+";
+# Pre-compiled regex for normalize_title — based on C# NormalizeV3,
+# extended with () to handle parenthesized tokens like "(Renewed)":
+#   Original C# pattern: "[-!+/_\\s,.;:?\"']+";
 #   return $" {Regex.Replace(s, patternStr, replaceStr)} ".ToLowerInvariant();
-_RE_NORM_V3 = re.compile(r"[-!+/_\s,.;:?\"']+")
+_RE_NORM_V3 = re.compile(r"[-!+/_\s,.;:?\"'()]+") 
 
 
 def normalize_title(text):
@@ -672,7 +673,9 @@ def main():
     # ----- Seller blocklist filtering -----
     seller_blocked_count = 0
     title_blocked_count = 0
+    desc_blocked_count = 0
     blocked_items = []
+    desc_blocked_items = []
 
     if not args.skip_filter:
         seller_blocklist = load_seller_blocklist(args.seller_blocklist)
@@ -716,8 +719,31 @@ def main():
                 del items[gid]
             title_blocked_count = len(gids_to_remove)
             print(f"  Items removed by title blocklist:           {title_blocked_count:>10,}")
+
+            # ----- Description blocklist filtering (reuse same regex) -----
+            print(f"\n  Applying description blocklist (same {len(title_blocklist_tokens):,} keywords)")
+            gids_to_remove = []
+            for gid, item in items.items():
+                desc = item["description"]
+                if not desc:
+                    continue
+                norm_desc = normalize_title(desc)
+                m = title_blocklist_regex.search(norm_desc)
+                if m:
+                    gids_to_remove.append(gid)
+                    desc_blocked_items.append((
+                        gid, item["title"],
+                        item["attributes"].get("Seller", ""),
+                        item["categories"],
+                        f"desc:{m.group(0)}",
+                    ))
+
+            for gid in gids_to_remove:
+                del items[gid]
+            desc_blocked_count = len(gids_to_remove)
+            print(f"  Items removed by description blocklist:     {desc_blocked_count:>10,}")
         else:
-            print(f"\n  Title blocklist: not applied (no valid file)")
+            print(f"\n  Title/description blocklist: not applied (no valid file)")
 
     print(f"  Items removed (missing title):             {stats['no_title']:>10,}")
     if cat_blocked_ids and has_cat_id_col:
@@ -780,19 +806,22 @@ def main():
     print(f"  Total items: {total_item_count:,}")
 
     # Write blocked items report
-    if blocked_items:
+    all_blocked = blocked_items + desc_blocked_items
+    if all_blocked:
         blocked_path = os.path.join(args.output_dir, "blocked_items.tsv")
         with open(blocked_path, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f, delimiter="\t", lineterminator="\n")
             writer.writerow(["GlobalOfferId", "Title", "Seller",
                              "CategoryName", "MatchedKeyword"])
-            for row in blocked_items:
+            for row in all_blocked:
                 writer.writerow(row)
         blocked_mb = os.path.getsize(blocked_path) / (1024 * 1024)
         print(f"  Blocked items report: {blocked_path} ({blocked_mb:.2f} MB)")
         print(f"    Seller-blocked: {seller_blocked_count:,}")
         print(f"    Title-blocked:  {title_blocked_count:,}")
-        print(f"    Total blocked:  {seller_blocked_count + title_blocked_count:,}")
+        print(f"    Desc-blocked:   {desc_blocked_count:,}")
+        total_blocked = seller_blocked_count + title_blocked_count + desc_blocked_count
+        print(f"    Total blocked:  {total_blocked:,}")
 
     # =========================================================================
     # Step 6: Sample entries
@@ -845,6 +874,7 @@ def main():
         print(f"  Removed (blocked category):{stats['category_blocked']:>10,}")
     print(f"  Removed (seller blocklist):{seller_blocked_count:>10,}")
     print(f"  Removed (title blocklist): {title_blocked_count:>10,}")
+    print(f"  Removed (desc blocklist):  {desc_blocked_count:>10,}")
     print(f"  With description:          {has_desc:>10,}")
     print(f"  With categories:           {has_cat:>10,}")
     print(f"  With attributes:           {has_attrs:>10,}")
