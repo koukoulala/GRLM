@@ -85,7 +85,34 @@ def main():
                 "HisCount": str(his_count),
             })
 
-    # Write TSV
+    # Write TSV — order users to match SLM HTML display order
+    # (SLM HTML lists these 20 users in a specific order; 2 extra users
+    # with no valid journeys are appended at the end)
+    SLM_ORDER = [
+        "FF1353FD90160A49", "D7073CB4BA6E7FFD", "AA7F1661F70AE870",
+        "1745833BCFEB598F", "673AEA9C25D54B2E", "00DB9B18F9F467B9",
+        "0BD7ADCEABB34025", "120561EB543166ED", "1AFEFCE562C962B5",
+        "22967BA55099D483", "3BC2C939156A6233", "3C74C986EAB03584",
+        "58767B1A056CB90A", "6614E456A908CF5C", "7158110DE72A447D",
+        "9A352E33951C30B6", "A62647067FE38C8A", "C354118B4A51BF34",
+        "E4785BFAA23D2810", "CE04DD86FA7F55FF",
+    ]
+    uid_to_user = {u["UserId"][:16]: u for u in users}
+    ordered = []
+    seen = set()
+    for prefix in SLM_ORDER:
+        for u in users:
+            if u["UserId"].startswith(prefix) and u["UserId"] not in seen:
+                ordered.append(u)
+                seen.add(u["UserId"])
+                break
+    # Append any remaining users not in SLM order
+    for u in users:
+        if u["UserId"] not in seen:
+            ordered.append(u)
+            seen.add(u["UserId"])
+    users = ordered
+
     with open(args.output, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f,

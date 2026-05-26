@@ -3,14 +3,14 @@
 #  VIP Case Study Pipeline: vip_users.tsv → step3 → step5 → step6 → step8
 # =============================================================================
 #
-#  Runs the full shopping journey pipeline for 22 VIP users, producing
+#  Runs the full shopping journey pipeline for VIP users, producing
 #  an interactive HTML visualization with product images and links.
 #
 #  Usage:
-#      bash run_vip_case_study.sh              # Run all steps
-#      bash run_vip_case_study.sh --from step5 # Resume from step5 onward
-#      bash run_vip_case_study.sh --from step6 # Resume from step6 onward
-#      bash run_vip_case_study.sh --from step8 # Only generate HTML
+#      bash run_vip_case_study.sh                              # date=20260516, all steps
+#      bash run_vip_case_study.sh --date 20260513              # use 20260513 data
+#      bash run_vip_case_study.sh --date 20260513 --from step6 # 20260513, from step6
+#      bash run_vip_case_study.sh --from step8                 # date=20260516, step8 only
 #
 # =============================================================================
 
@@ -23,16 +23,41 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COOK_DIR="${SCRIPT_DIR}"
 
-# Output base directory for all VIP case study data
-VIP_DIR="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study"
+# ── Parse arguments ──────────────────────────────────────────────────────────
+
+DATA_DATE="20260516"
+START_FROM="step3"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --date)  DATA_DATE="$2"; shift 2 ;;
+        --from)  START_FROM="$2"; shift 2 ;;
+        *)       echo "ERROR: Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
+# ── Paths derived from DATA_DATE ─────────────────────────────────────────────
+
+DATA_ROOT="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/${DATA_DATE}"
+VIP_DIR="${DATA_ROOT}/vip_case_study"
 
 # Input
 VIP_INPUT="${PROJECT_DIR}/resources/vip_users.tsv"
 
-# Shared resources (already built by the full pipeline)
-ITEM_JSON="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json"
-INDEX_DIR="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/MatadorEmb_Index"
-ORIGINAL_INDEX="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"
+# Shared resources — 20260513 uses raw_data_v2/ folder
+if [[ "${DATA_DATE}" == "20260513" ]]; then
+    RAW_DIR="${DATA_ROOT}/raw_data_v2"
+else
+    RAW_DIR="${DATA_ROOT}/raw_data"
+fi
+ITEM_JSON="${RAW_DIR}/item.json"
+INDEX_DIR="${RAW_DIR}/MatadorEmb_Index"
+
+# ORIGINAL_INDEX only exists for 20260516
+ORIGINAL_INDEX=""
+if [[ "${DATA_DATE}" == "20260516" ]]; then
+    ORIGINAL_INDEX="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"
+fi
 
 # Intermediate file names (all under VIP_DIR)
 STEP3_OUTPUT="${VIP_DIR}/vip_users_Journey_Results.tsv"
@@ -45,15 +70,7 @@ STEP8_OUTPUT_DIR="${VIP_DIR}"
 # LLM settings
 COPILOT_MODEL="gpt-5.2"
 STEP6_COPILOT_MODEL="gpt-5.2"
-GPU_IDS="0,1,2,3"
-
-# ── Parse --from argument ────────────────────────────────────────────────────
-
-START_FROM="step3"
-if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
-    START_FROM="$2"
-    shift 2
-fi
+GPU_IDS="1"
 
 echo "=================================================================="
 echo "  VIP Case Study Pipeline"
@@ -61,9 +78,13 @@ echo "=================================================================="
 echo "  Script dir:    ${SCRIPT_DIR}"
 echo "  VIP output:    ${VIP_DIR}"
 echo "  VIP input:     ${VIP_INPUT}"
+echo "  Data date:     ${DATA_DATE}"
 echo "  Start from:    ${START_FROM}"
 echo "  Item JSON:     ${ITEM_JSON}"
 echo "  Index dir:     ${INDEX_DIR}"
+if [[ -n "${ORIGINAL_INDEX}" ]]; then
+    echo "  Orig index:    ${ORIGINAL_INDEX}"
+fi
 echo "=================================================================="
 echo ""
 
@@ -81,6 +102,41 @@ step_should_run() {
         *)     echo "ERROR: Unknown --from value: ${START_FROM}"; exit 1 ;;
     esac
 }
+
+# ── Clean up stale outputs from the starting step onward ─────────────────────
+echo "  Cleaning stale outputs from ${START_FROM} onward..."
+
+# step3 onward: remove journey results + everything downstream
+if [[ "${START_FROM}" == "step3" ]]; then
+    rm -rf "${VIP_DIR}"/_journey_checkpoint_vip_users 2>/dev/null
+    rm -f  "${VIP_DIR}"/vip*_Results.tsv 2>/dev/null
+    rm -f  "${STEP5_OUTPUT}" 2>/dev/null
+    rm -rf "${VIP_DIR}"/vip_users_*.npz "${VIP_DIR}"/vip_users_query_*.tsv 2>/dev/null
+fi
+
+# step5 onward: remove step5 output + everything downstream
+if [[ "${START_FROM}" == "step3" || "${START_FROM}" == "step5" ]]; then
+    rm -f  "${STEP5_OUTPUT}" 2>/dev/null
+    rm -rf "${STEP6_OUTPUT_DIR}" 2>/dev/null
+    rm -f  "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null
+    rm -f  "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+fi
+
+# step6 onward: remove ranker output + HTML
+if [[ "${START_FROM}" == "step6" ]]; then
+    rm -rf "${STEP6_OUTPUT_DIR}"/_ranker_ckpt_* 2>/dev/null
+    rm -f  "${STEP6_OUTPUT_DIR}"/*_Results.tsv 2>/dev/null
+    rm -f  "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null
+    rm -f  "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+fi
+
+# step8 onward: remove HTML only
+if [[ "${START_FROM}" == "step8" ]]; then
+    rm -f "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+fi
+
+echo "  Done."
+echo ""
 
 # =============================================================================
 #  Step 3: Generate shopping journeys via LLM
@@ -224,12 +280,17 @@ if step_should_run "step8"; then
         exit 1
     fi
 
-    python3 "${COOK_DIR}/step8_generate_html.py" \
-        --input "${STEP6_MERGED}" \
-        --results_dir "${STEP8_OUTPUT_DIR}" \
-        --item_json "${ITEM_JSON}" \
-        --original_index_file "${ORIGINAL_INDEX}" \
+    # Build step8 command with conditional --original_index_file
+    STEP8_CMD=(python3 "${COOK_DIR}/step8_generate_html.py"
+        --input "${STEP6_MERGED}"
+        --results_dir "${STEP8_OUTPUT_DIR}"
+        --item_json "${ITEM_JSON}"
         --top_k 12
+    )
+    if [[ -n "${ORIGINAL_INDEX}" && -f "${ORIGINAL_INDEX}" ]]; then
+        STEP8_CMD+=(--original_index_file "${ORIGINAL_INDEX}")
+    fi
+    "${STEP8_CMD[@]}"
 
     echo ""
 fi

@@ -21,7 +21,7 @@ import torch.multiprocessing as mp
 from transformers import AutoModel, AutoTokenizer
 from tqdm import tqdm
 import time
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import warnings
 import tempfile
 import ctypes
@@ -440,8 +440,8 @@ def compute_similarities_faiss(
     nlist: int = 4096,
     nprobe: int = 128,
     num_threads: int = 0,
-    query_indices: np.ndarray = None,
-    index_output_path: str = None,
+    query_indices: Optional[np.ndarray] = None,
+    index_output_path: Optional[str] = None,
 ) -> Dict:
     """Compute top-k cosine similarities using FAISS ANN.
 
@@ -708,6 +708,11 @@ def parse_args():
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed/",
         help="If set and files exist, reuses existing embeddings and only generates embeddings for new items."
     )
+    parser.add_argument(
+        "--save_faiss_index",
+        action="store_true",
+        help="If set, saves FAISS index to disk. Disabled by default to avoid slow/large GPU->CPU index export.",
+    )
     return parser.parse_args()
 
 
@@ -735,8 +740,11 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     emb_file = os.path.join(args.output_dir, "embeddings.npy")
     ids_file = os.path.join(args.output_dir, "item_ids.json")
-    index_file = os.path.join(args.output_dir, "faiss_index.bin")
+    index_file = os.path.join(args.output_dir, "faiss_index.bin") if args.save_faiss_index else None
     output_file = os.path.join(args.output_dir, "similarities.json")
+
+    if not args.save_faiss_index:
+        print("FAISS index saving is disabled (use --save_faiss_index to enable).")
 
     current_ids = [item["id"] for item in data]
     current_id_set = set(current_ids)
@@ -926,4 +934,3 @@ def main():
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
     main()
-                                                                                                                                                                                                                                                                                                                                                                                                    

@@ -7,18 +7,14 @@ from product metadata (title + description + categories
 Reads merged_clean_item_with_attr.json (from preprocess s6) via id2meta.json
 which inherits the enriched attributes.
 
-Supports PageTitle item down-sampling via --pagetitle_sample_prob.
-
 Usage:
     python s2_build_meta2tid_sft_data.py \
         --id2meta_file ./processed/id2meta.json \
-        --output_file ./sft_data/meta2tid_sft.json \
-        --pagetitle_sample_prob 0.5
+        --output_file ./sft_data/meta2tid_sft.json
 """
 
 import os
 import json
-import random
 import argparse
 
 # Attributes to include in the product information.
@@ -26,9 +22,12 @@ import argparse
 # Exclude Color, Size, Material (too granular), Price, Market.
 
 
-def prepare_data(item: dict) -> dict:
-    """Prepare a single SFT training sample."""
-    info_lines = ["Product Information:"]
+def build_product_info_text(item: dict) -> str:
+    """Build product information text block from item metadata.
+
+    Matches the format used in s1_generate_tid.py for consistency.
+    """
+    info_lines = []
 
     title = item.get("title", "")
     if title:
@@ -44,7 +43,7 @@ def prepare_data(item: dict) -> dict:
     if categories:
         info_lines.append(f"Categories: {categories}")
 
-    # Append structured attributes (from s6 enrichment)
+    # Append structured attributes (same order as s1)
     attributes = item.get("attributes", {})
     brand = attributes.get("Brand", "")
     if isinstance(brand, str):
@@ -69,15 +68,24 @@ def prepare_data(item: dict) -> dict:
     if age_group and age_group.lower() != "adult":
         info_lines.append(f"AgeGroup: {age_group}")
 
-    input_str = "\n".join(info_lines) + "\n"
+    return "\n".join(info_lines) if info_lines else "(no information)"
+
+
+def prepare_data(item: dict) -> dict:
+    """Prepare a single SFT training sample."""
+    input_str = build_product_info_text(item)
 
     return {
         "instruction": (
             "Summarize the product into a text ID of exactly 7 distinct slots. "
             "Each slot is one base-form word; use a multi-word phrase only for "
             "brand/seller names or fixed proper nouns. "
-            "Priority: category, function, feature, attribute, brand, seller, audience/style. "
-            "Output strictly in the format: Item text ID: [s1, s2, s3, s4, s5, s6, s7]."
+            "Slot order: (1) product category, (2) core function, "
+            "(3) form factor or subtype, (4) distinguishing attribute, "
+            "(5) target audience or context, (6) brand, (7) seller. "
+            "If brand and seller are the same, use slot 7 for another attribute. "
+            "Output strictly in the format: "
+            "Item text ID: [s1, s2, s3, s4, s5, s6, s7]."
         ),
         "input": input_str,
         "output": "Item text ID: [" + ", ".join(item.get("summary_words", [])) + "]",
@@ -91,36 +99,20 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        #default="./processed/id2meta.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed_full/id2meta.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/id2meta.json",
         help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
     )
     parser.add_argument(
         "--output_file",
         type=str,
-        #default="./sft_data/meta2tid_sft.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/sft_data/meta2tid_sft.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/sft_data/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
-    )
-    parser.add_argument(
-        "--pagetitle_sample_prob",
-        type=float,
-        default=0.5,
-        help="Sampling probability for PageTitle items (P-prefixed). "
-             "Set to 1.0 to keep all, 0.0 to exclude all (default: 0.5)",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for PageTitle sampling (default: 42)",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    random.seed(args.seed)
 
     print(f"Loading metadata: {args.id2meta_file}")
     with open(args.id2meta_file, "r", encoding="utf-8") as f:
@@ -130,14 +122,10 @@ def main():
     sft_data = []
     sft_data_full = []
     item_id2tid = {}       # item_id -> [7 summary words]
-    num_gid = 0
-    num_ptid = 0
-    num_ptid_total = 0
-    num_ptid_sampled = 0
     num_no_tid = 0
 
     for key, value in parent_asin2meta.items():
-        # Build item_id2tid for ALL items (regardless of PageTitle sampling)
+        # Build item_id2tid for ALL items
         summary_words = value.get("summary_words", [])
         valid_words = [
             word.replace("[", "").replace("]", "")
@@ -148,17 +136,6 @@ def main():
             item_id2tid[key] = valid_words[:7]
         else:
             num_no_tid += 1
-
-        is_pagetitle = key.startswith("P")
-        if is_pagetitle:
-            num_ptid_total += 1
-            # Down-sample PageTitle items
-            if random.random() >= args.pagetitle_sample_prob:
-                continue
-            num_ptid_sampled += 1
-            num_ptid += 1
-        else:
-            num_gid += 1
 
         sample = prepare_data(value)
         sft_data.append(sample)
@@ -229,9 +206,6 @@ def main():
     train_mb = os.path.getsize(args.output_file) / (1024 * 1024)
     print(f"\nSummary:")
     print(f"  Total items in id2meta:   {len(parent_asin2meta):>10,}")
-    print(f"  GlobalOfferId items:      {num_gid:>10,}")
-    print(f"  PageTitle items (total):  {num_ptid_total:>10,}")
-    print(f"  PageTitle items (sampled):{num_ptid_sampled:>10,}")
     print(f"  SFT training samples:     {len(sft_data):>10,}")
     print(f"  Training data: {args.output_file} ({train_mb:.1f} MB)")
 

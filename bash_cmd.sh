@@ -17,10 +17,12 @@ nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py > logs/step
 nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py --resume --keep_chunks --ann_in_memory > logs/step5_resume.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --debug > logs/step6_debug.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000 > logs/step6_900K.out 2>&1 &
+nohup python -u cook_journey_data/step6_call_LLM_ranker.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/UserEvents_clean_combined_full_journey_with_products_split_001.tsv > logs/step6_001.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --merge_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/ > logs/step6_merge.out 2>&1 &
 nohup python -u cook_journey_data/step7_stats.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv > logs/step7_stats_after_step3.out 2>&1 &
 nohup bash cook_journey_data/run_vip_case_study.sh > logs/vip_pipeline.out 2>&1 &
-
+nohup python -u s2_build_meta2tid_sft_data.py > logs/s2.out 2>&1 &
+nohup python -u s3_build_journey_sft_data.py --task profile2journey --ranked_journey_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study/vip_users_journey_with_products_Ranked.tsv --id2meta_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/id2meta_with_norm.json --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study/sft_data --use_embedding > logs/s3_profile2journey.log 2>&1 &
 
 export LD_LIBRARY_PATH="/scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/build/faiss:/home/aiscuser/.local/lib/python3.12/site-packages/faiss:${LD_LIBRARY_PATH}"
 nohup python -u s0_init_emb.py > logs/s0_init_emb.out 2>&1 &

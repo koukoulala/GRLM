@@ -1,40 +1,42 @@
 """Step 3: Unified Journey SFT Data Builder (Event2Journey + Profile2Journey)
 
-Unified pipeline for building SFT training data from user events/profiles
-to shopping journey predictions.  Supports two tasks via --task:
+Reads step6 merged output (Ranked TSV) and id2meta to build SFT training
+data.  Products are resolved to 7-slot text IDs (TIDs), filtered through
+multiple diversity layers, and assembled into instruction/input/output format.
 
+Pipeline position:
+  step5 (ANN search) → step6 (LLM ranker) → **s3 (SFT data builder)**
+
+Two tasks via --task:
   event2journey:
-    Input: user event history -> Output: predicted shopping journeys
-
+    Input: user event history → Output: predicted shopping journeys with TIDs
   profile2journey:
-    Input: shopping profile + recent events -> Output: predicted shopping journeys
+    Input: shopping profile + recent events → Output: predicted shopping journeys
 
-version adds:
-  - --min_products_per_journey: drop journeys below this product count
-  - --max_journeys: cap journey count per sample (random subsample if exceeded)
-  - --keep_empty_ratio: retain a fraction of zero-journey samples so the model
-    learns that some users have no meaningful upcoming journeys
-  - Comprehensive unified statistics
+Diversity filtering pipeline (per journey):
+  Layer 0: Pre-TID Jaccard word similarity on raw product text
+           → remove near-duplicate products before TID resolution
+  Layer 1 (optional): Pre-TID Cosine embedding similarity
+           → remove semantically similar products (--use_embedding to enable)
+  Layer 2: TID-level hard dedup (7-word overlap threshold)
+  Layer 3: Greedy diversity reranking (word overlap + brand/seller penalty)
 
-Data sources:
-  shopping_journeys.json
-    { UserId: {user_shopping_events, journeys: [{title, reason, product_ids}]} }
-  id2meta.json
+Input:
+  Step6 merged ranked TSV (*_Ranked.tsv):
+    UserId \\t ReadableUserEvents \\t ShoppingProfile \\t
+    JourneyWithProducts \\t RankedJourneys
+
+  id2meta.json:
     { ItemId: {title, description, categories, summary_words, ...} }
-  shopping_profiles.tsv (profile2journey only)
-    UserId \\t ShoppingProfile (JSON string)
 
 Usage:
-  # Event to journey
   python s3_build_journey_sft_data.py --task event2journey \\
-      --shopping_journey_file ./raw_data/shopping_journeys.json \\
+      --ranked_journey_file /path/to/*_Ranked.tsv \\
       --id2meta_file ./processed/id2meta.json \\
       --output_dir ./sft_data
 
-  # Profile to journey
   python s3_build_journey_sft_data.py --task profile2journey \\
-      --shopping_journey_file ./raw_data/shopping_journeys.json \\
-      --shopping_profile_file ./raw_data/shopping_profiles.tsv \\
+      --ranked_journey_file /path/to/*_Ranked.tsv \\
       --id2meta_file ./processed/id2meta.json \\
       --output_dir ./sft_data
 """
@@ -64,17 +66,46 @@ DEFAULT_MIN_PRODUCTS = 8
 DEFAULT_MIN_AVG_PRODUCTS = 8
 DEFAULT_MIN_JOURNEYS = 1
 DEFAULT_MAX_JOURNEYS = 20
-DEFAULT_KEEP_EMPTY_RATIO = 0
+DEFAULT_KEEP_EMPTY_RATIO = 1
 DEFAULT_COUNT_RATIO = 0.6
 DEFAULT_DUP_THRESHOLD = 5
+DEFAULT_JACCARD_THRESHOLD = 0.7
+DEFAULT_COSINE_THRESHOLD = 0.98
 
+
+# =============================================================================
+# JSON Helpers
+# =============================================================================
+
+def _fix_backslash_json(text):
+    """Iteratively fix backslash-escaped quotes and parse as JSON."""
+    if not text or not text.strip():
+        return None
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+    _BS = chr(92)
+    _Q = chr(34)
+    _PH = "\x00_ESC_Q_\x00"
+    cur = text
+    for _ in range(3):
+        if _BS + _Q not in cur:
+            break
+        cur = cur.replace(_BS + _BS + _Q, _PH)
+        cur = cur.replace(_BS + _Q, _Q)
+        cur = cur.replace(_PH, _BS + _Q)
+        try:
+            return json.loads(cur)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return None
 
 
 def _clean_profile_json(raw):
     """Unescape multi-layer escaped profile JSON.
 
-    Handles TSV escaping artifacts where quotes are escaped multiple times:
-      \\\"key\\\" -> "key"
     Returns clean JSON string or original if unparseable.
     """
     if not raw or not raw.strip():
@@ -100,18 +131,8 @@ def _clean_profile_json(raw):
 
 
 # =============================================================================
-# TSV Pair Loading (JWP + ranked files)
+# Input Loading: Step6 Ranked TSV
 # =============================================================================
-
-def _unescape_json(text):
-    """Try to parse JSON, progressively unescaping if needed."""
-    for _ in range(3):
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            text = text.replace('\\"', '"')
-    return None
-
 
 def _parse_event_lines(events_text):
     """Parse ReadableUserEvents from #N#-separated text into event list."""
@@ -123,7 +144,6 @@ def _parse_event_lines(events_text):
         line = line.strip()
         if not line:
             continue
-        # Strip leading event number: "1 | ..."
         m = re.match(r"^\d+\s*\|\s*(.*)", line)
         if m:
             event = m.group(1).strip()
@@ -132,134 +152,120 @@ def _parse_event_lines(events_text):
     return events
 
 
-def load_from_tsv_pair(jwp_path, ranked_path):
-    """Load shopping journey data from a JWP + ranked TSV pair.
+def load_from_ranked_tsv(filepath):
+    """Load shopping journey data from step6 merged Ranked TSV.
 
-    JWP TSV (User-level): UserId, ReadableUserEvents, ShoppingProfile, ...
-    Ranked TSV (Journey-level): UserId, Profile, JourneyIndex, Journey, OUTPUT
+    Ranked TSV columns (from step6 run_merge):
+      UserId, ReadableUserEvents, ShoppingProfile,
+      JourneyWithProducts, RankedJourneys
 
-    Joins on UserId. OUTPUT contains the final ranked journey with:
-      JourneyType, Title, Description, ConversationStarter (string),
-      WhyAmISeeingThis, Products[{OfferId, ...}]
+    RankedJourneys JSON structure:
+      {"ContinuedJourneys": [{
+        "JourneyType": "...", "Title": "...", "Description": "...",
+        "ConversationStarter": "...", "WhyAmISeeingThis": "...",
+        "Products": [{"Rank":1, "OfferId":"...", "Title":"...",
+                      "Seller":"...", "Price":"...", "Brand":"...",
+                      "Category":"...", "OriginalQuery":"..."}],
+        "RankingSummary": {...}
+      }]}
 
     Returns:
-        Dict matching shopping_journeys.json format:
-        {UserId: {user_shopping_events: [...], user_profile: "...",
-                  journeys: [{title, description, conversation_starter,
-                              reason, journey_type, product_ids}, ...]}}
+        Dict: {UserId: {
+          user_shopping_events: [str],
+          user_profile: str,
+          journeys: [{
+            title, description, conversation_starter, reason,
+            journey_type, product_ids: [str],
+            products_info: {OfferId: {Title, Seller, Price, Brand, Category}}
+          }]
+        }}
     """
-    # --- Step 1: Read JWP to get events + profile per user ---
-    print(f"  Loading JWP TSV: {jwp_path}")
-    user_info = {}  # uid -> {events, profile}
-    with open(jwp_path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        for row in reader:
-            uid = row.get("UserId", "").strip()
-            if not uid:
-                continue
-            events_text = row.get("ReadableUserEvents", "")
-            profile_text = (row.get("ShoppingProfile", "")
-                           or row.get("Profile", ""))
-            user_info[uid] = {
-                "events": _parse_event_lines(events_text),
-                "profile": _clean_profile_json(profile_text),
-            }
-    print(f"    Users with events: {len(user_info):,}")
-
-    # --- Step 2: Read ranked TSV, group journeys by UserId + JourneyIndex ---
-    print(f"  Loading ranked TSV: {ranked_path}")
-    # uid -> {index: journey_dict}
-    user_journeys_raw = defaultdict(dict)
+    print(f"  Loading ranked TSV: {filepath}")
+    shopping_data = {}
     total_rows = 0
     parse_fail = 0
-    for ranked_file in ([ranked_path] if isinstance(ranked_path, str)
-                        else ranked_path):
-        with open(ranked_file, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f, delimiter="\t")
-            for row in reader:
-                total_rows += 1
-                uid = row.get("UserId", "").strip()
-                if not uid:
-                    continue
-                j_idx = int(row.get("JourneyIndex", 0))
-                out_text = row.get("OUTPUT", "")
-                out_obj = _unescape_json(out_text)
-                if out_obj is None:
-                    parse_fail += 1
+
+    with open(filepath, "r", encoding="utf-8", buffering=8 << 20) as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            total_rows += 1
+            uid = (row.get("UserId") or "").strip()
+            if not uid:
+                continue
+
+            # Parse events
+            events_text = row.get("ReadableUserEvents", "")
+            events = _parse_event_lines(events_text)
+
+            # Parse profile
+            profile_raw = row.get("ShoppingProfile", "")
+            profile = _clean_profile_json(profile_raw)
+
+            # Parse RankedJourneys
+            ranked_raw = (row.get("RankedJourneys") or "").strip()
+            ranked_obj = _fix_backslash_json(ranked_raw)
+            if ranked_obj is None or "ContinuedJourneys" not in ranked_obj:
+                parse_fail += 1
+                # Still store user with empty journeys if they have events
+                if events:
+                    shopping_data[uid] = {
+                        "user_shopping_events": events,
+                        "user_profile": profile,
+                        "journeys": [],
+                    }
+                continue
+
+            journeys = []
+            for j in ranked_obj["ContinuedJourneys"]:
+                if not isinstance(j, dict):
                     continue
 
-                # Extract product_ids from Products array
-                products = out_obj.get("Products", [])
+                products = j.get("Products", [])
                 product_ids = []
+                products_info = {}
                 for p in products:
+                    if not isinstance(p, dict):
+                        continue
                     oid = str(p.get("OfferId", "")).strip()
-                    if oid:
-                        product_ids.append(oid)
+                    if not oid:
+                        continue
+                    product_ids.append(oid)
+                    products_info[oid] = {
+                        "Title": p.get("Title", ""),
+                        "Seller": p.get("Seller", ""),
+                        "Price": p.get("Price", ""),
+                        "Brand": p.get("Brand", ""),
+                        "Category": p.get("Category", ""),
+                    }
 
-                # Map fields to standard format
-                # ConversationStarter: string -> keep as string
-                # WhyAmISeeingThis -> reason
-                cs = out_obj.get("ConversationStarter", "")
+                cs = j.get("ConversationStarter", "")
                 if isinstance(cs, list):
                     cs = cs[0] if cs else ""
 
-                journey = {
-                    "title": out_obj.get("Title", ""),
-                    "description": out_obj.get("Description", ""),
+                journeys.append({
+                    "title": j.get("Title", ""),
+                    "description": j.get("Description", ""),
                     "conversation_starter": cs,
-                    "reason": out_obj.get("WhyAmISeeingThis",
-                                          out_obj.get("Reason", "")),
-                    "journey_type": out_obj.get("JourneyType", "explicit"),
+                    "reason": j.get("WhyAmISeeingThis", ""),
+                    "journey_type": j.get("JourneyType", "explicit"),
                     "product_ids": product_ids,
-                }
-                user_journeys_raw[uid][j_idx] = journey
+                    "products_info": products_info,
+                })
 
-                # Also grab profile from ranked if not in JWP
-                if uid not in user_info:
-                    profile_text = row.get("Profile", "")
-                    user_info[uid] = {
-                        "events": [],
-                        "profile": _clean_profile_json(profile_text),
-                    }
-
-    print(f"    Ranked rows: {total_rows:,}, parse failures: {parse_fail:,}")
-    print(f"    Users with journeys: {len(user_journeys_raw):,}")
-
-    # --- Step 3: Merge into standard format, sort by JourneyIndex ---
-    shopping_data = {}
-    for uid, info in user_info.items():
-        journeys_by_idx = user_journeys_raw.get(uid, {})
-        # Sort by JourneyIndex to maintain order
-        sorted_journeys = [
-            journeys_by_idx[idx]
-            for idx in sorted(journeys_by_idx.keys())
-        ]
-        entry = {
-            "user_shopping_events": info["events"],
-            "journeys": sorted_journeys,
-        }
-        if info.get("profile"):
-            entry["user_profile"] = info["profile"]
-        shopping_data[uid] = entry
-
-    # Also include users from ranked that weren't in JWP
-    for uid in user_journeys_raw:
-        if uid not in shopping_data:
-            journeys_by_idx = user_journeys_raw[uid]
-            sorted_journeys = [
-                journeys_by_idx[idx]
-                for idx in sorted(journeys_by_idx.keys())
-            ]
             shopping_data[uid] = {
-                "user_shopping_events": [],
-                "journeys": sorted_journeys,
+                "user_shopping_events": events,
+                "user_profile": profile,
+                "journeys": journeys,
             }
 
-    print(f"    Final merged users: {len(shopping_data):,}")
-    total_j = sum(len(v["journeys"]) for v in shopping_data.values())
-    print(f"    Total journeys: {total_j:,}")
+            if total_rows % 100000 == 0:
+                print(f"    ... {total_rows:,} rows", flush=True)
 
+    total_j = sum(len(v["journeys"]) for v in shopping_data.values())
+    print(f"    Rows: {total_rows:,}, parse failures: {parse_fail:,}")
+    print(f"    Users: {len(shopping_data):,}, journeys: {total_j:,}")
     return shopping_data
+
 
 # =============================================================================
 # Time Normalization
@@ -272,23 +278,21 @@ def _normalize_time_expr(match):
                        re.IGNORECASE)
     if not parts:
         return text
-
     total_hours = 0
     total_minutes = 0
     for num_str, unit in parts:
         num = int(num_str)
-        unit_lower = unit.lower()
-        if unit_lower == 'month':
+        u = unit.lower()
+        if u == 'month':
             total_hours += num * 30 * 24
-        elif unit_lower == 'week':
+        elif u == 'week':
             total_hours += num * 7 * 24
-        elif unit_lower == 'day':
+        elif u == 'day':
             total_hours += num * 24
-        elif unit_lower == 'hour':
+        elif u == 'hour':
             total_hours += num
-        elif unit_lower == 'minute':
+        elif u == 'minute':
             total_minutes += num
-
     total_days = total_hours // 24
     if total_days > 0:
         return f"{total_days} days ago"
@@ -306,27 +310,220 @@ def normalize_event_times(text):
 
 
 # =============================================================================
-# Shared Utility Functions
+# Pre-TID Diversity Filtering (Jaccard + optional Cosine)
 # =============================================================================
+
+def _product_text(p_info):
+    """Build text for Jaccard/embedding: Title | Brand | Seller | Price."""
+    parts = []
+    for field in ("Title", "Brand", "Seller", "Price"):
+        val = p_info.get(field, "")
+        if val:
+            parts.append(str(val))
+    return " | ".join(parts)
+
+
+def _jaccard_words(text_a, text_b):
+    """Word-level Jaccard similarity."""
+    words_a = set(text_a.lower().split())
+    words_b = set(text_b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def pre_tid_diversity_filter(product_ids, products_info,
+                             jaccard_thresh=DEFAULT_JACCARD_THRESHOLD,
+                             cosine_thresh=DEFAULT_COSINE_THRESHOLD,
+                             embedding_map=None):
+    """Filter near-duplicate products BEFORE TID resolution.
+
+    Greedy rank-preserving filter: iterate through products in rank order,
+    keep a product only if it is sufficiently different from all already-kept
+    products (by Jaccard word similarity and optionally cosine embedding
+    similarity).
+
+    Returns:
+        Tuple of (filtered_product_ids, n_removed_jaccard, n_removed_cosine).
+    """
+    if len(product_ids) <= 1:
+        return product_ids, 0, 0
+
+    # Pre-compute text representations
+    texts = []
+    for pid in product_ids:
+        p_info = products_info.get(pid, {})
+        texts.append(_product_text(p_info))
+    token_sets = [set(t.lower().split()) for t in texts]
+
+    # Pre-load embeddings if available
+    emb_list = None
+    use_cosine = embedding_map is not None
+    if use_cosine:
+        emb_list = [embedding_map.get(pid) for pid in product_ids]
+
+    kept_indices = [0]  # always keep rank-1 product
+    n_removed_jaccard = 0
+    n_removed_cosine = 0
+
+    for i in range(1, len(product_ids)):
+        is_diverse = True
+
+        for j in kept_indices:
+            # Jaccard check
+            if token_sets[i] and token_sets[j]:
+                inter = token_sets[i] & token_sets[j]
+                union = token_sets[i] | token_sets[j]
+                jac = len(inter) / len(union) if union else 0.0
+                if jac >= jaccard_thresh:
+                    n_removed_jaccard += 1
+                    is_diverse = False
+                    break
+
+            # Cosine check (only if Jaccard passed)
+            if (use_cosine and emb_list[i] is not None
+                    and emb_list[j] is not None):
+                cos = float(np.dot(emb_list[i], emb_list[j]))
+                if cos >= cosine_thresh:
+                    n_removed_cosine += 1
+                    is_diverse = False
+                    break
+
+        if is_diverse:
+            kept_indices.append(i)
+
+    filtered_pids = [product_ids[i] for i in kept_indices]
+    return filtered_pids, n_removed_jaccard, n_removed_cosine
+
+
+def load_or_generate_embeddings(all_product_ids, all_products_info,
+                                embedding_model_path, cache_dir,
+                                batch_size=1024, max_length=512):
+    """Load cached embeddings, generate missing ones, update cache.
+
+    Returns: dict of OfferId -> np.ndarray (L2-normalized).
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, "product_embeddings_cache.npz")
+
+    # Load existing cache
+    cached_map = {}
+    if os.path.exists(cache_file):
+        data = np.load(cache_file, allow_pickle=True)
+        cached_ids = list(data["offer_ids"])
+        cached_embs = data["embeddings"]
+        for i, oid in enumerate(cached_ids):
+            cached_map[str(oid)] = cached_embs[i]
+        print(f"    Loaded embedding cache: {len(cached_map):,} products")
+
+    unique_ids = list(set(all_product_ids))
+    missing_ids = [oid for oid in unique_ids if oid not in cached_map]
+
+    if missing_ids:
+        print(f"    Need embeddings for {len(missing_ids):,} new products "
+              f"({len(unique_ids) - len(missing_ids):,} cached)")
+
+        texts = []
+        valid_ids = []
+        for oid in missing_ids:
+            p = all_products_info.get(oid, {})
+            text = _product_text(p)
+            if text.strip():
+                texts.append(text)
+                valid_ids.append(oid)
+
+        if texts:
+            import torch
+            import torch.nn.functional as F
+            from transformers import AutoModel, AutoTokenizer
+
+            num_gpus = (torch.cuda.device_count()
+                        if torch.cuda.is_available() else 0)
+            device = torch.device("cuda:0" if num_gpus > 0 else "cpu")
+            print(f"    Loading embedding model ({num_gpus} GPUs) ...")
+            model = AutoModel.from_pretrained(
+                embedding_model_path,
+                torch_dtype=torch.float16 if num_gpus > 0 else torch.float32,
+                trust_remote_code=True,
+            ).to(device)
+            if num_gpus > 1:
+                model = torch.nn.DataParallel(model)
+            model.eval()
+            tokenizer = AutoTokenizer.from_pretrained(
+                embedding_model_path, trust_remote_code=True
+            )
+
+            all_embs = []
+            n_batches = (len(texts) + batch_size - 1) // batch_size
+            for b_idx in tqdm(range(n_batches), desc="    Embedding",
+                              mininterval=30):
+                start = b_idx * batch_size
+                batch = texts[start:start + batch_size]
+                inputs = tokenizer(
+                    batch, padding=True, truncation=True,
+                    max_length=max_length, return_tensors="pt",
+                ).to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                    last_hidden = (outputs.last_hidden_state
+                                   if hasattr(outputs, "last_hidden_state")
+                                   else outputs[0])
+                    mask = inputs["attention_mask"].unsqueeze(-1).expand(
+                        last_hidden.size()).float()
+                    embs = (torch.sum(last_hidden * mask, 1)
+                            / torch.clamp(mask.sum(1), min=1e-9))
+                    embs = F.normalize(embs, p=2, dim=1)
+                    all_embs.append(embs.cpu().numpy().astype(np.float32))
+
+            new_embs = np.vstack(all_embs)
+            for i, oid in enumerate(valid_ids):
+                cached_map[oid] = new_embs[i]
+            print(f"    Generated {len(valid_ids):,} new embeddings")
+
+            del model, tokenizer
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+        # Save updated cache
+        all_ids = list(cached_map.keys())
+        all_embs_arr = np.vstack([cached_map[oid] for oid in all_ids])
+        np.savez_compressed(cache_file,
+                            offer_ids=np.array(all_ids),
+                            embeddings=all_embs_arr)
+        print(f"    Updated cache: {len(all_ids):,} products -> {cache_file}")
+    else:
+        print(f"    All {len(unique_ids):,} products found in cache")
+
+    return cached_map
+
+
+# =============================================================================
+# TID Resolution & Post-TID Diversity
+# =============================================================================
+
+# Module-level TID cache: avoid re-parsing summary_words for the same OfferId
+_tid_cache = {}
+
 
 def get_item_tid(item_id, id2meta):
     """Get the text ID (7 summary words) for an item.
 
     Prefers summary_words_norm if available, falls back to summary_words.
-
-    Args:
-        item_id: Item identifier string (GlobalOfferId).
-        id2meta: Dict mapping item IDs to metadata with summary_words.
+    Results are cached in _tid_cache for performance.
 
     Returns:
         Tuple of (list of 7 summary words, used_norm: bool), or (None, False)
         if not found or invalid.
     """
+    cached = _tid_cache.get(item_id)
+    if cached is not None:
+        return cached
+
     if item_id not in id2meta:
+        _tid_cache[item_id] = (None, False)
         return None, False
     meta = id2meta[item_id]
 
-    # Prefer summary_words_norm over summary_words
     used_norm = False
     summary_words = meta.get("summary_words_norm")
     if summary_words and len(summary_words) >= 7 and "" not in summary_words:
@@ -335,6 +532,7 @@ def get_item_tid(item_id, id2meta):
         summary_words = meta.get("summary_words", [])
 
     if not summary_words or "" in summary_words:
+        _tid_cache[item_id] = (None, False)
         return None, False
     valid_words = [
         word.replace("[", "").replace("]", "")
@@ -342,22 +540,18 @@ def get_item_tid(item_id, id2meta):
         if word and word.strip()
     ]
     if len(valid_words) < 7:
+        _tid_cache[item_id] = (None, False)
         return None, False
-    return valid_words[:7], used_norm
+    result = (valid_words[:7], used_norm)
+    _tid_cache[item_id] = result
+    return result
 
 
 def resolve_journey_tids(journey, id2meta, max_products):
     """Resolve a journey's product_ids to text IDs.
 
-    Args:
-        journey: Dict with keys title, reason, product_ids.
-        id2meta: Item ID to metadata mapping.
-        max_products: Maximum number of products to include.
-
-    Returns:
-        Dict with title, reason, product_tids (list of 7-word lists),
-        product_ids (list of resolved item IDs, parallel to product_tids),
-        or None if no products could be resolved.
+    Returns dict with product_tids, product_ids, or None if no products
+    could be resolved.
     """
     product_tids = []
     resolved_pids = []
@@ -393,55 +587,38 @@ def _get_brand_seller(pid, id2meta):
     if meta is None:
         return ("", "")
     attrs = meta.get("attributes", {})
-    brand = attrs.get("Brand", "").strip().lower() if isinstance(attrs.get("Brand"), str) else ""
-    seller = attrs.get("Seller", "").strip().lower() if isinstance(attrs.get("Seller"), str) else ""
+    brand = (attrs.get("Brand", "").strip().lower()
+             if isinstance(attrs.get("Brand"), str) else "")
+    seller = (attrs.get("Seller", "").strip().lower()
+              if isinstance(attrs.get("Seller"), str) else "")
     return (brand, seller)
 
 
 def diversify_journey_products(product_tids, product_ids, id2meta,
                                dup_threshold=DEFAULT_DUP_THRESHOLD,
                                max_products=None, dynamic_threshold=True):
-    """Diversify products within a single journey via dedup + greedy reranking.
+    """Diversify products via TID-level hard dedup + greedy reranking.
 
-    Stage 1 — Hard dedup: remove products whose summary words overlap
-    >= dup_threshold/7 with any already-selected product.
-    If dynamic_threshold is True and max_products is given, dup_threshold
-    is set dynamically:
-      - < max_products/2 products → threshold=dup_threshold (conservative)
-      - >= max_products/2 products → threshold=dup_threshold-1 (aggressive)
+    Stage 1 — Hard dedup: remove products whose 7-word TID overlap
+    >= dup_threshold with any already-selected product.
 
     Stage 2 — Greedy diversity reranking: iteratively pick the candidate
-    with the lowest effective score (word overlap + brand/seller penalty)
-    against the already-selected set. Brand/seller repetition adds +1
-    penalty to the overlap score, making it a primary ranking factor
-    rather than just a tiebreaker.
-
-    Args:
-        product_tids: List of 7-word lists (parallel with product_ids).
-        product_ids: List of item IDs (parallel with product_tids).
-        id2meta: Item metadata dict for brand/seller lookup.
-        dup_threshold: Min word overlap to consider near-duplicate (default 6).
-            Overridden by dynamic logic if max_products is provided.
-        max_products: If provided, dynamically set dup_threshold based on
-            product count vs max_products/2.
+    with the lowest effective score (word overlap + brand/seller penalty).
 
     Returns:
-        Tuple (deduped_tids, deduped_pids, num_removed_dedup) where
-        deduped_tids/pids are reordered for diversity.
+        Tuple (deduped_tids, deduped_pids, num_removed_dedup).
     """
     n = len(product_tids)
     if n <= 1:
         return product_tids, product_ids, 0
 
-    # Dynamic dup_threshold: fewer products → conservative (dup_threshold),
-    # plenty of products → aggressive (dup_threshold - 1)
     if dynamic_threshold and max_products is not None:
-        dup_threshold = dup_threshold if n < max_products // 2 else max(dup_threshold - 1, 1)
+        dup_threshold = (dup_threshold if n < max_products // 2
+                         else max(dup_threshold - 1, 1))
 
-    # Convert tids to word sets for fast overlap computation
     word_sets = [set(tid) for tid in product_tids]
 
-    # Stage 1: Hard dedup — remove near-duplicates
+    # Stage 1: Hard dedup
     keep_mask = [True] * n
     num_removed = 0
     for i in range(1, n):
@@ -456,7 +633,6 @@ def diversify_journey_products(product_tids, product_ids, id2meta,
                 num_removed += 1
                 break
 
-    # Build candidate pool after dedup
     cand_tids = [product_tids[i] for i in range(n) if keep_mask[i]]
     cand_pids = [product_ids[i] for i in range(n) if keep_mask[i]]
     cand_sets = [word_sets[i] for i in range(n) if keep_mask[i]]
@@ -464,37 +640,31 @@ def diversify_journey_products(product_tids, product_ids, id2meta,
     if len(cand_tids) <= 1:
         return cand_tids, cand_pids, num_removed
 
-    # Pre-fetch brand/seller for candidates
+    # Pre-fetch brand/seller
     cand_bs = [_get_brand_seller(pid, id2meta) for pid in cand_pids]
 
     # Stage 2: Greedy diversity reranking
-    # Start with the first candidate (highest ANN relevance)
     selected_idx = [0]
     remaining = set(range(1, len(cand_tids)))
 
     while remaining:
         best_i = None
-        best_score = 9  # worse than any real score (max overlap 7 + penalty 1)
+        best_score = 9
 
         for i in remaining:
-            # max overlap with any selected product
             max_ov = max(len(cand_sets[i] & cand_sets[s]) for s in selected_idx)
 
-            # brand/seller penalty: +1 if brand OR seller overlaps with any
-            # selected product (promotes brand/seller diversity as a primary
-            # ranking factor, not just a tiebreaker)
             b_i, s_i = cand_bs[i]
             brand_penalty = 0
             if b_i or s_i:
                 for s in selected_idx:
                     b_s, s_s = cand_bs[s]
-                    if (b_i and b_s and b_i == b_s) or \
-                       (s_i and s_s and s_i == s_s):
+                    if ((b_i and b_s and b_i == b_s)
+                            or (s_i and s_s and s_i == s_s)):
                         brand_penalty = 1
                         break
 
             effective_score = max_ov + brand_penalty
-
             if effective_score < best_score:
                 best_score = effective_score
                 best_i = i
@@ -507,21 +677,17 @@ def diversify_journey_products(product_tids, product_ids, id2meta,
     return reranked_tids, reranked_pids, num_removed
 
 
+# =============================================================================
+# Instruction / Input / Output Builders
+# =============================================================================
+
 def build_output_json(resolved_journeys):
     """Build the structured JSON output string for SFT training.
 
     Output format:
     {"ContinuedJourneys":[{"JourneyType":"...","Title":"...",
      "Description":"...","ConversationStarter":"...",
-     "Reason":"...","ProductTIDs":[["a","b",...],...]},...
-    ]}
-
-    Args:
-        resolved_journeys: List of dicts with journey_type, title,
-            description, conversation_starter, reason, product_tids.
-
-    Returns:
-        JSON string.
+     "Reason":"...","ProductTIDs":[["a","b",...],...]},...]}
     """
     continued = []
     for j in resolved_journeys:
@@ -536,29 +702,15 @@ def build_output_json(resolved_journeys):
     return json.dumps({"ContinuedJourneys": continued}, ensure_ascii=False)
 
 
-# =============================================================================
-# Task-Specific Builders
-# =============================================================================
-
 def create_instruction(task, num_journeys, min_products_in_user,
                        count_ratio=DEFAULT_COUNT_RATIO):
-    """Create instruction text and requirement lines.
-
-    The instruction is a single paragraph matching the canonical format:
-      "Based on ... predict {N} shopping journey(s) ... at least {M}
-       recommended products ... Output JSON: {...}."
-
-    Requirement lines are also returned separately to be appended to the
-    input text for extra emphasis.
+    """Create instruction text.
 
     Returns:
-        Tuple of (instruction_text, has_count, requirements) where
-        has_count indicates whether the specific journey count was included,
-        and requirements is a list of requirement strings.
+        Tuple of (instruction_text, has_count, prompt_line).
     """
     has_count = num_journeys > 0 and random.random() < count_ratio
 
-    # --- Build opening with embedded journey count ---
     if task == "event2journey":
         if has_count:
             opening = (f"Based on the user's shopping event history, predict "
@@ -574,10 +726,8 @@ def create_instruction(task, num_journeys, min_products_in_user,
             opening = ("Based on the user's shopping profile and shopping event history, predict "
                        "an appropriate number of shopping journey(s) the user is likely to pursue.")
 
-    # --- Embed product count into description ---
     product_text = f"at least {min_products_in_user}"
 
-    # --- Single-paragraph instruction ---
     instruction = (
         f"{opening}"
         f" Each journey has a JourneyType ('explicit' or 'related'),"
@@ -589,7 +739,7 @@ def create_instruction(task, num_journeys, min_products_in_user,
         f" a Reason (explains which user signals triggered this journey),"
         f" and {product_text} recommended products as text IDs (7 slots each)."
         f" Products within each journey must be diverse:"
-        f" cover different brands, styles, use cases, and subcategories."
+        f" cover different sellers, brands, styles, use cases, and subcategories."
         f' Output JSON:'
         f' {{"ContinuedJourneys":[{{"JourneyType":"...","Title":"...",'
         f'"Description":"...","ConversationStarter":"...",'
@@ -597,7 +747,6 @@ def create_instruction(task, num_journeys, min_products_in_user,
         f'"ProductTIDs":[["s1","s2","s3","s4","s5","s6","s7"],...]}},...]}}.'
     )
 
-    # --- Build prompt line with embedded requirements ---
     if has_count:
         jword = "journey" if num_journeys == 1 else "journeys"
         prompt_line = (f"Predict the user's shopping journeys, "
@@ -614,14 +763,6 @@ def build_input_text(task, user_events, max_events,
                      profile_text=None, max_recent_events=None,
                      prompt_line=None):
     """Build input text based on task type.
-
-    Args:
-        task: "event2journey" or "profile2journey".
-        user_events: Full list of user event strings (newest first).
-        max_events: Max events for event2journey.
-        profile_text: Profile JSON string (profile2journey only).
-        max_recent_events: Max recent events for profile2journey.
-        prompt_line: Final prompt string with embedded requirements.
 
     Returns:
         Tuple of (input_text, num_events_used).
@@ -671,14 +812,12 @@ def save_sft_data(sft_data, output_file):
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # Full version with all metadata
     full_file = output_file.replace(".json", "_full.json")
     with open(full_file, "w", encoding="utf-8") as f:
         json.dump(sft_data, f, ensure_ascii=False, indent=2)
     full_mb = os.path.getsize(full_file) / (1024 * 1024)
     print(f"Full data saved: {full_file} ({full_mb:.1f} MB)")
 
-    # Training version (instruction, input, output only)
     training_data = [
         {
             "instruction": s["instruction"],
@@ -701,6 +840,9 @@ def create_sft_data(
     task,
     shopping_journey_data,
     id2meta,
+    embedding_map=None,
+    jaccard_threshold=DEFAULT_JACCARD_THRESHOLD,
+    cosine_threshold=DEFAULT_COSINE_THRESHOLD,
     max_events=DEFAULT_MAX_EVENTS,
     max_recent_events=DEFAULT_MAX_RECENT_EVENTS,
     max_products=DEFAULT_MAX_PRODUCTS,
@@ -714,19 +856,11 @@ def create_sft_data(
 ):
     """Create SFT data for the specified task.
 
-    Args:
-        task: "event2journey" or "profile2journey".
-        shopping_journey_data: Dict of UserId -> journey entry.
-            For profile2journey, each entry must have a "user_profile" key.
-        id2meta: Item ID to metadata mapping.
-        max_events: Max events for event2journey input.
-        max_recent_events: Max recent events for profile2journey input.
-        max_products: Max products per journey in output.
-        min_products: Min products per journey; journeys below are dropped.
-        min_journeys: Min journeys per user after filtering (default 1).
-        max_journeys: Max journeys per sample; excess are subsampled (default 10).
-        keep_empty_ratio: Fraction of zero-journey users to retain.
-        count_ratio: Probability of including journey count in instruction.
+    Filtering pipeline per journey:
+      1. Pre-TID: Jaccard + optional Cosine on raw product text
+      2. TID resolution: OfferId -> 7-word summary
+      3. Post-TID: hard dedup (word overlap) + greedy reranking
+      4. min_products filter
 
     Returns:
         List of SFT sample dicts.
@@ -735,30 +869,34 @@ def create_sft_data(
     skip_reasons = defaultdict(int)
     total_entries = len(shopping_journey_data)
 
-    # Statistics
-    event_counts = []
-    journey_counts = []       # per-user journey count (after all filtering)
-    product_counts = []       # per-journey product count (after all filtering)
-    user_total_products = []  # per-user total product count
-    original_products_per_journey = []
-    resolved_products_per_journey = []
-    skipped_journeys_no_tid = 0
-    skipped_journeys_min_products = 0
+    # ---- Per-journey pipeline stats (ALL journeys, unified tracking) ----
+    # Each journey gets a tuple: (s0_original, s1_after_jaccard, s2_after_tid,
+    #                              s3_after_dedup, status)
+    # status: "kept", "no_tid", "min_products"
+    journey_pipeline = []
+    total_pre_tid_removed_jaccard = 0
+    total_pre_tid_removed_cosine = 0
+    total_tid_dedup_removed = 0
+
+    # ---- User-level stats ----
+    users_low_avg_products = 0
+    users_half_filtered = 0
+    users_below_min_journeys = 0
     empty_journey_total = 0
     empty_journey_kept = 0
     subsampled_users = 0
     original_journey_counts_before_subsample = []
+
+    # ---- Output sample stats ----
+    event_counts = []
+    journey_counts = []
+    product_counts = []         # per-journey final product count (output)
+    user_total_products = []    # per-user total product count (output)
     instruction_with_count = 0
     instruction_without_count = 0
-    users_half_filtered = 0        # users dropped because >= 50% journeys filtered
-    users_below_min_journeys = 0   # users dropped because < min_journeys after filtering
-    min_product_values_in_instruction = []  # track the dynamic "at least N" values
-    # Diversity statistics
-    total_dedup_removed = 0
-    products_before_diversity = []
-    products_after_diversity = []
-    users_low_avg_products = 0  # users dropped by avg product filter
-    # Norm TID statistics
+    min_product_values_in_instruction = []
+
+    # ---- Norm TID stats ----
     total_norm_tids = 0
     total_resolved_tids = 0
 
@@ -774,17 +912,15 @@ def create_sft_data(
             skip_reasons["no_user_events"] += 1
             continue
 
-        # Task-specific: profile2journey requires a profile in the entry
         if task == "profile2journey":
             user_profile = _clean_profile_json(entry.get("user_profile", ""))
             if not user_profile:
                 skip_reasons["no_profile"] += 1
                 continue
+        else:
+            user_profile = None  # not used for event2journey
 
-        # ---- User-level pre-filter: average resolvable products per journey ----
-        # Quickly estimate avg product quality BEFORE expensive diversity ops.
-        # If a user's journeys have too few resolvable products on average,
-        # skip the entire user early — saves time and removes low-quality data.
+        # ---- User-level pre-filter: average resolvable products ----
         if journeys:
             resolvable_counts = []
             for j in journeys:
@@ -799,19 +935,42 @@ def create_sft_data(
                 skip_reasons["low_avg_products"] += 1
                 continue
 
-        # Resolve all journeys' product IDs to TIDs, then diversify
+        # ---- Per-journey filtering pipeline ----
         resolved_journeys = []
-        journeys_before_filter = 0  # only count journeys that had valid TIDs
+        journeys_before_filter = 0
+
         for journey in journeys:
             orig_count = len(journey.get("product_ids", []))
-            resolved = resolve_journey_tids(journey, id2meta, max_products)
+
+            # Layer 0+1: Pre-TID diversity (Jaccard + optional Cosine)
+            pre_pids = journey.get("product_ids", [])
+            products_info = journey.get("products_info", {})
+
+            filtered_pids, n_jac, n_cos = pre_tid_diversity_filter(
+                pre_pids, products_info,
+                jaccard_thresh=jaccard_threshold,
+                cosine_thresh=cosine_threshold,
+                embedding_map=embedding_map,
+            )
+            total_pre_tid_removed_jaccard += n_jac
+            total_pre_tid_removed_cosine += n_cos
+            n_after_jaccard = len(filtered_pids)
+
+            # Update product_ids for TID resolution
+            journey_filtered = dict(journey)
+            journey_filtered["product_ids"] = filtered_pids
+
+            # Layer 2: TID resolution
+            resolved = resolve_journey_tids(journey_filtered, id2meta,
+                                            max_products)
             if resolved is None:
-                skipped_journeys_no_tid += 1
+                journey_pipeline.append(
+                    (orig_count, n_after_jaccard, 0, 0, "no_tid"))
                 continue
             journeys_before_filter += 1
+            n_after_tid = len(resolved["product_tids"])
 
-            # Apply diversity: hard dedup + greedy reranking
-            pre_div_count = len(resolved["product_tids"])
+            # Layer 3: Post-TID diversity (hard dedup + greedy reranking)
             div_tids, div_pids, n_removed = diversify_journey_products(
                 resolved["product_tids"], resolved["product_ids"], id2meta,
                 dup_threshold=dup_threshold,
@@ -819,21 +978,29 @@ def create_sft_data(
             )
             resolved["product_tids"] = div_tids
             resolved["product_ids"] = div_pids
-            total_dedup_removed += n_removed
-            products_before_diversity.append(pre_div_count)
-            products_after_diversity.append(len(div_tids))
+            total_tid_dedup_removed += n_removed
+            n_after_dedup = len(div_tids)
 
-            # Apply min_products filter AFTER diversity
-            if len(resolved["product_tids"]) < min_products:
-                skipped_journeys_min_products += 1
+            # min_products filter AFTER all diversity steps
+            if n_after_dedup < min_products:
+                journey_pipeline.append(
+                    (orig_count, n_after_jaccard, n_after_tid, n_after_dedup,
+                     "min_products"))
                 continue
-            original_products_per_journey.append(orig_count)
-            resolved_products_per_journey.append(len(resolved["product_tids"]))
-            total_norm_tids += resolved.get("norm_count", 0)
-            total_resolved_tids += len(resolved["product_tids"])
+
+            journey_pipeline.append(
+                (orig_count, n_after_jaccard, n_after_tid, n_after_dedup,
+                 "kept"))
+            # Recount norm TIDs based on final kept product_ids
+            final_norm = sum(
+                1 for pid in resolved["product_ids"]
+                if get_item_tid(pid, id2meta)[1]
+            )
+            total_norm_tids += final_norm
+            total_resolved_tids += n_after_dedup
             resolved_journeys.append(resolved)
 
-        # Check if >= 50% of this user's journeys were filtered out
+        # Check if >= 50% of journeys were filtered out
         if journeys_before_filter > 0 and resolved_journeys:
             filtered_count = journeys_before_filter - len(resolved_journeys)
             if filtered_count >= journeys_before_filter / 2:
@@ -841,34 +1008,32 @@ def create_sft_data(
                 skip_reasons["half_journeys_filtered"] += 1
                 continue
 
-        # Handle empty journeys: only keep users who originally had NO journeys
-        # (not users whose journeys were all filtered out)
+        # Handle empty journeys
         if not resolved_journeys:
             if not journeys:
-                # Originally had no journeys — candidate for empty sample
                 empty_journey_total += 1
                 if random.random() >= keep_empty_ratio:
                     skip_reasons["empty_journeys_sampled_out"] += 1
                     continue
                 empty_journey_kept += 1
             else:
-                # Had journeys but all were filtered out — skip entirely
                 skip_reasons["all_journeys_filtered"] += 1
                 continue
 
-        # Journey subsampling if exceeding max_journeys
+        # Journey subsampling
         if max_journeys is not None and len(resolved_journeys) > max_journeys:
             subsampled_users += 1
-            original_journey_counts_before_subsample.append(len(resolved_journeys))
+            original_journey_counts_before_subsample.append(
+                len(resolved_journeys))
             resolved_journeys = random.sample(resolved_journeys, max_journeys)
 
-        # Check min_journeys (skip if below, but allow empty-journey samples)
+        # min_journeys check
         if resolved_journeys and len(resolved_journeys) < min_journeys:
             users_below_min_journeys += 1
             skip_reasons["below_min_journeys"] += 1
             continue
 
-        # Compute num_journeys and min product count from FINAL output
+        # Build instruction / input / output
         final_num_journeys = len(resolved_journeys)
         if resolved_journeys:
             min_products_in_user = min(
@@ -877,21 +1042,19 @@ def create_sft_data(
         else:
             min_products_in_user = min_products
 
-        # Instruction uses FINAL counts (after diversity + subsampling)
         instruction, has_count, prompt_line = create_instruction(
             task, final_num_journeys, min_products_in_user, count_ratio,
         )
 
-        # Build input text (prompt_line is the final line with embedded requirements)
         if task == "event2journey":
             input_text, num_events_used = build_input_text(
                 task, user_events, max_events,
                 prompt_line=prompt_line,
             )
-        else:  # profile2journey
+        else:
             input_text, num_events_used = build_input_text(
                 task, user_events, max_events,
-                profile_text=_clean_profile_json(entry.get("user_profile", "")),
+                profile_text=user_profile,
                 max_recent_events=max_recent_events,
                 prompt_line=prompt_line,
             )
@@ -929,163 +1092,157 @@ def create_sft_data(
         user_total_products.append(user_prod_total)
 
     # =========================================================================
-    # Comprehensive Statistics
+    # Comprehensive Statistics (organized by pipeline stage)
     # =========================================================================
     print(f"\n{'=' * 70}")
     print(f"Data Statistics ({task})")
     print(f"{'=' * 70}")
-    print(f"  Total entries in data:        {total_entries:>10,}")
+
+    # ------------------------------------------------------------------
+    # Section 1: Per-Journey Product Pipeline
+    # ------------------------------------------------------------------
+    if journey_pipeline:
+        s0 = np.array([t[0] for t in journey_pipeline])
+        s1 = np.array([t[1] for t in journey_pipeline])
+        s2 = np.array([t[2] for t in journey_pipeline])
+        s3 = np.array([t[3] for t in journey_pipeline])
+        statuses = [t[4] for t in journey_pipeline]
+        n_no_tid = statuses.count("no_tid")
+        n_min_prod = statuses.count("min_products")
+        n_kept = statuses.count("kept")
+
+        has_tid_mask = s2 > 0
+        s2_valid = s2[has_tid_mask]
+        s3_valid = s3[has_tid_mask]
+
+        print(f"\n--- Section 1: Per-Journey Product Pipeline "
+              f"({len(journey_pipeline):,} journeys) ---")
+        print(f"  Stage 0  From ranker:          "
+              f"Mean={s0.mean():>5.1f}  Min={s0.min():>3}  "
+              f"Max={s0.max():>3}  Total={s0.sum():>10,}")
+        jac_info = f"Jaccard >= {jaccard_threshold}: -{total_pre_tid_removed_jaccard:,}"
+        if embedding_map is not None:
+            jac_info += f", Cosine >= {cosine_threshold}: -{total_pre_tid_removed_cosine:,}"
+        else:
+            jac_info += " (Cosine: OFF)"
+        print(f"      ↓ {jac_info}")
+        print(f"  Stage 1  After Jaccard filter:  "
+              f"Mean={s1.mean():>5.1f}  Min={s1.min():>3}  "
+              f"Max={s1.max():>3}  Total={s1.sum():>10,}")
+        print(f"      ↓ OfferId → TID resolve (max_products={max_products})")
+        if len(s2_valid) > 0:
+            print(f"  Stage 2  After TID resolution:  "
+                  f"Mean={s2_valid.mean():>5.1f}  Min={s2_valid.min():>3}  "
+                  f"Max={s2_valid.max():>3}  Total={s2_valid.sum():>10,}  "
+                  f"({len(s2_valid):,} journeys)")
+        if n_no_tid > 0:
+            print(f"      ✗ {n_no_tid:,} journeys dropped (0 TIDs resolved)")
+        print(f"      ↓ TID hard dedup (overlap >= {dup_threshold}/7): "
+              f"-{total_tid_dedup_removed:,} products")
+        if len(s3_valid) > 0:
+            print(f"  Stage 3  After TID dedup:       "
+                  f"Mean={s3_valid.mean():>5.1f}  Min={s3_valid.min():>3}  "
+                  f"Max={s3_valid.max():>3}  Total={s3_valid.sum():>10,}")
+        if n_min_prod > 0:
+            print(f"      ✗ {n_min_prod:,} journeys dropped "
+                  f"(< {min_products} products)")
+        print(f"  Result:  {n_kept:,} journeys kept / "
+              f"{len(journey_pipeline):,} total")
+
+    # ------------------------------------------------------------------
+    # Section 2: User-Level Filtering
+    # ------------------------------------------------------------------
+    print(f"\n--- Section 2: User-Level Filtering ---")
+    print(f"  Total users in data:             {total_entries:>10,}")
     if task == "profile2journey":
         profile_count = sum(
-            1 for e in shopping_journey_data.values() if e.get("user_profile")
+            1 for e in shopping_journey_data.values()
+            if e.get("user_profile")
         )
-        print(f"  Entries with user_profile:     {profile_count:>10,}")
-    print(f"  Generated samples:            {len(sft_data):>10,}")
-
-    # Skip reasons
-    print(f"\n  --- Skip Reasons ---")
-    if skip_reasons:
-        for reason, count in sorted(skip_reasons.items(), key=lambda x: -x[1]):
-            print(f"    {reason:35s} {count:>10,}")
-    else:
-        print(f"    (none)")
-
-    # Journey resolution
-    total_input_journeys = (len(original_products_per_journey)
-                            + skipped_journeys_no_tid
-                            + skipped_journeys_min_products)
-    print(f"\n  --- Journey Resolution ---")
-    print(f"  Total journeys in data:       {total_input_journeys:>10,}")
-    print(f"  Kept (>= {min_products} product(s)):     {len(original_products_per_journey):>10,}")
-    print(f"  Dropped (0 TIDs resolved):    {skipped_journeys_no_tid:>10,}")
-    print(f"  Dropped (< {min_products} products):     {skipped_journeys_min_products:>10,}")
-
-    # User-level filtering
-    print(f"\n  --- User-Level Filtering ---")
-    print(f"  Users dropped (>= 50% journeys filtered): {users_half_filtered:>10,}")
-    print(f"  Users dropped (low avg products < {min_avg_products}): {users_low_avg_products:>10,}")
-    print(f"  Users dropped (< {min_journeys} journey after filter): {users_below_min_journeys:>10,}")
-
-    # Empty journey handling
-    print(f"\n  --- Empty Journey Handling ---")
-    print(f"  Users with 0 valid journeys:  {empty_journey_total:>10,}")
-    print(f"  Kept as empty samples:        {empty_journey_kept:>10,}")
-    print(f"  Sampled out:                  {empty_journey_total - empty_journey_kept:>10,}")
-    print(f"  Keep ratio (config):          {keep_empty_ratio:>10.1%}")
+        print(f"  With user_profile:               {profile_count:>10,}")
+    print(f"  Dropped (no events):             "
+          f"{skip_reasons.get('no_user_events', 0):>10,}")
+    if task == "profile2journey":
+        print(f"  Dropped (no profile):            "
+              f"{skip_reasons.get('no_profile', 0):>10,}")
+    print(f"  Dropped (low avg products < {min_avg_products}):"
+          f"     {users_low_avg_products:>10,}")
+    print(f"  Dropped (>= 50% journeys filtered):"
+          f"  {users_half_filtered:>10,}")
+    print(f"  Dropped (all journeys filtered): "
+          f"{skip_reasons.get('all_journeys_filtered', 0):>10,}")
+    print(f"  Dropped (< {min_journeys} journey after filter):"
+          f"   {users_below_min_journeys:>10,}")
     if empty_journey_total > 0:
-        actual_ratio = empty_journey_kept / empty_journey_total
-        print(f"  Actual kept ratio:            {actual_ratio:>10.1%}")
+        print(f"  Empty journey users:              "
+              f"{empty_journey_total:>10,}  "
+              f"(kept {empty_journey_kept}, "
+              f"ratio={keep_empty_ratio:.1f})")
+    if max_journeys is not None and subsampled_users > 0:
+        arr = np.array(original_journey_counts_before_subsample)
+        print(f"  Subsampled (> {max_journeys} journeys):      "
+              f"{subsampled_users:>10,}  "
+              f"(orig mean={arr.mean():.1f}, max={arr.max()})")
+    print(f"  Final SFT samples (users):       {len(sft_data):>10,}")
 
-    # Journey subsampling
-    if max_journeys is not None:
-        print(f"\n  --- Journey Subsampling ---")
-        print(f"  max_journeys:                 {max_journeys:>10}")
-        print(f"  Users subsampled:             {subsampled_users:>10,}")
-        if original_journey_counts_before_subsample:
-            arr = np.array(original_journey_counts_before_subsample)
-            print(f"  Orig journeys (subsampled users): "
-                  f"Mean={arr.mean():.1f}, Max={arr.max()}")
+    # ------------------------------------------------------------------
+    # Section 3: Output Sample Statistics
+    # ------------------------------------------------------------------
+    print(f"\n--- Section 3: Output Statistics ({len(sft_data):,} samples) ---")
 
-    # Instruction count inclusion
     total_instructions = instruction_with_count + instruction_without_count
-    print(f"\n  --- Instruction Variants ---")
-    print(f"  With journey count:           {instruction_with_count:>10,} "
-          f"({instruction_with_count / max(total_instructions, 1) * 100:.1f}%)")
-    print(f"  Without journey count:        {instruction_without_count:>10,} "
-          f"({instruction_without_count / max(total_instructions, 1) * 100:.1f}%)")
+    if total_instructions > 0:
+        print(f"  Instruction with count:    {instruction_with_count:>8,} "
+              f"({instruction_with_count / total_instructions * 100:.0f}%)"
+              f"   without: {instruction_without_count:,} "
+              f"({instruction_without_count / total_instructions * 100:.0f}%)")
     if min_product_values_in_instruction:
         arr = np.array(min_product_values_in_instruction)
-        print(f"  'at least N' in instruction:  "
-              f"Min={arr.min()}, Max={arr.max()}, Mean={arr.mean():.1f}, "
-              f"Median={int(np.median(arr))}")
+        print(f"  'at least N' products:     "
+              f"Min={arr.min()}, Max={arr.max()}, Mean={arr.mean():.1f}")
 
-    # Event distribution
     if event_counts:
         arr = np.array(event_counts)
-        print(f"\n  --- Events per Sample ---")
-        print(f"    Min: {arr.min():>6}  P25: {int(np.percentile(arr, 25)):>6}  "
-              f"P50: {int(np.percentile(arr, 50)):>6}  P75: {int(np.percentile(arr, 75)):>6}  "
-              f"P90: {int(np.percentile(arr, 90)):>6}  Max: {arr.max():>6}  "
-              f"Mean: {arr.mean():.1f}")
-
-    # Journey count distribution (bucket view)
+        print(f"  Events/sample:   Mean={arr.mean():>6.1f}  "
+              f"P50={int(np.percentile(arr, 50)):>5}  "
+              f"P90={int(np.percentile(arr, 90)):>5}  "
+              f"Max={arr.max():>5}")
     if journey_counts:
         arr = np.array(journey_counts)
-        print(f"\n  --- Journeys per User (after filtering) ---")
-        print(f"    Min: {arr.min():>6}  Max: {arr.max():>6}  "
-              f"Mean: {arr.mean():.1f}  Median: {np.median(arr):.1f}")
-        jc_dist = defaultdict(int)
-        for c in journey_counts:
-            jc_dist[c] += 1
-        print(f"    Bucket distribution:")
-        for cnt in sorted(jc_dist.keys()):
-            label = f"{cnt} journey" if cnt == 1 else f"{cnt} journeys"
-            pct = jc_dist[cnt] / len(journey_counts) * 100
-            bar = "#" * int(pct / 2)
-            print(f"      {label:>12s}: {jc_dist[cnt]:>8,} users ({pct:5.1f}%) {bar}")
-
-    # Products per journey
+        print(f"  Journeys/user:   Mean={arr.mean():>6.1f}  "
+              f"P50={int(np.percentile(arr, 50)):>5}  "
+              f"P90={int(np.percentile(arr, 90)):>5}  "
+              f"Max={arr.max():>5}")
     if product_counts:
         arr = np.array(product_counts)
-        print(f"\n  --- Products per Journey (resolved TIDs) ---")
-        print(f"    Min: {arr.min():>6}  P25: {int(np.percentile(arr, 25)):>6}  "
-              f"P50: {int(np.percentile(arr, 50)):>6}  P75: {int(np.percentile(arr, 75)):>6}  "
-              f"P90: {int(np.percentile(arr, 90)):>6}  Max: {arr.max():>6}  "
-              f"Mean: {arr.mean():.1f}")
-        pc_dist = defaultdict(int)
-        for c in product_counts:
-            pc_dist[c] += 1
-        print(f"    Distribution:")
-        for cnt in sorted(pc_dist.keys()):
-            pct = pc_dist[cnt] / len(product_counts) * 100
-            print(f"      {cnt:>3} products: {pc_dist[cnt]:>10,} journeys ({pct:5.1f}%)")
-
-    # Total products per user
+        print(f"  Products/journey:Mean={arr.mean():>6.1f}  "
+              f"P50={int(np.percentile(arr, 50)):>5}  "
+              f"Min={arr.min():>5}  Max={arr.max():>5}")
     if user_total_products:
         arr = np.array(user_total_products)
-        print(f"\n  --- Total Products per User ---")
-        print(f"    Min: {arr.min():>6}  P25: {int(np.percentile(arr, 25)):>6}  "
-              f"P50: {int(np.percentile(arr, 50)):>6}  P75: {int(np.percentile(arr, 75)):>6}  "
-              f"P90: {int(np.percentile(arr, 90)):>6}  Max: {arr.max():>6}  "
-              f"Mean: {arr.mean():.1f}")
+        print(f"  Products/user:   Mean={arr.mean():>6.1f}  "
+              f"P50={int(np.percentile(arr, 50)):>5}  "
+              f"Min={arr.min():>5}  Max={arr.max():>5}")
 
-    # Product TID resolution statistics
-    if original_products_per_journey:
-        orig_arr = np.array(original_products_per_journey)
-        res_arr = np.array(resolved_products_per_journey)
-        rates = res_arr / np.maximum(orig_arr, 1)
-        print(f"\n  --- Product TID Resolution (per kept journey) ---")
-        print(f"    Original products/journey:  "
-              f"Mean={orig_arr.mean():.1f}, Median={np.median(orig_arr):.1f}, "
-              f"Min={orig_arr.min()}, Max={orig_arr.max()}")
-        print(f"    Resolved products/journey:  "
-              f"Mean={res_arr.mean():.1f}, Median={np.median(res_arr):.1f}, "
-              f"Min={res_arr.min()}, Max={res_arr.max()}")
-        print(f"    Resolution rate:            "
-              f"Mean={rates.mean():.1%}, Median={np.median(rates):.1%}")
+    if sft_data:
+        type_dist = defaultdict(int)
+        for s in sft_data:
+            try:
+                out_obj = json.loads(s["output"])
+                for j in out_obj.get("ContinuedJourneys", []):
+                    type_dist[j.get("JourneyType", "explicit")] += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+        total_j_out = sum(type_dist.values())
+        if total_j_out > 0:
+            parts = [f"{jt}: {c:,} ({c / total_j_out * 100:.0f}%)"
+                     for jt, c in sorted(type_dist.items(), key=lambda x: -x[1])]
+            print(f"  Journey types:   {', '.join(parts)}")
 
-    # Product diversity statistics
-    if products_before_diversity:
-        before_arr = np.array(products_before_diversity)
-        after_arr = np.array(products_after_diversity)
-        print(f"\n  --- Product Diversity (hard dedup + greedy reranking) ---")
-        print(f"    Total near-duplicate products removed: {total_dedup_removed:>10,}")
-        print(f"    Products/journey before diversity: "
-              f"Mean={before_arr.mean():.1f}, Min={before_arr.min()}, Max={before_arr.max()}")
-        print(f"    Products/journey after diversity:  "
-              f"Mean={after_arr.mean():.1f}, Min={after_arr.min()}, Max={after_arr.max()}")
-        reduced = before_arr - after_arr
-        if reduced.sum() > 0:
-            print(f"    Reduction per journey:            "
-                  f"Mean={reduced.mean():.1f}, Max={reduced.max()}")
-
-    # summary_words_norm usage statistics
-    print(f"\n  --- Summary Words Norm Usage ---")
-    print(f"  Total resolved TIDs (kept journeys): {total_resolved_tids:>10,}")
-    print(f"  Using summary_words_norm:            {total_norm_tids:>10,} "
-          f"({total_norm_tids / max(total_resolved_tids, 1) * 100:.1f}%)")
-    print(f"  Using summary_words (fallback):      {total_resolved_tids - total_norm_tids:>10,} "
-          f"({(total_resolved_tids - total_norm_tids) / max(total_resolved_tids, 1) * 100:.1f}%)")
+    if total_resolved_tids > 0:
+        print(f"  TID source:      summary_words_norm "
+              f"{total_norm_tids:,}/{total_resolved_tids:,} "
+              f"({total_norm_tids / total_resolved_tids * 100:.1f}%)")
 
     return sft_data
 
@@ -1096,154 +1253,130 @@ def create_sft_data(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Unified Journey SFT Data Builder "
-                    "(event2journey / profile2journey)"
+        description="Journey SFT Data Builder (event2journey / profile2journey). "
+                    "Reads step6 ranked output + id2meta, resolves products to "
+                    "TIDs with multi-layer diversity filtering."
     )
     parser.add_argument(
-        "--task",
-        type=str,
-        default="profile2journey",
+        "--task", type=str, default="profile2journey",
         choices=["event2journey", "profile2journey"],
-        help="Task type: event2journey or profile2journey",
+        help="Task type (default: profile2journey)",
     )
 
     # Input files
     parser.add_argument(
-        "--shopping_journey_file",
-        type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260407/raw_data/event2journey.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/raw_data/profile2journey.json",
-        help="Path to shopping_journeys.json. For profile2journey, each entry "
-             "must contain a 'user_profile' key. "
-             "Ignored if --jwp_tsv_file and --ranked_tsv_file are provided.",
+        "--ranked_journey_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
+                "Data/LLMTrainingData/20260516/raw_data/"
+                "UserEvents_clean_combined_full_journey_with_products_Ranked.tsv",
+        help="Path to step6 merged *_Ranked.tsv "
+             "(columns: UserId, ReadableUserEvents, ShoppingProfile, "
+             "JourneyWithProducts, RankedJourneys)",
     )
     parser.add_argument(
-        "--jwp_tsv_file",
-        type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/500K_Journey_JWP.tsv",
-        help="Path to *_JWP.tsv (User-level: UserId, ReadableUserEvents, "
-             "ShoppingProfile, JourneyWithProducts). Used together with "
-             "--ranked_tsv_file to load from TSV pair instead of JSON.",
-    )
-    parser.add_argument(
-        "--ranked_tsv_file",
-        type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/500K_Journey_Ranked.tsv",
-        help="Path to *_ranked.tsv (Journey-level: UserId, Profile, "
-             "JourneyIndex, Journey, OUTPUT). Used together with "
-             "--jwp_tsv_file.",
-    )
-    parser.add_argument(
-        "--ranked_tsv_folder",
-        type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/1225_0325/JourneyWithProfile/JourneyWithConversationStarterAndDesc/v3/JourneyRanker/_tmp_ranker_chunks",
-        help="Path to a folder containing multiple ranked TSV chunks "
-             "(e.g. batch_00001.tsv, batch_00002.tsv, ...). All .tsv files "
-             "in the folder will be merged. Takes precedence over "
-             "--ranked_tsv_file when the folder exists and contains .tsv files.",
-    )
-    parser.add_argument(
-        "--id2meta_file",
-        type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260424/processed_full/id2meta_with_norm.json",
+        "--id2meta_file", type=str,
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
+                "Data/LLMTrainingData/20260516/processed/"
+                "id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
-        "--output_dir",
-        type=str,
+        "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260424/sft_data",
+                "Data/LLMTrainingData/20260516/sft_data",
         help="Output directory",
     )
+
     # Event/input controls
     parser.add_argument(
-        "--max_events",
-        type=int,
-        default=DEFAULT_MAX_EVENTS,
-        help=f"Max events for event2journey input (default: {DEFAULT_MAX_EVENTS})",
+        "--max_events", type=int, default=DEFAULT_MAX_EVENTS,
+        help=f"Max events for event2journey (default: {DEFAULT_MAX_EVENTS})",
     )
     parser.add_argument(
-        "--max_recent_events",
-        type=int,
-        default=DEFAULT_MAX_RECENT_EVENTS,
-        help=f"Max recent events for profile2journey input "
+        "--max_recent_events", type=int, default=DEFAULT_MAX_RECENT_EVENTS,
+        help=f"Max recent events for profile2journey "
              f"(default: {DEFAULT_MAX_RECENT_EVENTS})",
     )
 
     # Journey/product controls
     parser.add_argument(
-        "--max_products_per_journey",
-        type=int,
-        default=DEFAULT_MAX_PRODUCTS,
+        "--max_products_per_journey", type=int, default=DEFAULT_MAX_PRODUCTS,
         help=f"Max products per journey (default: {DEFAULT_MAX_PRODUCTS})",
     )
     parser.add_argument(
-        "--min_products_per_journey",
-        type=int,
-        default=DEFAULT_MIN_PRODUCTS,
-        help=f"Min products per journey; journeys with fewer are dropped "
+        "--min_products_per_journey", type=int, default=DEFAULT_MIN_PRODUCTS,
+        help=f"Min products per journey; below are dropped "
              f"(default: {DEFAULT_MIN_PRODUCTS})",
     )
     parser.add_argument(
-        "--min_avg_products",
-        type=int,
-        default=DEFAULT_MIN_AVG_PRODUCTS,
-        help=f"Min average resolvable products across all journeys for a user; "
-             f"users below this are skipped entirely (default: {DEFAULT_MIN_AVG_PRODUCTS})",
+        "--min_avg_products", type=int, default=DEFAULT_MIN_AVG_PRODUCTS,
+        help=f"Min average resolvable products per journey for a user "
+             f"(default: {DEFAULT_MIN_AVG_PRODUCTS})",
     )
     parser.add_argument(
-        "--min_journeys",
-        type=int,
-        default=DEFAULT_MIN_JOURNEYS,
-        help=f"Min journeys per user after filtering; users below are dropped "
+        "--min_journeys", type=int, default=DEFAULT_MIN_JOURNEYS,
+        help=f"Min journeys per user after filtering "
              f"(default: {DEFAULT_MIN_JOURNEYS})",
     )
     parser.add_argument(
-        "--max_journeys",
-        type=int,
-        default=DEFAULT_MAX_JOURNEYS,
-        help=f"Max journeys per sample; excess are randomly subsampled "
+        "--max_journeys", type=int, default=DEFAULT_MAX_JOURNEYS,
+        help=f"Max journeys per sample "
              f"(default: {DEFAULT_MAX_JOURNEYS})",
     )
     parser.add_argument(
-        "--keep_empty_ratio",
-        type=float,
-        default=DEFAULT_KEEP_EMPTY_RATIO,
-        help=f"Fraction of zero-journey users to keep as training samples "
+        "--keep_empty_ratio", type=float, default=DEFAULT_KEEP_EMPTY_RATIO,
+        help=f"Fraction of zero-journey users to keep "
              f"(default: {DEFAULT_KEEP_EMPTY_RATIO})",
     )
     parser.add_argument(
-        "--count_ratio",
-        type=float,
-        default=DEFAULT_COUNT_RATIO,
-        help=f"Probability of including the specific journey count in the "
-             f"instruction (default: {DEFAULT_COUNT_RATIO})",
+        "--count_ratio", type=float, default=DEFAULT_COUNT_RATIO,
+        help=f"Prob of including journey count in instruction "
+             f"(default: {DEFAULT_COUNT_RATIO})",
     )
     parser.add_argument(
-        "--dup_threshold",
-        type=int,
-        default=DEFAULT_DUP_THRESHOLD,
-        help=f"Min word overlap (out of 7) to consider two products as "
-             f"near-duplicates for diversity dedup. Lower = more aggressive "
-             f"dedup. Dynamic mode uses threshold-1 when products are "
-             f"plentiful (default: {DEFAULT_DUP_THRESHOLD})",
+        "--dup_threshold", type=int, default=DEFAULT_DUP_THRESHOLD,
+        help=f"Min TID word overlap for near-duplicate "
+             f"(default: {DEFAULT_DUP_THRESHOLD})",
+    )
+
+    # Pre-TID diversity
+    parser.add_argument(
+        "--jaccard_threshold", type=float, default=DEFAULT_JACCARD_THRESHOLD,
+        help=f"Jaccard word similarity threshold for pre-TID dedup "
+             f"(default: {DEFAULT_JACCARD_THRESHOLD})",
     )
     parser.add_argument(
-        "--seed",
-        type=int,
-        default=43,
-        help="Random seed for reproducibility (default: 42)",
+        "--cosine_threshold", type=float, default=DEFAULT_COSINE_THRESHOLD,
+        help=f"Cosine embedding similarity threshold for pre-TID dedup "
+             f"(default: {DEFAULT_COSINE_THRESHOLD})",
     )
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        default=False,
+        "--use_embedding", action="store_true", default=False,
+        help="Enable cosine embedding similarity for pre-TID diversity "
+             "(default: off, Jaccard only)",
+    )
+    parser.add_argument(
+        "--embedding_model", type=str,
+        default="/scratch/workspaceblobstore/users/xiaoyukou/ckpts/"
+                "Qwen3-Embedding-0.6B",
+        help="Path to embedding model for cosine diversity",
+    )
+    parser.add_argument(
+        "--embedding_cache_dir", type=str, default="",
+        help="Directory for embedding cache (default: same as output_dir)",
+    )
+
+    # General
+    parser.add_argument(
+        "--seed", type=int, default=43,
+        help="Random seed (default: 43)",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", default=False,
         help="Debug mode: only process a subset of users",
     )
     parser.add_argument(
-        "--debug_sample_size",
-        type=int,
-        default=100,
+        "--debug_sample_size", type=int, default=100,
         help="Number of users to sample in debug mode (default: 100)",
     )
     return parser.parse_args()
@@ -1259,6 +1392,8 @@ def main():
     np.random.seed(args.seed)
 
     task = args.task
+    # --use_embedding explicitly enables; otherwise default off
+    use_embedding = args.use_embedding
 
     # =========================================================================
     # Step 1: Load input files
@@ -1267,43 +1402,7 @@ def main():
     print(f"Step 1: Loading input files (task={task})")
     print("=" * 70)
 
-    # Determine ranked TSV source: folder (multiple chunks) or single file
-    ranked_tsv_path = None
-    if args.ranked_tsv_folder and os.path.isdir(args.ranked_tsv_folder):
-        tsv_files = sorted([
-            os.path.join(args.ranked_tsv_folder, f)
-            for f in os.listdir(args.ranked_tsv_folder)
-            if f.endswith(".tsv")
-        ])
-        if tsv_files:
-            ranked_tsv_path = tsv_files  # list of files
-            print(f"  Ranked TSV folder: {args.ranked_tsv_folder}")
-            print(f"    Found {len(tsv_files)} TSV chunk(s): "
-                  f"{', '.join(os.path.basename(f) for f in tsv_files)}")
-    if ranked_tsv_path is None and args.ranked_tsv_file:
-        ranked_tsv_path = args.ranked_tsv_file  # single file (string)
-
-    # Determine input mode: TSV pair or JSON
-    ranked_exists = False
-    if ranked_tsv_path is not None:
-        if isinstance(ranked_tsv_path, list):
-            ranked_exists = len(ranked_tsv_path) > 0
-        else:
-            ranked_exists = os.path.exists(ranked_tsv_path)
-    use_tsv_pair = (args.jwp_tsv_file and ranked_tsv_path is not None
-                    and os.path.exists(args.jwp_tsv_file)
-                    and ranked_exists)
-
-    if use_tsv_pair:
-        print(f"  Input mode: TSV pair (JWP + ranked)")
-        shopping_data = load_from_tsv_pair(
-            args.jwp_tsv_file, ranked_tsv_path,
-        )
-    else:
-        print(f"  Input mode: JSON")
-        print(f"  Loading shopping journeys: {args.shopping_journey_file}")
-        with open(args.shopping_journey_file, "r", encoding="utf-8") as f:
-            shopping_data = json.load(f)
+    shopping_data = load_from_ranked_tsv(args.ranked_journey_file)
     print(f"    Entries: {len(shopping_data):,}")
 
     # Debug mode: subsample users
@@ -1314,28 +1413,30 @@ def main():
         shopping_data = {k: shopping_data[k] for k in sampled_keys}
         print(f"    [DEBUG] Subsampled to {len(shopping_data):,} users")
 
-    # For profile2journey, check that user_profile exists in data
+    # For profile2journey, check that user_profile exists
     if task == "profile2journey":
         profile_count = sum(
             1 for e in shopping_data.values() if e.get("user_profile")
         )
         print(f"    Entries with user_profile: {profile_count:,}")
         if profile_count == 0:
-            print("ERROR: No entries have 'user_profile'. "
-                  "Run pre_s2 with --task profile2journey to require Profile column.",
-                  file=sys.stderr)
+            print("ERROR: No entries have 'user_profile'.", file=sys.stderr)
             sys.exit(1)
 
     print(f"  Loading id2meta: {args.id2meta_file}")
     with open(args.id2meta_file, "r", encoding="utf-8") as f:
-        id2meta = json.load(f)
+        raw = f.read().rstrip('\x00')
+        id2meta = json.loads(raw)
     print(f"    Items: {len(id2meta):,}")
 
     # Quick coverage check
     all_pids = set()
+    all_products_info = {}  # for embedding generation
     for entry in shopping_data.values():
         for j in entry.get("journeys", []):
             all_pids.update(j.get("product_ids", []))
+            if j.get("products_info"):
+                all_products_info.update(j["products_info"])
     found = sum(1 for pid in all_pids if pid in id2meta)
     has_tid = 0
     has_norm = 0
@@ -1354,6 +1455,25 @@ def main():
           f"({has_norm / max(has_tid, 1) * 100:.1f}% of valid TIDs)")
 
     # =========================================================================
+    # Step 1b: Generate embeddings (if enabled)
+    # =========================================================================
+    embedding_map = None
+    if use_embedding:
+        print()
+        print("=" * 70)
+        print("Step 1b: Generating product embeddings for cosine diversity")
+        print(f"  Model: {args.embedding_model}")
+        print("=" * 70)
+        cache_dir = args.embedding_cache_dir or args.output_dir
+        embedding_map = load_or_generate_embeddings(
+            list(all_pids), all_products_info,
+            args.embedding_model, cache_dir,
+        )
+        print(f"  Embedding map: {len(embedding_map):,} products loaded")
+    else:
+        print(f"\n  Cosine embedding: OFF (use --use_embedding to enable)")
+
+    # =========================================================================
     # Step 2: Build SFT data
     # =========================================================================
     print()
@@ -1370,6 +1490,9 @@ def main():
     print(f"  keep_empty_ratio = {args.keep_empty_ratio}")
     print(f"  count_ratio = {args.count_ratio}")
     print(f"  dup_threshold = {args.dup_threshold}")
+    print(f"  jaccard_threshold = {args.jaccard_threshold}")
+    print(f"  cosine_threshold = {args.cosine_threshold}")
+    print(f"  use_embedding = {use_embedding}")
     print(f"  seed = {args.seed}")
     print("=" * 70)
 
@@ -1377,6 +1500,9 @@ def main():
         task=task,
         shopping_journey_data=shopping_data,
         id2meta=id2meta,
+        embedding_map=embedding_map,
+        jaccard_threshold=args.jaccard_threshold,
+        cosine_threshold=args.cosine_threshold,
         max_events=args.max_events,
         max_recent_events=args.max_recent_events,
         max_products=args.max_products_per_journey,
@@ -1416,13 +1542,12 @@ def main():
         print(f"  Products/j:     {meta['num_products_per_journey']}")
         print(f"  Instruction:    {sample['instruction'][:200]}...")
         input_lines = sample["input"].split("\n")
-        max_show = 12 if task == "profile2journey" else 12
+        max_show = 12
         print(f"  Input (first {max_show} lines):")
         for line in input_lines[:max_show]:
             print(f"    {line[:150]}")
         if len(input_lines) > max_show:
             print(f"    ... ({len(input_lines) - max_show} more lines)")
-        # Pretty-print the output JSON
         try:
             out_obj = json.loads(sample["output"])
             cj = out_obj.get("ContinuedJourneys", [])
@@ -1450,4 +1575,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-               

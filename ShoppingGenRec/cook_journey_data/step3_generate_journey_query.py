@@ -34,6 +34,7 @@ Split large input into chunks (no LLM inference):
 import argparse
 import csv
 import glob
+import hashlib
 import json
 import os
 import random
@@ -141,7 +142,10 @@ def filter_events_by_time_window(events_text, user_id, seed=42):
     Returns:
         Tuple of (filtered_events_text, window_label).
     """
-    rng = random.Random(hash(user_id) ^ seed)
+    # Use MD5 for deterministic per-user seed (Python hash() is randomized
+    # by PYTHONHASHSEED and not reproducible across runs).
+    uid_hash = int(hashlib.md5(user_id.encode("utf-8")).hexdigest(), 16)
+    rng = random.Random(uid_hash ^ seed)
     windows = [7, 14, 30, None]  # None = all
     window = rng.choice(windows)
 

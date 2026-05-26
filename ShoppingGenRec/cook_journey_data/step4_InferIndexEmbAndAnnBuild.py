@@ -262,6 +262,82 @@ def merge_results(text_file: str, emb_output: str, final_file: str) -> int:
 
 
 # ============================================================================ #
+# Resume — filter existing embeddings to a subset                               #
+# ============================================================================ #
+def filter_final_embeddings(src_emb_file: str,
+                            dst_emb_file: str,
+                            id_file: str) -> Tuple[int, set]:
+    """Filter an existing final_embeddings.tsv to only IDs in ``id_file``.
+
+    Used by ``--resume_emb_dir``: reuse embeddings from a previous (superset)
+    run instead of re-running the expensive ONNX inference.
+
+    Returns (n_kept, missing_ids) where ``missing_ids`` is the set of IDs
+    that were requested but not found in the source embeddings.
+    """
+    print(f"[resume] loading target IDs from {id_file}")
+    with open(id_file, "r", encoding="utf-8") as f:
+        target_ids = set(line.strip() for line in f if line.strip())
+    print(f"[resume] target IDs: {len(target_ids):,}")
+
+    print(f"[resume] filtering {src_emb_file} -> {dst_emb_file}")
+    t0 = time.time()
+    found_ids = set()
+    kept, total = 0, 0
+    with open(src_emb_file, "r", encoding="utf-8") as fin, \
+         open(dst_emb_file, "w", encoding="utf-8") as fout:
+        header = fin.readline()
+        fout.write(header)
+        for line in tqdm(fin, desc="resume-filter", mininterval=10):
+            total += 1
+            goid = line.split("\t", 1)[0]
+            if goid in target_ids:
+                fout.write(line)
+                found_ids.add(goid)
+                kept += 1
+    elapsed = time.time() - t0
+    missing_ids = target_ids - found_ids
+    print(f"[resume] kept {kept:,}/{total:,} embeddings "
+          f"(target={len(target_ids):,}) in {elapsed:.1f}s")
+    if missing_ids:
+        print(f"[resume] {len(missing_ids):,} target IDs "
+              f"not found in source embeddings — will infer these")
+    else:
+        print(f"[resume] all target IDs found, no extra inference needed")
+    return kept, missing_ids
+
+
+def write_missing_text_file(src_text_file: str,
+                            dst_text_file: str,
+                            missing_ids: set) -> int:
+    """Write a text.tsv containing only the missing IDs for inference."""
+    written = 0
+    with open(src_text_file, "r", encoding="utf-8") as fin, \
+         open(dst_text_file, "w", encoding="utf-8") as fout:
+        for line in fin:
+            goid = line.split("\t", 1)[0]
+            if goid in missing_ids:
+                fout.write(line)
+                written += 1
+    print(f"[resume] wrote {written:,} missing items to {dst_text_file}")
+    return written
+
+
+def append_to_final_embeddings(main_emb_file: str,
+                               extra_emb_file: str) -> int:
+    """Append lines from extra_emb_file to main_emb_file (skip header)."""
+    appended = 0
+    with open(extra_emb_file, "r", encoding="utf-8") as fin, \
+         open(main_emb_file, "a", encoding="utf-8") as fout:
+        fin.readline()  # skip header
+        for line in fin:
+            fout.write(line)
+            appended += 1
+    print(f"[resume] appended {appended:,} extra embeddings to {main_emb_file}")
+    return appended
+
+
+# ============================================================================ #
 # Stage 4 — build FAISS ANN index                                              #
 # ============================================================================ #
 def load_final_embeddings(final_file: str,
@@ -364,17 +440,19 @@ def parse_args() -> argparse.Namespace:
     # I/O ---------------------------------------------------------------------
     g_io = p.add_argument_group("I/O")
     g_io.add_argument("--item_json", 
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
+                      #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/item.json",
                       help="Input item.json (output of step0_combine_item_data.py).")
     g_io.add_argument("--work_dir", 
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/MatadorEmb_Index",
+                      #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/MatadorEmb_Index",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/MatadorEmb_Index",
                       help="Directory for all intermediate + final artefacts.")
     g_io.add_argument("--output_prefix", default="Items_full",
                       help="Filename prefix used for all output files.")
 
     # Embedding inference -----------------------------------------------------
     g_inf = p.add_argument_group("Embedding inference")
-    g_inf.add_argument("--gpu_ids", default="0,1,2,3",
+    g_inf.add_argument("--gpu_ids", default="0,1",
                        help="Comma-separated GPU ids, e.g. '0,1,2,3'.")
     g_inf.add_argument("--num_sessions_per_gpu", type=int, default=1)
     g_inf.add_argument("--max_length", type=int, default=512)
@@ -409,6 +487,15 @@ def parse_args() -> argparse.Namespace:
                       help="Skip stage 4 (ANN index build).")
     g_st.add_argument("--only_index", action="store_true",
                       help="Shortcut for --skip_extract --skip_inference --skip_merge.")
+    g_st.add_argument("--resume_emb_dir", default="",
+                      help="Path to an existing MatadorEmb_Index dir (from a "
+                           "previous superset run). If set, Stage 1 (extract) "
+                           "runs to get the new IDs, then the existing "
+                           "final_embeddings.tsv is filtered to only those "
+                           "IDs, skipping the expensive Stage 2 (inference) "
+                           "and Stage 3 (merge). Stage 4 (index) then builds "
+                           "from the filtered embeddings. "
+                           "Example: --resume_emb_dir .../raw_data/MatadorEmb_Index")
 
     # Debug -------------------------------------------------------------------
     g_dbg = p.add_argument_group("Debug")
@@ -436,6 +523,19 @@ def main() -> None:
     args = parse_args()
     if args.only_index:
         args.skip_extract = True
+        args.skip_inference = True
+        args.skip_merge = True
+
+    # --resume_emb_dir implies: run extract (Stage 1) but skip inference
+    # and merge (Stage 2+3); we'll filter existing embeddings instead.
+    if args.resume_emb_dir:
+        src_final_emb = os.path.join(
+            args.resume_emb_dir,
+            f"{args.output_prefix}_final_embeddings.tsv")
+        if not os.path.isfile(src_final_emb):
+            print(f"ERROR: --resume_emb_dir given but source embeddings "
+                  f"not found: {src_final_emb}")
+            sys.exit(1)
         args.skip_inference = True
         args.skip_merge = True
 
@@ -475,6 +575,64 @@ def main() -> None:
             sys.exit(1)
     else:
         print("[stage 1] skipped (using existing text/id files)")
+
+    # ---- Resume: filter existing embeddings if --resume_emb_dir ----
+    if args.resume_emb_dir:
+        print("-" * 80)
+        print("Resume: filter existing embeddings to subset IDs")
+        print("-" * 80)
+        src_final_emb = os.path.join(
+            args.resume_emb_dir,
+            f"{args.output_prefix}_final_embeddings.tsv")
+        n_kept, missing_ids = filter_final_embeddings(
+            src_emb_file=src_final_emb,
+            dst_emb_file=paths["final_emb"],
+            id_file=paths["id_file"],
+        )
+        if n_kept == 0 and not missing_ids:
+            print("[resume] no embeddings matched and no IDs found; aborting.")
+            sys.exit(1)
+
+        # If there are missing IDs, run inference + merge for just those
+        if missing_ids:
+            print(f"\n[resume] running inference for {len(missing_ids):,} "
+                  f"missing items...")
+            missing_text = os.path.join(args.work_dir, "_missing_text.tsv")
+            missing_emb = os.path.join(args.work_dir, "_missing_emb.tsv")
+            missing_final = os.path.join(args.work_dir, "_missing_final_emb.tsv")
+            missing_temp = os.path.join(args.work_dir, "_missing_temp")
+
+            # Write text file for missing items only
+            write_missing_text_file(paths["text_file"], missing_text,
+                                    missing_ids)
+
+            # Run inference on missing items
+            run_inference(
+                text_file=missing_text,
+                emb_output=missing_emb,
+                temp_folder=missing_temp,
+                gpu_ids=args.gpu_ids,
+                num_sessions_per_gpu=args.num_sessions_per_gpu,
+                max_length=args.max_length,
+                batch_size=args.batch_size,
+            )
+
+            # Merge missing items
+            merge_results(
+                text_file=missing_text,
+                emb_output=missing_emb,
+                final_file=missing_final,
+            )
+
+            # Append to the filtered final embeddings
+            append_to_final_embeddings(paths["final_emb"], missing_final)
+
+            # Cleanup temp files
+            for f in (missing_text, missing_emb, missing_final):
+                if os.path.isfile(f):
+                    os.remove(f)
+            print(f"[resume] done: {n_kept:,} reused + "
+                  f"{len(missing_ids):,} newly inferred")
 
     # ---- Stage 2: run inference ----
     if not args.skip_inference:
