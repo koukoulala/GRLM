@@ -49,6 +49,7 @@ from collections import Counter
 import time
 import sys
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from functools import partial
 
 from tqdm import tqdm
@@ -65,8 +66,8 @@ from llm_utils import (run_llm_parallel,
                       load_checkpoint as _load_checkpoint_raw,
                       save_checkpoint as _save_checkpoint_raw,
                       cleanup_checkpoint)
-from Infer_by_papyrus import (run_papyrus_parallel,
-                              run_papyrus_parallel_with_checkpoint)
+# Lazy import: Infer_by_papyrus requires httpx which may not be installed.
+# Only imported when papyrus backend is actually used.
 from term_normalizer import normalize_term
 
 
@@ -517,19 +518,22 @@ def parse_args():
         "--item_file",
         type=str,
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data_v2/item.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/item.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_PG/item.json",
         help="Path to item metadata JSON file",
     )
     parser.add_argument(
         "--similarity_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed/similarities.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/MatadorEmb_Index/similarities.json",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_PG/MatadorEmb_Index/similarities.json",
         help="Path to similarities JSON from step 0",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed_v2/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_IDB/",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_PG/",
         help="Directory to save summaries and statistics",
     )
     parser.add_argument(
@@ -620,12 +624,17 @@ def parse_args():
     )
     parser.add_argument(
         "--check_seller",
-        action=argparse.BooleanOptionalAction,
+        action="store_true",
+        dest="check_seller",
         default=True,
         help="Validate that seller appears in the last 2 terms of the "
-             "summary. Items failing this check are treated as invalid "
-             "and will be re-processed on resume. Use --no-check_seller "
-             "to disable. (default: enabled)",
+             "summary (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-check_seller",
+        action="store_false",
+        dest="check_seller",
+        help="Disable seller validation.",
     )
     parser.add_argument(
         "--debug",
@@ -680,6 +689,15 @@ def parse_args():
              "files (summaries, id2meta, statistics, etc.) to --output_dir.",
     )
     parser.add_argument(
+        "--retry_invalid",
+        action="store_true",
+        default=False,
+        help="When used with --prompt_results_dir, re-run inference on items "
+             "that have no results (missing), failed parsing, or seller "
+             "mismatch. The new results are merged back before saving. "
+             "Without this flag, merge mode just saves whatever it has.",
+    )
+    parser.add_argument(
         "--save_intermediate_only",
         action="store_true",
         default=False,
@@ -689,11 +707,20 @@ def parse_args():
              "s1 is still running in another process.",
     )
     parser.add_argument(
+        "--skip_presave",
+        action="store_true",
+        default=False,
+        help="Skip the PRE-SAVE step that writes summaries/id2meta/statistics "
+             "before inference or prompt export. Saves ~30GB RAM by not "
+             "keeping previous_results alive during prompt building. "
+             "Use when running --export_prompts_only on low-memory machines.",
+    )
+    parser.add_argument(
         "--resume_from_multi_path",
         type=str,
         nargs="*",
         #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed/summaries_with_similarity.jsonl"],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed_v2/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl or .json files from previous runs "
              "to resume from. Supports both JSONL (one record per line) and "
@@ -839,24 +866,32 @@ def save_all_outputs(all_results, output_dir, id2meta_file=None,
     # to avoid pickle/memory overhead that causes OOM with large datasets.
     items_words_list = [(item_id, item.get("summary_words", []))
                         for item_id, item in id2meta.items()]
-    num_norm_workers = min(16, os.cpu_count() or 4,
+    num_norm_workers = min(8, os.cpu_count() or 4,
                            max(1, len(items_words_list) // 1000))
+    norm_map = {}  # item_id -> normalized_words
     if num_norm_workers > 1 and len(items_words_list) >= 1000:
-        norm_batch_size = max(1, len(items_words_list) // num_norm_workers)
+        # Use smaller batches (50k each) to reduce per-process memory
+        norm_batch_size = min(50000,
+                              max(1, len(items_words_list) // num_norm_workers))
         norm_batches = [
             items_words_list[i:i + norm_batch_size]
             for i in range(0, len(items_words_list), norm_batch_size)
         ]
-        norm_map = {}  # item_id -> normalized_words
         print(f"  Normalizing {len(items_words_list):,} items with "
-              f"{num_norm_workers} workers ...")
-        with ProcessPoolExecutor(max_workers=num_norm_workers) as executor:
-            for batch_result in executor.map(
-                    _normalize_words_batch, norm_batches):
-                for item_id, norm_words in batch_result:
-                    norm_map[item_id] = norm_words
+              f"{num_norm_workers} workers ({len(norm_batches)} batches) ...")
+        try:
+            with ProcessPoolExecutor(max_workers=num_norm_workers) as executor:
+                for batch_result in executor.map(
+                        _normalize_words_batch, norm_batches):
+                    for item_id, norm_words in batch_result:
+                        norm_map[item_id] = norm_words
+        except (BrokenProcessPool, Exception) as e:
+            print(f"  [WARN] Parallel normalization failed ({e}), "
+                  f"falling back to sequential ...")
+            norm_map = {}
+            for item_id, words in items_words_list:
+                norm_map[item_id] = [normalize_term(w) for w in words]
     else:
-        norm_map = {}
         for item_id, words in items_words_list:
             norm_map[item_id] = [normalize_term(w) for w in words]
     # Reconstruct id2meta_norm from id2meta + normalized words
@@ -1218,6 +1253,116 @@ def main():
               f"(from results dir: {matched:,}, from resume: {from_resume:,}, "
               f"missing: {len(full_data) - matched - from_resume:,})")
 
+        # ---- Retry invalid items (--retry_invalid) ----
+        if args.retry_invalid:
+            # Load prompt template
+            print(f"\n[RETRY] Loading prompt template from: {args.prompt_file}")
+            with open(args.prompt_file, "r", encoding="utf-8") as f:
+                prompt_template = f.read()
+
+            # Identify items to retry: missing + failed + seller_mismatch
+            results_by_id = {r["id"]: r for r in all_results}
+            retry_items = []
+            missing_count = 0
+            failed_count = 0
+            seller_mismatch_retry = 0
+            for item in full_data:
+                item_id = item["id"]
+                if item_id not in results_by_id:
+                    retry_items.append(item)
+                    missing_count += 1
+                else:
+                    result = results_by_id[item_id]
+                    valid, reason = is_result_valid(
+                        item, result, check_seller=args.check_seller)
+                    if not valid and reason != "non_product":
+                        retry_items.append(item)
+                        if reason == "seller_mismatch":
+                            seller_mismatch_retry += 1
+                        else:
+                            failed_count += 1
+
+            print(f"[RETRY] Items to retry: {len(retry_items):,} "
+                  f"(missing: {missing_count:,}, failed: {failed_count:,}, "
+                  f"seller_mismatch: {seller_mismatch_retry:,})")
+
+            if retry_items:
+                # Build prompts
+                print(f"[RETRY] Building prompts for {len(retry_items):,} items ...")
+                retry_inputs = []
+                for item in retry_items:
+                    item_id = item["id"]
+                    top_similar_items = similarities_dict.get(item_id, [])[:5]
+                    raw_prompt = prepare_prompt(
+                        item, top_similar_items, all_items_dict, prompt_template
+                    )
+                    retry_inputs.append((item_id, raw_prompt))
+
+                # Run inference
+                retry_checkpoint_dir = os.path.join(
+                    args.output_dir, "_retry_checkpoint")
+                retry_start = time.time()
+
+                if backend == "papyrus":
+                    from Infer_by_papyrus import run_papyrus_parallel_with_checkpoint
+                    retry_api_results = run_papyrus_parallel_with_checkpoint(
+                        inputs=retry_inputs,
+                        checkpoint_dir=retry_checkpoint_dir,
+                        papyrus_endpoint=args.papyrus_endpoint,
+                        model_name=args.papyrus_model,
+                        quota_id=args.papyrus_quota_id,
+                        timeout_ms=args.papyrus_timeout_ms,
+                        num_workers=args.papyrus_workers,
+                        max_tokens=args.max_tokens,
+                        max_retries=3,
+                        chunk_size=args.papyrus_chunk_size,
+                    )
+                else:  # copilot
+                    retry_api_results = run_llm_parallel_with_checkpoint(
+                        inputs=retry_inputs,
+                        token_file=args.token_file,
+                        checkpoint_dir=retry_checkpoint_dir,
+                        num_workers=args.copilot_workers,
+                        model=args.copilot_model,
+                        temperature=0,
+                        max_tokens=args.max_tokens,
+                        chunk_size=args.copilot_chunk_size,
+                    )
+
+                retry_elapsed = time.time() - retry_start
+                retry_map = {item_id: gen_text
+                             for item_id, gen_text in retry_api_results}
+                print(f"[RETRY] Inference done: {len(retry_map):,} results "
+                      f"in {retry_elapsed:.1f}s")
+
+                # Build result dicts for retried items
+                retry_items_with_text = [
+                    (i, item, retry_map.get(item["id"], ""))
+                    for i, item in enumerate(retry_items)
+                ]
+                retry_results = _parallel_build_results(
+                    retry_items_with_text, similarities_dict)
+
+                # Merge retry results into all_results
+                retry_results_by_id = {r["id"]: r for r in retry_results}
+                updated = 0
+                added = 0
+                for i, result in enumerate(all_results):
+                    if result["id"] in retry_results_by_id:
+                        new_result = retry_results_by_id.pop(result["id"])
+                        all_results[i] = new_result
+                        updated += 1
+                # Append items that were missing entirely (not in all_results)
+                for item_id, new_result in retry_results_by_id.items():
+                    all_results.append(new_result)
+                    added += 1
+
+                print(f"[RETRY] Merged: {updated:,} updated, "
+                      f"{added:,} newly added")
+                cleanup_checkpoint(retry_checkpoint_dir)
+            else:
+                print("[RETRY] No items to retry, skipping inference.")
+
         # Save all output files
         stats = save_all_outputs(all_results, args.output_dir,
                                  id2meta_file=args.id2meta_file,
@@ -1269,6 +1414,8 @@ def main():
         start_time = time.time()
 
         if backend == "papyrus":
+            from Infer_by_papyrus import (run_papyrus_parallel,
+                                          run_papyrus_parallel_with_checkpoint)
             if debug:
                 api_results = run_papyrus_parallel(
                     inputs=prompts_from_file,
@@ -1481,6 +1628,7 @@ def main():
             all_results = [previous_results[item["id"]] for item in data]
             inference_time = 0.001
             _skip_inference = True
+            data = []  # nothing left to process / export
         else:
             data = remaining_data_for_run
             _skip_inference = False
@@ -1554,7 +1702,7 @@ def main():
                 _skip_inference = True
 
     # ---- Pre-save: save all output files before processing new data ----
-    if previous_results and not debug:
+    if previous_results and not debug and not args.skip_presave:
         print(f"\n[PRE-SAVE] Saving {len(previous_results):,} completed "
               f"results and all derived files ...")
         save_all_outputs(
@@ -1566,6 +1714,12 @@ def main():
         # (not in export_prompts_only or save_intermediate_only mode)
         if not args.export_prompts_only and not args.save_intermediate_only:
             cleanup_checkpoint(checkpoint_dir)
+    elif args.skip_presave and previous_results:
+        print(f"\n[PRE-SAVE] Skipped (--skip_presave). "
+              f"Freeing {len(previous_results):,} previous_results ...")
+        del previous_results
+        previous_results = {}
+        import gc; gc.collect()
 
     # ---- Save intermediate only (if requested) ----
     if args.save_intermediate_only:
@@ -1587,6 +1741,10 @@ def main():
         prompts_dir = os.path.join(args.output_dir, "prompts")
         os.makedirs(prompts_dir, exist_ok=True)
 
+        chunk_size = args.prompts_chunk_size
+        saved_files = []
+        total = 0
+
         # Build all prompts in memory
         all_prompt_rows = []  # list of (item_id, escaped_prompt)
         for item in tqdm(data, desc="Building prompts", mininterval=30):
@@ -1598,32 +1756,39 @@ def main():
             escaped_prompt = raw_prompt.replace("\t", " ").replace("\n", "\\n")
             all_prompt_rows.append((item_id, escaped_prompt))
 
-        # Split into chunks and write multiple files
-        chunk_size = args.prompts_chunk_size
-        total = len(all_prompt_rows)
-        num_chunks = (total + chunk_size - 1) // chunk_size
+            # Flush to disk every chunk_size items to bound memory
+            if len(all_prompt_rows) >= chunk_size:
+                file_num = len(saved_files) + 1
+                prompts_file = os.path.join(
+                    prompts_dir, f"{item_stem}_prompts_{file_num}.tsv")
+                with open(prompts_file, "w", encoding="utf-8") as f:
+                    f.write("GlobalOfferId\tPrompt\n")
+                    for pid, ep in all_prompt_rows:
+                        f.write(f"{pid}\t{ep}\n")
+                file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
+                saved_files.append(prompts_file)
+                print(f"  Chunk {file_num}: {prompts_file} "
+                      f"({len(all_prompt_rows):,} prompts, {file_size_mb:.1f} MB)")
+                total += len(all_prompt_rows)
+                all_prompt_rows = []  # free memory
 
-        saved_files = []
-        for chunk_idx in range(num_chunks):
-            start = chunk_idx * chunk_size
-            end = min(start + chunk_size, total)
-            chunk_rows = all_prompt_rows[start:end]
-
-            file_num = chunk_idx + 1
+        # Write remaining prompts
+        if all_prompt_rows:
+            file_num = len(saved_files) + 1
             prompts_file = os.path.join(
-                prompts_dir, f"{item_stem}_prompts_{file_num}.tsv"
-            )
+                prompts_dir, f"{item_stem}_prompts_{file_num}.tsv")
             with open(prompts_file, "w", encoding="utf-8") as f:
                 f.write("GlobalOfferId\tPrompt\n")
-                for item_id, escaped_prompt in chunk_rows:
-                    f.write(f"{item_id}\t{escaped_prompt}\n")
-
+                for pid, ep in all_prompt_rows:
+                    f.write(f"{pid}\t{ep}\n")
             file_size_mb = os.path.getsize(prompts_file) / (1024 * 1024)
             saved_files.append(prompts_file)
-            print(f"  Chunk {file_num}/{num_chunks}: {prompts_file} "
-                  f"({len(chunk_rows):,} prompts, {file_size_mb:.1f} MB)")
+            total += len(all_prompt_rows)
+            print(f"  Chunk {file_num}: {prompts_file} "
+                  f"({len(all_prompt_rows):,} prompts, {file_size_mb:.1f} MB)")
+            del all_prompt_rows
 
-        print(f"\n  Total: {total:,} prompts split into {num_chunks} files")
+        print(f"\n  Total: {total:,} prompts split into {len(saved_files)} files")
         for f in saved_files:
             print(f"    {f}")
         print(f"\nDone! (--export_prompts_only mode, inference skipped)")
@@ -1691,6 +1856,7 @@ def main():
                 max_retries=3,
             )
         else:
+            from Infer_by_papyrus import run_papyrus_parallel_with_checkpoint
             papyrus_results = run_papyrus_parallel_with_checkpoint(
                 inputs=papyrus_inputs,
                 checkpoint_dir=checkpoint_dir,

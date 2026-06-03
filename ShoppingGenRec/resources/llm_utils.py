@@ -108,9 +108,14 @@ def validate_tokens(tokens, model="gpt-5.2"):
             payload = {
                 "model": model,
                 "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1,
                 "stream": False,
             }
+            # Newer models (gpt-5.4+, o-series) require max_completion_tokens
+            # instead of max_tokens
+            if any(model.startswith(p) for p in ("gpt-5.4", "gpt-5.5", "gpt-6", "o1", "o3", "o4")):
+                payload["max_completion_tokens"] = 1
+            else:
+                payload["max_tokens"] = 1
             resp = requests.post(url, headers=headers, json=payload, timeout=30)
             if resp.status_code == 200:
                 valid.append(token)
@@ -222,11 +227,15 @@ def call_llm_api(prompt, access_token, system_prompt="", model="gpt-4o",
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
                 "stream": False,
                 "n": 1,
                 "top_p": 1
             }
+            # Newer models (gpt-5.4+, o-series) require max_completion_tokens
+            if any(model.startswith(p) for p in ("gpt-5.4", "gpt-5.5", "gpt-6", "o1", "o3", "o4")):
+                payload["max_completion_tokens"] = max_tokens
+            else:
+                payload["max_tokens"] = max_tokens
 
             response = requests.post(url, headers=headers, json=payload, timeout=timeout)
 
