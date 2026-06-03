@@ -1259,6 +1259,11 @@ def run_merge(args):
                     for p in products:
                         oid = str(p.get("OfferId", ""))
                         orig = oid_to_prod.get(oid, {})
+                        if not orig:
+                            # OfferId not found in input candidates —
+                            # likely a hallucinated ID or dedup mismatch.
+                            # Skip silently to avoid empty products in output.
+                            continue
                         enriched.append({
                             "Rank": p.get("Rank"),
                             "OfferId": oid,
@@ -1322,14 +1327,14 @@ def parse_args():
     g_io.add_argument(
         "--input_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec"
-                "/Data/LLMTrainingData/20260516/raw_data"
+                "/Data/LLMTrainingData/20260528/raw_data_IDB"
                 "/UserEvents_clean_combined_full_journey_with_products.tsv",
         help="Step5 output TSV or a split chunk TSV.",
     )
     g_io.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec"
-                "/Data/LLMTrainingData/20260516/raw_data/ranker_output_full",
+                "/Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full",
         help="Directory for output files (results, splits, merged).",
     )
     g_io.add_argument(

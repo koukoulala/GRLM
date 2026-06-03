@@ -1,16 +1,18 @@
 #!/bin/bash
 # =============================================================================
-#  VIP Case Study Pipeline: vip_users.tsv → step3 → step5 → step6 → step8
+#  VIP Case Study Pipeline: vip_users.tsv → step3 → step5 → step6 → step7 → step8
 # =============================================================================
 #
 #  Runs the full shopping journey pipeline for VIP users, producing
 #  an interactive HTML visualization with product images and links.
 #
 #  Usage:
-#      bash run_vip_case_study.sh                              # date=20260516, all steps
-#      bash run_vip_case_study.sh --date 20260513              # use 20260513 data
-#      bash run_vip_case_study.sh --date 20260513 --from step6 # 20260513, from step6
-#      bash run_vip_case_study.sh --from step8                 # date=20260516, step8 only
+#      bash run_vip_case_study.sh                                          # date=20260528, all steps
+#      bash run_vip_case_study.sh --date 20260528 --source IDB             # raw_data_IDB, vip_case_study_IDB
+#      bash run_vip_case_study.sh --date 20260528 --source PG --from step6 # from step6
+#      bash run_vip_case_study.sh --from step7                             # step7+step8 only
+#      bash run_vip_case_study.sh --from step8                             # step8 only
+#      bash run_vip_case_study.sh --model claude-opus-4.6                   # use Claude
 #
 # =============================================================================
 
@@ -25,51 +27,59 @@ COOK_DIR="${SCRIPT_DIR}"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
-DATA_DATE="20260516"
+DATA_DATE="20260528"
 START_FROM="step3"
+SOURCE=""
+MODEL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --date)  DATA_DATE="$2"; shift 2 ;;
-        --from)  START_FROM="$2"; shift 2 ;;
-        *)       echo "ERROR: Unknown argument: $1"; exit 1 ;;
+        --date)   DATA_DATE="$2"; shift 2 ;;
+        --from)   START_FROM="$2"; shift 2 ;;
+        --source) SOURCE="$2";    shift 2 ;;
+        --model)  MODEL="$2";     shift 2 ;;
+        *)        echo "ERROR: Unknown argument: $1"; exit 1 ;;
     esac
 done
 
-# ── Paths derived from DATA_DATE ─────────────────────────────────────────────
+# ── Paths derived from DATA_DATE + SOURCE ────────────────────────────────────
 
 DATA_ROOT="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/${DATA_DATE}"
-VIP_DIR="${DATA_ROOT}/vip_case_study"
+
+# SOURCE suffix for directory names (e.g., "_IDB", "_PG", or "")
+if [[ -n "${SOURCE}" ]]; then
+    SOURCE_SUFFIX="_${SOURCE}"
+else
+    SOURCE_SUFFIX=""
+fi
+
+# MODEL suffix for step6 outputs (e.g., "_claude-opus-4.6"; empty for default)
+if [[ -n "${MODEL}" && "${MODEL}" != "gpt-5.2" ]]; then
+    MODEL_SUFFIX="_${MODEL}"
+else
+    MODEL_SUFFIX=""
+fi
+
+VIP_DIR="${DATA_ROOT}/vip_case_study${SOURCE_SUFFIX}"
+RAW_DIR="${DATA_ROOT}/raw_data${SOURCE_SUFFIX}"
 
 # Input
 VIP_INPUT="${PROJECT_DIR}/resources/vip_users.tsv"
 
-# Shared resources — 20260513 uses raw_data_v2/ folder
-if [[ "${DATA_DATE}" == "20260513" ]]; then
-    RAW_DIR="${DATA_ROOT}/raw_data_v2"
-else
-    RAW_DIR="${DATA_ROOT}/raw_data"
-fi
 ITEM_JSON="${RAW_DIR}/item.json"
 INDEX_DIR="${RAW_DIR}/MatadorEmb_Index"
-
-# ORIGINAL_INDEX only exists for 20260516
-ORIGINAL_INDEX=""
-if [[ "${DATA_DATE}" == "20260516" ]]; then
-    ORIGINAL_INDEX="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"
-fi
 
 # Intermediate file names (all under VIP_DIR)
 STEP3_OUTPUT="${VIP_DIR}/vip_users_Journey_Results.tsv"
 STEP5_PREFIX="vip_users"
 STEP5_OUTPUT="${VIP_DIR}/${STEP5_PREFIX}_journey_with_products.tsv"
-STEP6_OUTPUT_DIR="${VIP_DIR}/ranker_output"
+STEP6_OUTPUT_DIR="${VIP_DIR}/ranker_output${MODEL_SUFFIX}"
 STEP6_MERGED=""  # auto-detected after step6 merge
-STEP8_OUTPUT_DIR="${VIP_DIR}"
+STEP8_RESULTS_DIR="${VIP_DIR}/html${MODEL_SUFFIX}"
 
-# LLM settings
+# LLM settings — model only affects step6
 COPILOT_MODEL="gpt-5.2"
-STEP6_COPILOT_MODEL="gpt-5.2"
+STEP6_COPILOT_MODEL="${MODEL:-gpt-5.2}"
 GPU_IDS="1"
 
 echo "=================================================================="
@@ -79,12 +89,12 @@ echo "  Script dir:    ${SCRIPT_DIR}"
 echo "  VIP output:    ${VIP_DIR}"
 echo "  VIP input:     ${VIP_INPUT}"
 echo "  Data date:     ${DATA_DATE}"
+echo "  Source:        ${SOURCE:-"(default)"}"
 echo "  Start from:    ${START_FROM}"
+echo "  Step6 model:   ${STEP6_COPILOT_MODEL}"
+echo "  RAW dir:       ${RAW_DIR}"
 echo "  Item JSON:     ${ITEM_JSON}"
 echo "  Index dir:     ${INDEX_DIR}"
-if [[ -n "${ORIGINAL_INDEX}" ]]; then
-    echo "  Orig index:    ${ORIGINAL_INDEX}"
-fi
 echo "=================================================================="
 echo ""
 
@@ -92,47 +102,47 @@ mkdir -p "${VIP_DIR}"
 
 # ── Helper ───────────────────────────────────────────────────────────────────
 
+# Ordered step list for comparison
+declare -A STEP_ORDER=( [step3]=1 [step5]=2 [step6]=3 [step7]=4 [step8]=5 )
+
 step_should_run() {
     local step="$1"
-    case "${START_FROM}" in
-        step3) return 0 ;;
-        step5) [[ "$step" != "step3" ]] && return 0 || return 1 ;;
-        step6) [[ "$step" == "step6" || "$step" == "step8" ]] && return 0 || return 1 ;;
-        step8) [[ "$step" == "step8" ]] && return 0 || return 1 ;;
-        *)     echo "ERROR: Unknown --from value: ${START_FROM}"; exit 1 ;;
-    esac
+    local start_ord="${STEP_ORDER[${START_FROM}]:-}"
+    local step_ord="${STEP_ORDER[${step}]:-}"
+    if [[ -z "${start_ord}" ]]; then
+        echo "ERROR: Unknown --from value: ${START_FROM}"; exit 1
+    fi
+    if [[ -z "${step_ord}" ]]; then
+        echo "ERROR: Unknown step: ${step}"; exit 1
+    fi
+    [[ "${step_ord}" -ge "${start_ord}" ]]
 }
 
 # ── Clean up stale outputs from the starting step onward ─────────────────────
 echo "  Cleaning stale outputs from ${START_FROM} onward..."
 
-# step3 onward: remove journey results + everything downstream
-if [[ "${START_FROM}" == "step3" ]]; then
-    rm -rf "${VIP_DIR}"/_journey_checkpoint_vip_users 2>/dev/null
-    rm -f  "${VIP_DIR}"/vip*_Results.tsv 2>/dev/null
-    rm -f  "${STEP5_OUTPUT}" 2>/dev/null
-    rm -rf "${VIP_DIR}"/vip_users_*.npz "${VIP_DIR}"/vip_users_query_*.tsv 2>/dev/null
+if step_should_run "step3"; then
+    rm -rf "${VIP_DIR}"/_journey_checkpoint_vip_users 2>/dev/null || true
+    rm -f  "${VIP_DIR}"/vip*_Results.tsv 2>/dev/null || true
+    rm -rf "${VIP_DIR}"/vip_users_*.npz "${VIP_DIR}"/vip_users_query_*.tsv 2>/dev/null || true
 fi
 
-# step5 onward: remove step5 output + everything downstream
-if [[ "${START_FROM}" == "step3" || "${START_FROM}" == "step5" ]]; then
-    rm -f  "${STEP5_OUTPUT}" 2>/dev/null
-    rm -rf "${STEP6_OUTPUT_DIR}" 2>/dev/null
-    rm -f  "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null
-    rm -f  "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+if step_should_run "step5"; then
+    rm -f  "${STEP5_OUTPUT}" 2>/dev/null || true
 fi
 
-# step6 onward: remove ranker output + HTML
-if [[ "${START_FROM}" == "step6" ]]; then
-    rm -rf "${STEP6_OUTPUT_DIR}"/_ranker_ckpt_* 2>/dev/null
-    rm -f  "${STEP6_OUTPUT_DIR}"/*_Results.tsv 2>/dev/null
-    rm -f  "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null
-    rm -f  "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+if step_should_run "step6"; then
+    rm -rf "${STEP6_OUTPUT_DIR}"/_ranker_ckpt_* 2>/dev/null || true
+    rm -f  "${STEP6_OUTPUT_DIR}"/*_Results.tsv 2>/dev/null || true
+    rm -f  "${VIP_DIR}"/*_Ranked${MODEL_SUFFIX}.tsv 2>/dev/null || true
 fi
 
-# step8 onward: remove HTML only
-if [[ "${START_FROM}" == "step8" ]]; then
-    rm -f "${VIP_DIR}"/*_L3*.html "${VIP_DIR}"/*_L3*.jsonl 2>/dev/null
+if step_should_run "step7"; then
+    : # step7 is read-only stats, nothing to clean
+fi
+
+if step_should_run "step8"; then
+    rm -rf "${STEP8_RESULTS_DIR}" 2>/dev/null || true
 fi
 
 echo "  Done."
@@ -229,7 +239,7 @@ if step_should_run "step6"; then
 
     mkdir -p "${STEP6_OUTPUT_DIR}"
 
-    # For 22 VIP users (likely <100 journeys), run inference directly (no split)
+    # For VIP users (small set), run inference directly (no split)
     echo "  [step6] Running inference..."
     python3 "${COOK_DIR}/step6_call_LLM_ranker.py" \
         --input_file "${STEP5_OUTPUT}" \
@@ -238,16 +248,16 @@ if step_should_run "step6"; then
         --num_workers 20 \
         --max_tokens 10000
 
-    # Merge results
+    # Merge results (output to same model-specific dir)
     echo ""
     echo "  [step6] Merging results..."
     python3 "${COOK_DIR}/step6_call_LLM_ranker.py" \
         --input_file "${STEP5_OUTPUT}" \
-        --output_dir "${VIP_DIR}" \
+        --output_dir "${STEP6_OUTPUT_DIR}" \
         --merge_dir "${STEP6_OUTPUT_DIR}"
 
     # Find merged output
-    STEP6_ACTUAL=$(ls -t "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
+    STEP6_ACTUAL=$(ls -t "${STEP6_OUTPUT_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
     if [[ -n "${STEP6_ACTUAL}" ]]; then
         STEP6_MERGED="${STEP6_ACTUAL}"
     fi
@@ -259,11 +269,38 @@ if step_should_run "step6"; then
 else
     echo "[SKIP] Step 6 (--from ${START_FROM})"
     # Try to find existing step6 output
-    STEP6_ACTUAL=$(ls -t "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
+    STEP6_ACTUAL=$(ls -t "${STEP6_OUTPUT_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
     if [[ -n "${STEP6_ACTUAL}" ]]; then
         STEP6_MERGED="${STEP6_ACTUAL}"
     fi
     echo "  Using: ${STEP6_MERGED}"
+fi
+
+# =============================================================================
+#  Step 7: Statistics on ranked output
+# =============================================================================
+if step_should_run "step7"; then
+    echo ""
+    echo "────────────────────────────────────────────────────────────────────"
+    echo "  Step 7: Data statistics"
+    echo "────────────────────────────────────────────────────────────────────"
+
+    if [[ -z "${STEP6_MERGED}" ]]; then
+        STEP6_ACTUAL=$(ls -t "${STEP6_OUTPUT_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
+        if [[ -n "${STEP6_ACTUAL}" ]]; then
+            STEP6_MERGED="${STEP6_ACTUAL}"
+        fi
+    fi
+
+    if [[ -n "${STEP6_MERGED}" && -f "${STEP6_MERGED}" ]]; then
+        python3 "${COOK_DIR}/step7_stats.py" \
+            --input_file "${STEP6_MERGED}"
+    else
+        echo "  WARNING: No ranked TSV found, skipping step7"
+    fi
+    echo ""
+else
+    echo "[SKIP] Step 7 (--from ${START_FROM})"
 fi
 
 # =============================================================================
@@ -275,24 +312,28 @@ if step_should_run "step8"; then
     echo "  Step 8: HTML Visualization"
     echo "────────────────────────────────────────────────────────────────────"
 
-    if [[ ! -f "${STEP6_MERGED}" ]]; then
-        echo "ERROR: Step 6 output not found: ${STEP6_MERGED}"
+    if [[ -z "${STEP6_MERGED}" ]]; then
+        STEP6_ACTUAL=$(ls -t "${STEP6_OUTPUT_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
+        if [[ -n "${STEP6_ACTUAL}" ]]; then
+            STEP6_MERGED="${STEP6_ACTUAL}"
+        fi
+    fi
+
+    if [[ -z "${STEP6_MERGED}" || ! -f "${STEP6_MERGED}" ]]; then
+        echo "ERROR: Step 6 output not found in ${STEP6_OUTPUT_DIR}"
         exit 1
     fi
 
-    # Build step8 command with conditional --original_index_file
-    STEP8_CMD=(python3 "${COOK_DIR}/step8_generate_html.py"
-        --input "${STEP6_MERGED}"
-        --results_dir "${STEP8_OUTPUT_DIR}"
-        --item_json "${ITEM_JSON}"
+    mkdir -p "${STEP8_RESULTS_DIR}"
+    python3 "${COOK_DIR}/step8_generate_html.py" \
+        --input "${STEP6_MERGED}" \
+        --results_dir "${STEP8_RESULTS_DIR}" \
+        --item_json "${ITEM_JSON}" \
         --top_k 12
-    )
-    if [[ -n "${ORIGINAL_INDEX}" && -f "${ORIGINAL_INDEX}" ]]; then
-        STEP8_CMD+=(--original_index_file "${ORIGINAL_INDEX}")
-    fi
-    "${STEP8_CMD[@]}"
 
     echo ""
+else
+    echo "[SKIP] Step 8 (--from ${START_FROM})"
 fi
 
 # =============================================================================
@@ -304,13 +345,15 @@ echo "  VIP Case Study Pipeline — Complete!"
 echo "=================================================================="
 echo ""
 echo "  Output directory: ${VIP_DIR}"
+echo "  Step6 output:    ${STEP6_OUTPUT_DIR}"
+echo "  HTML output:     ${STEP8_RESULTS_DIR}"
 echo ""
 echo "  Files:"
-ls -lhS "${VIP_DIR}"/*.tsv "${VIP_DIR}"/*.html "${VIP_DIR}"/*.jsonl 2>/dev/null | \
+ls -lhS "${VIP_DIR}"/*.tsv "${STEP6_OUTPUT_DIR}"/*.tsv "${STEP8_RESULTS_DIR}"/*.html "${STEP8_RESULTS_DIR}"/*.jsonl 2>/dev/null | \
     awk '{printf "    %-6s  %s\n", $5, $NF}'
 echo ""
 echo "  To view the HTML, download:"
-HTML_FILE=$(ls -t "${VIP_DIR}"/*_L3.html 2>/dev/null | head -1)
+HTML_FILE=$(ls -t "${STEP8_RESULTS_DIR}"/*_L3.html 2>/dev/null | head -1)
 if [[ -n "${HTML_FILE}" ]]; then
     echo "    ${HTML_FILE}"
 fi

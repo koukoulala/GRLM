@@ -54,6 +54,73 @@ def _fast_json_save(obj, file_path):
     size_mb = len(raw) / (1024 * 1024)
     print(f"  Saved {file_path} ({size_mb:.2f} MB) in {elapsed:.1f}s")
 
+
+def _streaming_json_save(obj, file_path, chunk_size=50_000):
+    """Save a large dict as JSON by serializing in chunks.
+
+    Unlike _fast_json_save, this never holds the entire serialized JSON in
+    memory.  Entries are batched into mini-dicts of *chunk_size*, each
+    serialized with orjson in one call (fast C-level bulk serialization),
+    then the outer braces are stripped and the inner content is written.
+    Peak extra memory ≈ one chunk (~50 K items, ~50-100 MB).
+    """
+    t0 = time.time()
+    try:
+        import orjson
+        use_orjson = True
+    except ImportError:
+        use_orjson = False
+
+    count = 0
+    total = len(obj)
+    chunk = {}
+    first_chunk = True
+
+    with open(file_path, "wb", buffering=16 * 1024 * 1024) as f:
+        f.write(b"{")
+        for key, value in obj.items():
+            chunk[str(key)] = value
+            count += 1
+            if len(chunk) >= chunk_size or count == total:
+                if use_orjson:
+                    raw = orjson.dumps(chunk)
+                else:
+                    raw = json.dumps(chunk, ensure_ascii=False).encode("utf-8")
+                # Strip outer { and } to get inner key:value pairs
+                inner = raw[1:-1]
+                if not first_chunk:
+                    f.write(b",")
+                f.write(inner)
+                first_chunk = False
+                chunk = {}
+                if count % 5_000_000 == 0:
+                    elapsed = time.time() - t0
+                    print(f"    ... written {count:,}/{total:,} entries ({elapsed:.0f}s)")
+        f.write(b"}")
+
+    elapsed = time.time() - t0
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    print(f"  Saved {file_path} ({size_mb:,.1f} MB, {count:,} entries) in {elapsed:.1f}s")
+
+
+def load_llm_cat_mapping(path):
+    """Load LLMCatId -> CategoryName from a 2-col TSV (`<name>\t<id>`)."""
+    mapping = {}
+    if not path or not os.path.isfile(path):
+        print(f"[cat] WARNING: mapping file not found: {path}")
+        return mapping
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            name, cat_id = parts[0].strip(), parts[1].strip()
+            if cat_id and name:
+                mapping[cat_id] = name
+    print(f"[cat] loaded {len(mapping):,} category id->name entries")
+    return mapping
+
+
 # Attribute fields to extract, in canonical order.
 # Category is stored as a top-level "categories" field, not here.
 # Keep in sync with s6_enrich_item_attributes.py ATTRIBUTE_FIELDS.
@@ -266,32 +333,32 @@ def parse_date(date_str):
     return datetime.min
 
 
-def read_tsv(filepath, expected_columns=None, sample_rows=0, seed=42):
+def read_tsv(filepath, expected_columns=None, keep_columns=None):
     """Read a TSV file and return rows as list of dicts.
 
     Uses streaming line-by-line reading with tqdm progress bar based on
-    file size. Memory-efficient: never loads the entire file into memory.
+    file size.
 
     Args:
         filepath: Path to the TSV file.
         expected_columns: Optional list of column names. If provided, will be
             used as header instead of first row.
-        sample_rows: If > 0, use reservoir sampling to keep only this many
-            rows in memory. The entire file is still scanned but memory usage
-            is bounded by sample_rows.
-        seed: Random seed for reservoir sampling reproducibility.
+        keep_columns: Optional set/list of column names to keep. If provided,
+            only these columns are stored in the row dicts (saves memory
+            when the TSV has many unused columns). All columns are still
+            parsed per line, but only the requested ones are kept.
 
     Returns:
-        A list of dicts, one per row (or sample_rows rows if sampling).
+        A list of dicts, one per row.
     """
     file_size = os.path.getsize(filepath)
     t0 = time.time()
     rows = []
     bytes_read = 0
     total_lines = 0
-    use_reservoir = sample_rows > 0
-    if use_reservoir:
-        rng = random.Random(seed)
+
+    if keep_columns and not isinstance(keep_columns, set):
+        keep_columns = set(keep_columns)
 
     with open(filepath, "r", encoding="utf-8", buffering=128 * 1024 * 1024) as f:
         pbar = tqdm(total=file_size, unit="B", unit_scale=True,
@@ -314,6 +381,13 @@ def read_tsv(filepath, expected_columns=None, sample_rows=0, seed=42):
 
         num_cols = len(columns)
 
+        # Pre-compute which column indices to keep for fast filtering
+        if keep_columns:
+            keep_indices = [i for i, c in enumerate(columns) if c in keep_columns]
+            keep_col_names = [columns[i] for i in keep_indices]
+        else:
+            keep_indices = None
+
         # Stream lines
         for line in f:
             bytes_read += len(line.encode("utf-8"))
@@ -330,29 +404,19 @@ def read_tsv(filepath, expected_columns=None, sample_rows=0, seed=42):
             elif nf > num_cols:
                 fields = fields[:num_cols]
 
-            row = dict(zip(columns, fields))
-            total_lines += 1
-
-            if use_reservoir:
-                # Reservoir sampling (Algorithm R)
-                if len(rows) < sample_rows:
-                    rows.append(row)
-                else:
-                    j = rng.randint(0, total_lines - 1)
-                    if j < sample_rows:
-                        rows[j] = row
+            if keep_indices is not None:
+                row = {keep_col_names[j]: fields[keep_indices[j]]
+                       for j in range(len(keep_indices))}
             else:
-                rows.append(row)
+                row = dict(zip(columns, fields))
+            total_lines += 1
+            rows.append(row)
 
         pbar.update(file_size - pbar.n)  # ensure 100%
         pbar.close()
 
     elapsed = time.time() - t0
-    if use_reservoir:
-        print(f"    Scanned {total_lines:,} rows, sampled {len(rows):,} rows "
-              f"(reservoir) in {elapsed:.1f}s")
-    else:
-        print(f"    Parsed {len(rows):,} rows in {elapsed:.1f}s")
+    print(f"    Parsed {len(rows):,} rows in {elapsed:.1f}s")
     return rows
 
 
@@ -377,12 +441,14 @@ def dedup_rows_by_date(rows):
     return [entry[1] for entry in best.values()]
 
 
-def build_item(row, category_key="CategoryName"):
+def build_item(row, category_key="CategoryName", cat_mapping=None):
     """Build a single item dict from a row.
 
     Args:
         row: Dict of column name -> value.
         category_key: Column name for category.
+        cat_mapping: Optional dict of LLMCatId -> CategoryName.
+            Used when category_key column is empty but LLMCatId exists.
 
     Returns:
         Dict with title, description, categories, attributes.
@@ -394,6 +460,17 @@ def build_item(row, category_key="CategoryName"):
 
     description = row.get("Description", "").strip()
     categories = row.get(category_key, "").strip()
+    # Fallback: derive category from LLMCatId via mapping
+    if not categories and cat_mapping:
+        llm_cat_id = row.get("LLMCatId", "").strip()
+        if llm_cat_id:
+            # LLMCatId can be pipe-separated; map each and join
+            cat_names = []
+            for cid in llm_cat_id.split("|"):
+                cid = cid.strip()
+                if cid and cid in cat_mapping:
+                    cat_names.append(cat_mapping[cid])
+            categories = " > ".join(cat_names)
 
     attrs = {}
     for field in ATTRIBUTE_FIELDS:
@@ -434,28 +511,123 @@ def build_item(row, category_key="CategoryName"):
     return item
 
 
+def deduplicate_similar_items(items, target_count, seed=42):
+    """Remove near-duplicate items based on title/seller/brand/description similarity.
+
+    Strategy:
+    1. Build a fingerprint from normalized (title[:50], seller, brand, description[:30])
+    2. Group items by fingerprint — identical fingerprints = near-duplicates
+    3. Keep the best item per group (most attributes filled)
+    4. If still > target_count after dedup, randomly sample down
+
+    Returns a *set* of GlobalOfferIds to keep (not a new dict, to save memory).
+    """
+    # Aggressive normalization: remove all non-alphanumeric, collapse spaces
+    _re_nonalnum = re.compile(r'[^a-z0-9]')
+    _re_spaces = re.compile(r'\s+')
+
+    def _norm(text, max_len=100):
+        """Normalize text for fingerprint: lowercase, strip all punctuation/
+        special chars, collapse whitespace, truncate."""
+        if not text:
+            return ""
+        text = str(text).lower().strip()
+        text = _re_nonalnum.sub(' ', text)
+        text = _re_spaces.sub(' ', text).strip()
+        return text[:max_len]
+
+    def _norm_desc(text, max_len=60):
+        """Extra-aggressive normalization for description: also remove common
+        boilerplate words that vary across near-duplicates."""
+        if not text:
+            return ""
+        text = str(text).lower().strip()
+        text = _re_nonalnum.sub(' ', text)
+        text = _re_spaces.sub(' ', text).strip()
+        # Take first N chars — descriptions often start the same for
+        # near-dupes and diverge in boilerplate at the end
+        return text[:max_len]
+
+    def _fingerprint(item):
+        t = _norm(item.get("title", ""), 60)
+        attrs = item.get("attributes", {})
+        s = _norm(attrs.get("Seller", ""), 30)
+        b = _norm(attrs.get("Brand", ""), 30)
+        d = _norm_desc(item.get("description", ""), 60)
+        return f"{t}|{s}|{b}|{d}"
+
+    def _quality(item):
+        """Higher = better item to keep."""
+        score = len(item.get("attributes", {}))
+        if item.get("description"):
+            score += 1
+        if item.get("categories"):
+            score += 1
+        if item.get("offer_url"):
+            score += 1
+        return score
+
+    print(f"[dedup] building fingerprints for {len(items):,} items...")
+    t0 = time.time()
+
+    # One pass: group by fingerprint, keep only the best per group
+    best_per_fp = {}  # fingerprint -> (gid, quality_score)
+    dup_count = 0
+    for gid, item in tqdm(items.items(), desc="dedup-fingerprint", mininterval=5):
+        fp = _fingerprint(item)
+        q = _quality(item)
+        if fp not in best_per_fp:
+            best_per_fp[fp] = (gid, q)
+        else:
+            dup_count += 1
+            if q > best_per_fp[fp][1]:
+                best_per_fp[fp] = (gid, q)
+
+    kept_gids = set(gid for gid, _ in best_per_fp.values())
+    del best_per_fp  # free fingerprint memory
+    gc.collect()
+    print(f"[dedup] {len(items):,} -> {len(kept_gids):,} unique fingerprints "
+          f"({dup_count:,} near-duplicates removed) in {time.time()-t0:.1f}s")
+
+    # If still too many, random sample
+    if 0 < target_count < len(kept_gids):
+        rng = random.Random(seed)
+        kept_gids = set(rng.sample(list(kept_gids), target_count))
+        print(f"[dedup] further sampled to {target_count:,} items")
+
+    return kept_gids
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build enriched item.json from JourneyProduct TSV files"
+        description="Build enriched item.json from product TSV files"
     )
     parser.add_argument(
-        "--journey_product_files",
+        "--input_files",
         type=str,
         nargs="+",
-        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260515_ProductBestOffer_Sampled.tsv"],
-        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product.tsv",
-        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_UpdatedBlocklist.tsv",
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0509.tsv",
-                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/20250401_20260331/EnUs_Product_0512.tsv"],
-        help="Path(s) to JourneyProduct TSV files. Multiple files will be "
-             "merged; duplicate GlobalOfferIds are resolved by keeping the "
-             "row with the latest Date.",
+        default=[#"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/26/IndexData_en_us_all.tsv",
+                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/25/IndexData_en_us_all.tsv",
+                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/22/IndexData_en_us_all.tsv",
+                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/12/IndexData_en_us_all.tsv",
+                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/04/IndexData_en_us_all.tsv",
+                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260528_ProductBestOffer_Sampled.tsv",],
+        help="Path(s) to product TSV files (JourneyProduct or IndexData). "
+             "Multiple files will be merged; duplicate GlobalOfferIds are "
+             "resolved by keeping the row with the latest Date.",
+    )
+    parser.add_argument(
+        "--cat_mapping",
+        type=str,
+        default="/vc_data/users/wangying/OneRec/ShoppingJourney/Pipeline/res/LLMCatMapping.tsv",
+        help="Path to LLMCatMapping.tsv ('<CategoryName>\\t<LLMCatId>'). "
+             "Used to derive category names when CategoryName column is "
+             "missing (e.g., IndexData TSV input).",
     )
     parser.add_argument(
         "--output_dir",
         type=str,
-        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data_PG",
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data_v2",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_PG",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(
@@ -494,11 +666,12 @@ def parse_args():
     parser.add_argument(
         "--sample_rows",
         type=int,
-        default=22000000,
-        help="If > 0, use reservoir sampling to only keep this many rows "
-             "during TSV reading. Drastically reduces memory usage. "
-             "The full file is still scanned but only sample_rows rows are "
-             "kept in memory. (default: 0 = read all rows)",
+        default=15000000,
+        help="If > 0, apply similarity-based dedup at output time to reduce "
+             "item.json to approximately this many items. item_full.json is "
+             "always written with all items. Near-duplicate items (same "
+             "title/seller/brand/description) are merged first, then random "
+             "sampling if still over the target. (default: 0 = no sampling)",
     )
     parser.add_argument(
         "--skip_filter",
@@ -516,6 +689,17 @@ def parse_args():
     return parser.parse_args()
 
 
+# Columns actually used by build_item() and dedup_rows_by_date().
+# Only these are kept when reading TSV files to save memory (~4x reduction
+# for IndexData files with 69 columns).
+_NEEDED_COLUMNS = {
+    "GlobalOfferId", "Title", "Description", "Seller", "Gender",
+    "OriginalPrice", "LLMCatId", "CategoryName", "AgeGroup",
+    "Brand", "Color", "Size", "Material", "Market", "Price",
+    "Date", "OfferURL", "OfferUrl", "ImageUrl",
+}
+
+
 def main():
     args = parse_args()
 
@@ -527,7 +711,7 @@ def main():
     print("=" * 70)
 
     all_rows = []
-    for filepath in args.journey_product_files:
+    for filepath in args.input_files:
         print(f"\n  Reading: {filepath}")
         # Peek at first line to check if it's a header
         with open(filepath, "r", encoding="utf-8") as f:
@@ -535,7 +719,7 @@ def main():
         first_fields = first_line.split("\t")
         if "GlobalOfferId" in first_fields:
             print(f"    Detected header row: {first_fields[:5]}...")
-            rows = read_tsv(filepath, sample_rows=args.sample_rows, seed=args.seed)
+            rows = read_tsv(filepath, keep_columns=_NEEDED_COLUMNS)
         else:
             print(f"    No header detected, using predefined columns")
             journey_columns_fallback = [
@@ -543,8 +727,7 @@ def main():
                 "OriginalPrice", "LLMCatId", "CategoryName", "AgeGroup",
                 "Brand", "Description", "OfferUrl", "ImageUrl",
             ]
-            rows = read_tsv(filepath, expected_columns=journey_columns_fallback,
-                           sample_rows=args.sample_rows, seed=args.seed)
+            rows = read_tsv(filepath, expected_columns=journey_columns_fallback)
         print(f"    Rows: {len(rows):,}")
         if rows:
             print(f"    Columns: {list(rows[0].keys())}")
@@ -575,7 +758,7 @@ def main():
     from collections import Counter  # local import to avoid top-level
     file_gid_counts = Counter(row.get("_source_file", "unknown") for row in deduped_rows)
     print(f"\n  Per-file GID contribution (after dedup):")
-    for fpath in args.journey_product_files:
+    for fpath in args.input_files:
         count = file_gid_counts.get(fpath, 0)
         print(f"    {os.path.basename(fpath):<50s} {count:>10,} GIDs")
 
@@ -616,19 +799,16 @@ def main():
     # Attribute coverage counters
     attr_counts = {field: 0 for field in ATTRIBUTE_FIELDS}
 
+    # Load LLMCatId -> CategoryName mapping for TSV inputs without CategoryName
+    cat_mapping = load_llm_cat_mapping(args.cat_mapping) if args.cat_mapping else {}
+
     # Load category blocklist
     cat_blocked_ids = set()
     has_cat_id_col = False
     if not args.skip_filter:
         cat_blocked_ids = load_category_blocklist(args.category_blocklist)
-        if cat_blocked_ids:
-            print(f"\n  Category blocklist: {len(cat_blocked_ids):,} blocked CategoryIds loaded")
         # Check if data has LLMCatId column
         has_cat_id_col = len(deduped_rows) > 0 and "LLMCatId" in deduped_rows[0]
-        if has_cat_id_col:
-            print(f"  LLMCatId column detected, will apply category blocklist")
-        else:
-            print(f"  LLMCatId column not found, skipping category blocklist")
     else:
         print(f"\n  --skip_filter: skipping all blocklist filtering")
 
@@ -645,7 +825,7 @@ def main():
                 stats["category_blocked"] += 1
                 continue
 
-        item = build_item(row, category_key="CategoryName")
+        item = build_item(row, category_key="CategoryName", cat_mapping=cat_mapping)
         if item is None:
             stats["no_title"] += 1
             continue
@@ -670,14 +850,20 @@ def main():
     gc.collect()
     print(f"  Built {len(items):,} items, freed raw row memory")
 
-    # ----- Seller blocklist filtering -----
+    # ----- Category blocklist result -----
     seller_blocked_count = 0
     title_blocked_count = 0
-    desc_blocked_count = 0
+    n_title = 0
+    n_desc = 0
+    n_url = 0
     blocked_items = []
-    desc_blocked_items = []
 
     if not args.skip_filter:
+        if cat_blocked_ids and has_cat_id_col:
+            print(f"\n  Applying category blocklist ({len(cat_blocked_ids):,} CategoryIds blocked)")
+            print(f"  Items removed by category blocklist:       {stats['category_blocked']:>10,}")
+
+        # ----- Seller blocklist filtering -----
         seller_blocklist = load_seller_blocklist(args.seller_blocklist)
         if seller_blocklist:
             print(f"\n  Applying seller blocklist ({len(seller_blocklist):,} sellers loaded)")
@@ -697,61 +883,64 @@ def main():
         title_blocklist_tokens = load_title_blocklist(args.title_blocklist, language="en")
         title_blocklist_regex = build_title_blocklist_regex(title_blocklist_tokens)
         if title_blocklist_regex:
-            print(f"\n  Applying title blocklist ({len(title_blocklist_tokens):,} keywords loaded)")
+            print(f"\n  Applying unified blocklist (title + description + URL) "
+                  f"({len(title_blocklist_tokens):,} keywords)")
 
             gids_to_remove = []
             for gid, item in items.items():
-                title = item["title"]
-                if not title:
+                # Combine title + description + URL, normalize once
+                parts = [item.get("title", "")]
+                desc = item.get("description", "")
+                url = item.get("offer_url", "")
+                if desc:
+                    parts.append(desc)
+                if url:
+                    # Normalize URL: replace path separators with spaces
+                    # so "Restored-Apple-iPhone" becomes searchable words
+                    parts.append(url.replace("/", " ").replace("-", " ")
+                                    .replace("_", " ").replace("?", " "))
+                combined = " ".join(parts)
+                if not combined.strip():
                     continue
-                norm_title = normalize_title(title)
-                m = title_blocklist_regex.search(norm_title)
+                norm = normalize_title(combined)
+                m = title_blocklist_regex.search(norm)
                 if m:
+                    # Determine which field matched for the report
+                    matched_in = "title"
+                    norm_title = normalize_title(item.get("title", ""))
+                    if not title_blocklist_regex.search(norm_title):
+                        if desc and title_blocklist_regex.search(
+                                normalize_title(desc)):
+                            matched_in = "desc"
+                        else:
+                            matched_in = "url"
                     gids_to_remove.append(gid)
                     blocked_items.append((
-                        gid, title,
+                        gid, item.get("title", ""),
                         item["attributes"].get("Seller", ""),
                         item["categories"],
-                        m.group(0),
+                        f"{matched_in}:{m.group(0)}",
                     ))
 
             for gid in gids_to_remove:
                 del items[gid]
             title_blocked_count = len(gids_to_remove)
-            print(f"  Items removed by title blocklist:           {title_blocked_count:>10,}")
-
-            # ----- Description blocklist filtering (reuse same regex) -----
-            print(f"\n  Applying description blocklist (same {len(title_blocklist_tokens):,} keywords)")
-            gids_to_remove = []
-            for gid, item in items.items():
-                desc = item["description"]
-                if not desc:
-                    continue
-                norm_desc = normalize_title(desc)
-                m = title_blocklist_regex.search(norm_desc)
-                if m:
-                    gids_to_remove.append(gid)
-                    desc_blocked_items.append((
-                        gid, item["title"],
-                        item["attributes"].get("Seller", ""),
-                        item["categories"],
-                        f"desc:{m.group(0)}",
-                    ))
-
-            for gid in gids_to_remove:
-                del items[gid]
-            desc_blocked_count = len(gids_to_remove)
-            print(f"  Items removed by description blocklist:     {desc_blocked_count:>10,}")
+            # Count by source
+            n_title = sum(1 for b in blocked_items if b[4].startswith("title:"))
+            n_desc = sum(1 for b in blocked_items if b[4].startswith("desc:"))
+            n_url = sum(1 for b in blocked_items if b[4].startswith("url:"))
+            print(f"  Items removed by blocklist:                 {title_blocked_count:>10,}")
+            print(f"    matched in title:                         {n_title:>10,}")
+            print(f"    matched in description:                   {n_desc:>10,}")
+            print(f"    matched in URL:                           {n_url:>10,}")
         else:
-            print(f"\n  Title/description blocklist: not applied (no valid file)")
+            print(f"\n  Title/description/URL blocklist: not applied (no valid file)")
 
-    print(f"  Items removed (missing title):             {stats['no_title']:>10,}")
-    if cat_blocked_ids and has_cat_id_col:
-        print(f"  Items removed (blocked category):          {stats['category_blocked']:>10,}")
+    print(f"\n  Items removed (missing title):             {stats['no_title']:>10,}")
     print(f"  Titles truncated (over {max_field_len} chars):       {stats['truncated_title']:>10,}")
     print(f"  Descriptions truncated (over {max_field_len} chars): {stats['truncated_description']:>10,}")
     print(f"  Categories truncated (over {max_field_len} chars):   {stats['truncated_categories']:>10,}")
-    print(f"  Total items in final output:               {len(items):>10,}")
+    print(f"\n  Total items in final output:               {len(items):>10,}")
 
     # =========================================================================
     # Step 4: Statistics
@@ -800,13 +989,56 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     total_item_count = len(items)
 
-    # Write full item.json
-    output_path = os.path.join(args.output_dir, "item.json")
-    _fast_json_save(items, output_path)
-    print(f"  Total items: {total_item_count:,}")
+    # --- 5a. Always write item_full.json first (streaming to avoid OOM) ---
+    full_output_path = os.path.join(args.output_dir, "item_full.json")
+    print(f"  Writing item_full.json ({total_item_count:,} items, streaming)...")
+    _streaming_json_save(items, full_output_path)
+    print(f"  item_full.json: {total_item_count:,} items (full)")
+
+    # --- 5b. Sample entries for display (before potential in-place deletion) ---
+    sample_display = []
+    if items:
+        all_keys = list(items.keys())
+        with_attrs = [k for k in all_keys[:200000] if items[k]["attributes"]]
+        without_attrs = [k for k in all_keys[:200000] if not items[k]["attributes"]]
+        sample_keys = []
+        if with_attrs:
+            sample_keys.extend(random.sample(with_attrs, min(3, len(with_attrs))))
+        if without_attrs:
+            sample_keys.extend(random.sample(without_attrs, min(2, len(without_attrs))))
+        for key in sample_keys[:5]:
+            sample_display.append((key, items[key].copy()))
+        del all_keys, with_attrs, without_attrs, sample_keys
+
+    # --- 5c. Apply similarity-based dedup if sample_rows > 0 ---
+    if args.sample_rows > 0 and len(items) > args.sample_rows:
+        kept_gids = deduplicate_similar_items(
+            items, target_count=args.sample_rows, seed=args.seed)
+        # Remove items not in kept_gids in-place (avoids copying the dict)
+        gids_to_remove = [gid for gid in items if gid not in kept_gids]
+        print(f"  Removing {len(gids_to_remove):,} items not in sample...")
+        for gid in gids_to_remove:
+            del items[gid]
+        del gids_to_remove, kept_gids
+        gc.collect()
+        output_path = os.path.join(args.output_dir, "item.json")
+        print(f"  Writing item.json ({len(items):,} items, streaming)...")
+        _streaming_json_save(items, output_path)
+        print(f"  item.json: {len(items):,} items (deduped/sampled from {total_item_count:,})")
+    else:
+        # No sampling — item.json == item_full.json, just symlink or copy
+        output_path = os.path.join(args.output_dir, "item.json")
+        print(f"  Writing item.json ({total_item_count:,} items, streaming)...")
+        _streaming_json_save(items, output_path)
+        print(f"  item.json: {total_item_count:,} items (same as full, no sampling)")
+
+    # Free the large items dict
+    del items
+    gc.collect()
+    print(f"  [mem] freed items dict")
 
     # Write blocked items report
-    all_blocked = blocked_items + desc_blocked_items
+    all_blocked = blocked_items
     if all_blocked:
         blocked_path = os.path.join(args.output_dir, "blocked_items.tsv")
         with open(blocked_path, "w", encoding="utf-8", newline="") as f:
@@ -817,11 +1049,11 @@ def main():
                 writer.writerow(row)
         blocked_mb = os.path.getsize(blocked_path) / (1024 * 1024)
         print(f"  Blocked items report: {blocked_path} ({blocked_mb:.2f} MB)")
-        print(f"    Seller-blocked: {seller_blocked_count:,}")
-        print(f"    Title-blocked:  {title_blocked_count:,}")
-        print(f"    Desc-blocked:   {desc_blocked_count:,}")
-        total_blocked = seller_blocked_count + title_blocked_count + desc_blocked_count
-        print(f"    Total blocked:  {total_blocked:,}")
+        print(f"    Seller-blocked:  {seller_blocked_count:,}")
+        print(f"    Content-blocked: {title_blocked_count:,}")
+        print(f"      (title: {n_title:,}, desc: {n_desc:,}, url: {n_url:,})")
+        total_blocked = seller_blocked_count + title_blocked_count
+        print(f"    Total blocked:   {total_blocked:,}")
 
     # =========================================================================
     # Step 6: Sample entries
@@ -831,23 +1063,8 @@ def main():
     print("Step 6: Sample entries")
     print("=" * 70)
 
-    display_items = items
-
-    if display_items:
-        # Pick samples: some with attributes, some without
-        all_keys = list(display_items.keys())
-        with_attrs = [k for k in all_keys if display_items[k]["attributes"]]
-        without_attrs = [k for k in all_keys if not display_items[k]["attributes"]]
-
-        sample_keys = []
-        if with_attrs:
-            sample_keys.extend(random.sample(with_attrs, min(3, len(with_attrs))))
-        if without_attrs:
-            sample_keys.extend(random.sample(without_attrs, min(2, len(without_attrs))))
-        sample_keys = sample_keys[:5]
-
-        for idx, key in enumerate(sample_keys, 1):
-            info = display_items[key]
+    if sample_display:
+        for idx, (key, info) in enumerate(sample_display, 1):
             print(f"\n--- Sample {idx} (GlobalOfferId={key}) ---")
             print(f"  title:        {info['title'][:120]}")
             desc = info["description"]
@@ -860,6 +1077,7 @@ def main():
                     print(f"    {af}: {av}")
             else:
                 print(f"  attributes:   {{}}")
+    del sample_display
 
     # =========================================================================
     # Summary
@@ -873,8 +1091,7 @@ def main():
     if cat_blocked_ids and has_cat_id_col:
         print(f"  Removed (blocked category):{stats['category_blocked']:>10,}")
     print(f"  Removed (seller blocklist):{seller_blocked_count:>10,}")
-    print(f"  Removed (title blocklist): {title_blocked_count:>10,}")
-    print(f"  Removed (desc blocklist):  {desc_blocked_count:>10,}")
+    print(f"  Removed (content blocklist): {title_blocked_count:>10,}")
     print(f"  With description:          {has_desc:>10,}")
     print(f"  With categories:           {has_cat:>10,}")
     print(f"  With attributes:           {has_attrs:>10,}")

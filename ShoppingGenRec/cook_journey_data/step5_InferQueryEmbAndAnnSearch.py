@@ -859,24 +859,24 @@ def parse_args() -> argparse.Namespace:
     # I/O ---------------------------------------------------------------------
     g_io = p.add_argument_group("I/O")
     g_io.add_argument("--input_tsv", 
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv",
                       help="Journey output TSV from step3 (UserId, "
                            "ReadableUserEvents, ShoppingProfile, RequestTime, "
                            "HisCount, OUTPUT).")
     g_io.add_argument("--item_json", 
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/item.json",
                       help="Path to item.json (output of step0). Used to "
                            "attach product metadata to search results.")
     g_io.add_argument("--work_dir", 
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB",
                       help="Output directory.")
     g_io.add_argument("--output_prefix", default="UserEvents_clean_combined_full",
                       help="Filename prefix for the output TSV.")
 
     # Step4 index (for ANN search) -------------------------------------------
-    g_idx = p.add_argument_group("Step4 index")
+    g_idx = p.add_argument_group("Index")
     g_idx.add_argument("--index_dir",
-                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/MatadorEmb_Index",
+                      default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/MatadorEmb_Index",
                       help="Directory containing the FAISS index and id-map "
                            "files built by step4.")
     g_idx.add_argument("--index_prefix", default="Items_full",

@@ -528,51 +528,85 @@ def _normalize_title(title, aggressive=False):
     return re.sub(r'\s+', ' ', t).strip()
 
 
-def _dedup_products(products, cross_seller=False):
-    """Remove exact-GID duplicates and same-product size/color variants.
+def _title_word_set(title):
+    """Build a lowercase word set from a product title for Jaccard comparison.
 
-    For exact same GID: always keep only the first (best-ranked) occurrence.
-    For near-duplicates:
-      - Default: same normalized title AND same Seller → keep first.
-      - cross_seller=True: same aggressively-normalized title AND same Brand
-        (regardless of seller) → keep first. This catches the same product
-        sold by different retailers (e.g., HP AIO from HP vs Amazon).
+    Strips common noise tokens (punctuation, size labels, parenthetical
+    suffixes like "(size: M)") but keeps meaningful words intact so that
+    Jaccard similarity can detect near-duplicates without brittle regex.
+    """
+    if not title:
+        return set()
+    t = title.lower()
+    # Remove parenthetical size/variant suffixes: "(size: M)", "(Black)"
+    t = re.sub(r'\([^)]{0,30}\)', ' ', t)
+    # Remove common punctuation (keep hyphens inside words)
+    t = re.sub(r'[,|/]', ' ', t)
+    # Split and filter noise
+    words = set()
+    _NOISE = {'', '-', '–', '—', 'the', 'a', 'an', 'and', 'or', 'for',
+              'in', 'of', 'with', 'to', 'by', 'at', 'on', 'size', 'color'}
+    for w in t.split():
+        w = w.strip('-–—.')
+        # Skip noise words, single chars, and model/color numbers like #020
+        if w and w not in _NOISE and len(w) > 1 and not w.startswith('#'):
+            words.add(w)
+    return words
+
+
+def _jaccard(set_a, set_b):
+    """Word-level Jaccard similarity."""
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+
+def _dedup_products(products, jaccard_threshold=0.7, **_kwargs):
+    """Remove exact-GID duplicates and near-duplicate products using Jaccard.
+
+    Greedy rank-preserving (same logic as s3_build_journey_sft_data):
+    iterate products in rank order, keep a product only if its title
+    Jaccard similarity to ALL already-kept products is below the threshold.
+
+    Two layers:
+      1. Exact GID dedup: same OfferId → keep first.
+      2. Jaccard dedup: title word-set Jaccard >= threshold → keep first.
 
     Returns (deduped_list, n_exact_dup, n_near_dup).
     """
     seen_gids = set()
-    seen_norm = set()       # (normalized_title, seller)
-    seen_cross = set()      # (aggressive_title, brand) — cross-seller
+    kept_word_sets = []
     result = []
     n_exact = 0
     n_near = 0
+
     for p in products:
         gid = p.get("global_offer_id", "")
-        # exact GID dedup
+        # Layer 1: exact GID dedup
         if gid and gid in seen_gids:
             n_exact += 1
             continue
         if gid:
             seen_gids.add(gid)
-        title = p.get("Title", "")
-        seller = p.get("Seller", "")
-        brand = p.get("Brand", "")
-        # Same-seller near-dup (size/color variants)
-        norm_key = (_normalize_title(title), seller)
-        if norm_key[0] and norm_key in seen_norm:
+
+        words = _title_word_set(p.get("Title", ""))
+
+        # Layer 2: Jaccard dedup against all kept products
+        is_dup = False
+        for kept_words in kept_word_sets:
+            if not words or not kept_words:
+                continue
+            if _jaccard(words, kept_words) >= jaccard_threshold:
+                is_dup = True
+                break
+
+        if is_dup:
             n_near += 1
             continue
-        if norm_key[0]:
-            seen_norm.add(norm_key)
-        # Cross-seller near-dup (same product different retailers)
-        if cross_seller and brand:
-            agg_key = (_normalize_title(title, aggressive=True), brand)
-            if agg_key[0] and agg_key in seen_cross:
-                n_near += 1
-                continue
-            if agg_key[0]:
-                seen_cross.add(agg_key)
+
+        kept_word_sets.append(words)
         result.append(p)
+
     return result, n_exact, n_near
 
 
