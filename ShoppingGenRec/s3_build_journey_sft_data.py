@@ -227,7 +227,7 @@ def load_from_ranked_tsv(filepath):
                     if not isinstance(p, dict):
                         continue
                     oid = str(p.get("OfferId", "")).strip()
-                    if not oid:
+                    if not oid or oid in products_info:
                         continue
                     product_ids.append(oid)
                     products_info[oid] = {
@@ -649,7 +649,7 @@ def diversify_journey_products(product_tids, product_ids, id2meta,
 
     while remaining:
         best_i = None
-        best_score = 9
+        best_score = float('inf')
 
         for i in remaining:
             max_ov = max(len(cand_sets[i] & cand_sets[s]) for s in selected_idx)

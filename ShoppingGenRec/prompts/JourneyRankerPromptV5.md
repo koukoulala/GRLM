@@ -45,6 +45,7 @@ Before applying any ranking gates, exclude ALL candidate products that fall into
 - Funeral and memorial products (caskets, urns, memorial stones)
 - Content derogatory toward disability status (mental or physical)
 - Hunting gear and accessories (decoys, calls, scopes, blinds, hunting-specific clothing)
+- Refurbished, renewed, restored, pre-owned, or used products (open box, "like new", suspiciously low prices for typically expensive items)
 
 Safety exclusions are absolute. Products caught here are immediately removed and do not enter any subsequent gate or appear in the output.
 
@@ -60,7 +61,8 @@ Gate 1 — Relevance (most critical — STRICT): Evaluate every candidate produc
 
   ### 1a. Intent Alignment
   Evaluate whether the product directly supports the journey's stated core intent.
-  - **Keep** (strong): The product's primary category matches the journey's target category, its core function directly addresses the user's need, and it supports the specific scenario or occasion described. The product would reasonably be a top candidate for this journey.
+
+  - **Keep** (strong): The product's primary category matches the journey's target category, its core function directly addresses the user's need, and it supports the specific scenario or occasion described. The product would reasonably be a top candidate for this journey. Among Keep-level products, those whose brand or seller matches a brand/seller explicitly named in the original query are the strongest candidates and should be ranked first.
   - **Demote** (partial): The product is related to the journey's category but only addresses part of the intent, serves as a secondary alternative, or requires additional assumptions to be considered a fit.
   - **Exclude** (misaligned): The product's category is unrelated, its function does not address the journey's need, a core requirement is missing or contradicted, or the product belongs to a different intent thread (e.g., accessories when the journey is about primary items). Exclude if the product would confuse or distract from the shopping decision.
 
@@ -171,7 +173,8 @@ Diversity is enforced through a two-stage process: first group near-duplicate pr
   Group two or more products into the same group when ALL of the following are true:
   - **Same brand** (case-insensitive, normalized)
   - **Same primary product type or model line** (e.g., "running shoe", "wireless earbuds", "leather wallet")
-  - **Same key variant attributes**: color (exact or clearly equivalent, e.g., "black" vs "jet black"), material/core build (if stated), and major functional variant (e.g., standard vs pro, wired vs wireless)
+  - **Same key variant attributes**: color, material/core build (if stated), and major functional variant (e.g., standard vs pro, wired vs wireless)
+  - **Color-only differences count as the same group** — products that differ ONLY in color (e.g., "Sashiko Thread #020 Pearl White" vs "Sashiko Thread #003 Snow White", or "Nike Air Max Black" vs "Nike Air Max White") MUST be grouped together. Keep only the single best color variant.
   - Size-only differences (shoe size, clothing size) count as the same group
   - **Generation/minor spec differences** also count as the same group (e.g., "JBL Charge 5" vs "JBL Charge 4", "iPhone 15" vs "iPhone 14") — keep the newer generation as the best product
 
@@ -303,6 +306,6 @@ The `<JOURNEY>` section contains a single journey and its candidate products to 
 ##JourneyWithProducts##
 </JOURNEY>
 
-Now I will analyze the user's shopping profile, then rank all products in this journey (pooling all query results into one unified ranking, keeping only products that pass all gates, and annotating each with its original query).
+Now I will analyze the user's shopping profile, then rank all products in this journey.
 
 

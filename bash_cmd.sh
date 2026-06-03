@@ -1,8 +1,25 @@
 
 cd GRLM/ShoppingGenRec/
-nohup python -u cook_journey_data/step0_combine_item_data.py > logs/step0.out 2>&1 &
+nohup python -u cook_journey_data/step0_combine_item_data.py > logs/step0_idb.out 2>&1 &
+nohup python -u cook_journey_data/step0_combine_item_data.py --skip_filter > logs/step0_pg.out 2>&1 &
+nohup bash -c '
+while kill -0 452262 2>/dev/null; do sleep 30; done
+echo "PID 407871 finished, starting step1..."
+cd /scratch/workspaceblobstore/users/xiaoyukou/GRLM/ShoppingGenRec
+python -u cook_journey_data/step1_InferIndexEmbAndAnnBuild.py \
+  --resume_emb_dir \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260522/raw_data/MatadorEmb_Index \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260525/raw_data/MatadorEmb_Index \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/MatadorEmb_Index
+' > logs/step1_idb.out 2>&1 &
+nohup bash -c 'python -u cook_journey_data/step1_InferIndexEmbAndAnnBuild.py \
+  --resume_emb_dir \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260522/raw_data/MatadorEmb_Index \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260525/raw_data/MatadorEmb_Index \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/MatadorEmb_Index \
+    /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/MatadorEmb_Index
+' > logs/step1_pg.out 2>&1 &
 nohup python -u cook_journey_data/step1_init_item_emb.py > logs/step1.out 2>&1 &
-nohup bash -c 'sleep 7200 && python -u cook_journey_data/step1_init_item_emb.py' > logs/step1_20M.out 2>&1 &
 nohup python -u cook_journey_data/step2_0_filter_user_events.py > logs/step2_0.out 2>&1 &
 nohup python -u cook_journey_data/step2_construct_shopping_profile.py > logs/step2.out 2>&1 &
 nohup python -u cook_journey_data/step3_generate_journey_query.py --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/chunks --max_users 100000 > logs/step3_100K.out 2>&1 &
@@ -12,12 +29,18 @@ nohup python -u cook_journey_data/step3_generate_journey_query.py --merge_result
 nohup python -u s1_generate_tid.py --export_prompts_only > logs/s1_split.out 2>&1 &
 nohup bash -c 'for i in $(seq 1 4); do echo "=== Chunk $i start $(date) ==="; python -u s1_generate_tid.py --prompts_input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/item_prompts_${i}.tsv; echo "=== Chunk $i done $(date) ==="; done' > logs/s1_1_4.out 2>&1 &
 nohup python -u s1_generate_tid.py --prompt_results_dir="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/" > logs/s1_merge_20260516.out 2>&1 &
+pip install faiss-gpu==1.7.2 orjson==3.10.15 onnxruntime-gpu==1.18.0
 nohup python -u cook_journey_data/step4_InferIndexEmbAndAnnBuild.py > logs/step4_20260516.out 2>&1 &
+nohup python -u cook_journey_data/step4_InferIndexEmbAndAnnBuild.py --resume_emb_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/raw_data/MatadorEmb_Index > logs/step4_20260522.out 2>&1 &
 nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py > logs/step5.out 2>&1 &
 nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py --resume --keep_chunks --ann_in_memory > logs/step5_resume.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --debug > logs/step6_debug.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000 > logs/step6_900K.out 2>&1 &
-nohup python -u cook_journey_data/step6_call_LLM_ranker.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/UserEvents_clean_combined_full_journey_with_products_split_001.tsv > logs/step6_001.out 2>&1 &
+nohup bash -c '
+while kill -0 587690 2>/dev/null; do sleep 30; done
+echo "PID 587690 finished, starting step6..."
+python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000' > logs/step6_split_idb.out 2>&1 &
+nohup python -u cook_journey_data/step6_call_LLM_ranker.py --copilot_model gpt-5.4 --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full/UserEvents_clean_combined_full_journey_with_products_split_009.tsv > logs/step6_idb_009.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --merge_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/ > logs/step6_merge.out 2>&1 &
 nohup python -u cook_journey_data/step7_stats.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv > logs/step7_stats_after_step3.out 2>&1 &
 nohup bash cook_journey_data/run_vip_case_study.sh > logs/vip_pipeline.out 2>&1 &
