@@ -65,10 +65,10 @@ DEFAULT_MAX_PRODUCTS = 20
 DEFAULT_MIN_PRODUCTS = 8
 DEFAULT_MIN_AVG_PRODUCTS = 8
 DEFAULT_MIN_JOURNEYS = 1
-DEFAULT_MAX_JOURNEYS = 20
+DEFAULT_MAX_JOURNEYS = None
 DEFAULT_KEEP_EMPTY_RATIO = 1
 DEFAULT_COUNT_RATIO = 0.6
-DEFAULT_DUP_THRESHOLD = 5
+DEFAULT_DUP_THRESHOLD = 6
 DEFAULT_JACCARD_THRESHOLD = 0.7
 DEFAULT_COSINE_THRESHOLD = 0.98
 
@@ -236,6 +236,7 @@ def load_from_ranked_tsv(filepath):
                         "Price": p.get("Price", ""),
                         "Brand": p.get("Brand", ""),
                         "Category": p.get("Category", ""),
+                        "OriginalQuery": p.get("OriginalQuery", ""),
                     }
 
                 cs = j.get("ConversationStarter", "")
@@ -250,6 +251,7 @@ def load_from_ranked_tsv(filepath):
                     "journey_type": j.get("JourneyType", "explicit"),
                     "product_ids": product_ids,
                     "products_info": products_info,
+                    "ranking_summary": j.get("RankingSummary", {}),
                 })
 
             shopping_data[uid] = {
@@ -547,8 +549,12 @@ def get_item_tid(item_id, id2meta):
     return result
 
 
-def resolve_journey_tids(journey, id2meta, max_products):
+def resolve_journey_tids(journey, id2meta, max_products=None):
     """Resolve a journey's product_ids to text IDs.
+
+    Resolves ALL products to TIDs (no truncation). The max_products cap
+    is applied AFTER diversity filtering (Layer 3) to preserve candidates
+    that survive hard dedup and greedy reranking.
 
     Returns dict with product_tids, product_ids, or None if no products
     could be resolved.
@@ -563,8 +569,6 @@ def resolve_journey_tids(journey, id2meta, max_products):
             resolved_pids.append(pid)
             if used_norm:
                 norm_count += 1
-            if len(product_tids) >= max_products:
-                break
 
     if not product_tids:
         return None
@@ -832,6 +836,39 @@ def save_sft_data(sft_data, output_file):
     print(f"Training data saved: {output_file} ({train_mb:.1f} MB)")
 
 
+def export_vis_jsonl(vis_data, output_file):
+    """Export visualization data as step8-compatible JSONL.
+
+    Each product retains its real metadata (Title, Seller, Brand, Price)
+    from step6 ranker output, plus the resolved TID from s3 filtering.
+    This gives an accurate view of what s3 kept after all diversity layers.
+
+    Args:
+        vis_data: List of step8-compatible user dicts (from create_sft_data).
+        output_file: Path to write the JSONL file.
+    """
+    out_dir = os.path.dirname(output_file)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    n_users = 0
+    n_journeys = 0
+    n_products = 0
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        for user_record in vis_data:
+            f.write(json.dumps(user_record, ensure_ascii=False) + "\n")
+            n_users += 1
+            for j in user_record.get("journeys", []):
+                n_journeys += 1
+                n_products += len(j.get("products", []))
+
+    file_mb = os.path.getsize(output_file) / (1024 * 1024)
+    print(f"Step8 vis JSONL saved: {output_file} ({file_mb:.1f} MB)")
+    print(f"  {n_users} users, {n_journeys} journeys, "
+          f"{n_products} products (real metadata + TID)")
+
+
 # =============================================================================
 # Main Pipeline
 # =============================================================================
@@ -863,9 +900,12 @@ def create_sft_data(
       4. min_products filter
 
     Returns:
-        List of SFT sample dicts.
+        Tuple of (sft_data, vis_data):
+          sft_data: List of SFT sample dicts.
+          vis_data: List of step8-compatible user dicts for visualization.
     """
     sft_data = []
+    vis_data = []
     skip_reasons = defaultdict(int)
     total_entries = len(shopping_journey_data)
 
@@ -884,17 +924,19 @@ def create_sft_data(
     users_below_min_journeys = 0
     empty_journey_total = 0
     empty_journey_kept = 0
-    subsampled_users = 0
-    original_journey_counts_before_subsample = []
 
     # ---- Output sample stats ----
     event_counts = []
     journey_counts = []
     product_counts = []         # per-journey final product count (output)
-    user_total_products = []    # per-user total product count (output)
     instruction_with_count = 0
     instruction_without_count = 0
     min_product_values_in_instruction = []
+
+    # ---- Input-side stats (before s3 filtering, for comparison) ----
+    input_journey_counts = []       # journeys per user from step6
+    input_product_counts = []       # products per journey from step6
+    input_type_dist = defaultdict(int)
 
     # ---- Norm TID stats ----
     total_norm_tids = 0
@@ -960,9 +1002,8 @@ def create_sft_data(
             journey_filtered = dict(journey)
             journey_filtered["product_ids"] = filtered_pids
 
-            # Layer 2: TID resolution
-            resolved = resolve_journey_tids(journey_filtered, id2meta,
-                                            max_products)
+            # Layer 2: TID resolution (no truncation — resolve all candidates)
+            resolved = resolve_journey_tids(journey_filtered, id2meta)
             if resolved is None:
                 journey_pipeline.append(
                     (orig_count, n_after_jaccard, 0, 0, "no_tid"))
@@ -981,6 +1022,14 @@ def create_sft_data(
             total_tid_dedup_removed += n_removed
             n_after_dedup = len(div_tids)
 
+            # Final cap: truncate to max_products AFTER all diversity filtering
+            if max_products and n_after_dedup > max_products:
+                div_tids = div_tids[:max_products]
+                div_pids = div_pids[:max_products]
+                resolved["product_tids"] = div_tids
+                resolved["product_ids"] = div_pids
+                n_after_dedup = len(div_tids)
+
             # min_products filter AFTER all diversity steps
             if n_after_dedup < min_products:
                 journey_pipeline.append(
@@ -998,6 +1047,10 @@ def create_sft_data(
             )
             total_norm_tids += final_norm
             total_resolved_tids += n_after_dedup
+            # Carry products_info for visualization export
+            resolved["products_info"] = products_info
+            resolved["orig_product_count"] = orig_count
+            resolved["ranking_summary"] = journey.get("ranking_summary", {})
             resolved_journeys.append(resolved)
 
         # Check if >= 50% of journeys were filtered out
@@ -1020,12 +1073,8 @@ def create_sft_data(
                 skip_reasons["all_journeys_filtered"] += 1
                 continue
 
-        # Journey subsampling
-        if max_journeys is not None and len(resolved_journeys) > max_journeys:
-            subsampled_users += 1
-            original_journey_counts_before_subsample.append(
-                len(resolved_journeys))
-            resolved_journeys = random.sample(resolved_journeys, max_journeys)
+        # Journey subsampling removed — keep all journeys to preserve
+        # the LLM's original ordering (explicit → related).
 
         # min_journeys check
         if resolved_journeys and len(resolved_journeys) < min_journeys:
@@ -1082,14 +1131,76 @@ def create_sft_data(
         }
         sft_data.append(sample)
 
+        # Track input-side stats for this user (before s3 filtering)
+        input_journey_counts.append(len(journeys))
+        for j_in in journeys:
+            input_product_counts.append(len(j_in.get("product_ids", [])))
+            input_type_dist[j_in.get("journey_type", "explicit")] += 1
+
+        # Build visualization record with real product info + TID
+        vis_journeys = []
+        for j in resolved_journeys:
+            vis_products = []
+            for pi, (pid, tid) in enumerate(zip(j["product_ids"], j["product_tids"])):
+                p_info = j.get("products_info", {}).get(pid, {})
+                vis_products.append({
+                    "global_offer_id": pid,
+                    "Title": p_info.get("Title", ""),
+                    "Seller": p_info.get("Seller", ""),
+                    "OriginalPrice": p_info.get("Price", ""),
+                    "Brand": p_info.get("Brand", ""),
+                    "Gender": "",
+                    "AgeGroup": "",
+                    "OriginalQuery": p_info.get("OriginalQuery", ""),
+                    "TID": tid,
+                    "Rank": pi + 1,
+                    "ImageUrl": "",
+                    "OfferUrl": "",
+                })
+            vis_journeys.append({
+                "journeyType": j.get("journey_type", "explicit"),
+                "title": j["title"],
+                "description": j.get("description", ""),
+                "conversationStarter": j.get("conversation_starter", ""),
+                "reason": j.get("reason", ""),
+                "products": vis_products,
+                "stats": {
+                    "totalCandidates": j.get("ranking_summary", {}).get(
+                        "totalCandidates",
+                        j.get("orig_product_count", len(vis_products))),
+                    "selectedCount": len(vis_products),
+                    "filteredCount": max(0,
+                        j.get("ranking_summary", {}).get(
+                            "totalCandidates",
+                            j.get("orig_product_count", len(vis_products)))
+                        - len(vis_products)),
+                    "step6SelectedCount": j.get("orig_product_count",
+                                                 len(vis_products)),
+                },
+            })
+
+        # Reconstruct profile and events for vis
+        vis_profile = {}
+        if task == "profile2journey" and user_profile:
+            try:
+                vis_profile = json.loads(user_profile) if isinstance(user_profile, str) else user_profile
+            except (json.JSONDecodeError, TypeError):
+                pass
+        vis_events = "\n".join(
+            f"{i+1} | {ev}" for i, ev in enumerate(user_events)
+        )
+        vis_data.append({
+            "stableid": user_id,
+            "userShoppingProfile": vis_profile,
+            "recentShoppingEvents": vis_events,
+            "journeys": vis_journeys,
+        })
+
         event_counts.append(num_events_used)
         journey_counts.append(final_num_journeys)
-        user_prod_total = 0
         for j in resolved_journeys:
             n = len(j["product_tids"])
             product_counts.append(n)
-            user_prod_total += n
-        user_total_products.append(user_prod_total)
 
     # =========================================================================
     # Comprehensive Statistics (organized by pipeline stage)
@@ -1129,7 +1240,7 @@ def create_sft_data(
         print(f"  Stage 1  After Jaccard filter:  "
               f"Mean={s1.mean():>5.1f}  Min={s1.min():>3}  "
               f"Max={s1.max():>3}  Total={s1.sum():>10,}")
-        print(f"      ↓ OfferId → TID resolve (max_products={max_products})")
+        print(f"      ↓ OfferId → TID resolve (all candidates, no cap)")
         if len(s2_valid) > 0:
             print(f"  Stage 2  After TID resolution:  "
                   f"Mean={s2_valid.mean():>5.1f}  Min={s2_valid.min():>3}  "
@@ -1143,6 +1254,7 @@ def create_sft_data(
             print(f"  Stage 3  After TID dedup:       "
                   f"Mean={s3_valid.mean():>5.1f}  Min={s3_valid.min():>3}  "
                   f"Max={s3_valid.max():>3}  Total={s3_valid.sum():>10,}")
+        print(f"      ↓ Final cap: top {max_products} per journey")
         if n_min_prod > 0:
             print(f"      ✗ {n_min_prod:,} journeys dropped "
                   f"(< {min_products} products)")
@@ -1178,17 +1290,12 @@ def create_sft_data(
               f"{empty_journey_total:>10,}  "
               f"(kept {empty_journey_kept}, "
               f"ratio={keep_empty_ratio:.1f})")
-    if max_journeys is not None and subsampled_users > 0:
-        arr = np.array(original_journey_counts_before_subsample)
-        print(f"  Subsampled (> {max_journeys} journeys):      "
-              f"{subsampled_users:>10,}  "
-              f"(orig mean={arr.mean():.1f}, max={arr.max()})")
     print(f"  Final SFT samples (users):       {len(sft_data):>10,}")
 
     # ------------------------------------------------------------------
-    # Section 3: Output Sample Statistics
+    # Section 3: Input / Output Statistics (before vs after s3 filtering)
     # ------------------------------------------------------------------
-    print(f"\n--- Section 3: Output Statistics ({len(sft_data):,} samples) ---")
+    print(f"\n--- Section 3: Input / Output Statistics ({len(sft_data):,} users) ---")
 
     total_instructions = instruction_with_count + instruction_without_count
     if total_instructions > 0:
@@ -1207,44 +1314,62 @@ def create_sft_data(
               f"P50={int(np.percentile(arr, 50)):>5}  "
               f"P90={int(np.percentile(arr, 90)):>5}  "
               f"Max={arr.max():>5}")
-    if journey_counts:
-        arr = np.array(journey_counts)
-        print(f"  Journeys/user:   Mean={arr.mean():>6.1f}  "
-              f"P50={int(np.percentile(arr, 50)):>5}  "
-              f"P90={int(np.percentile(arr, 90)):>5}  "
-              f"Max={arr.max():>5}")
-    if product_counts:
-        arr = np.array(product_counts)
-        print(f"  Products/journey:Mean={arr.mean():>6.1f}  "
-              f"P50={int(np.percentile(arr, 50)):>5}  "
-              f"Min={arr.min():>5}  Max={arr.max():>5}")
-    if user_total_products:
-        arr = np.array(user_total_products)
-        print(f"  Products/user:   Mean={arr.mean():>6.1f}  "
-              f"P50={int(np.percentile(arr, 50)):>5}  "
-              f"Min={arr.min():>5}  Max={arr.max():>5}")
 
+    # Journeys per user: input vs output
+    if input_journey_counts and journey_counts:
+        in_arr = np.array(input_journey_counts)
+        out_arr = np.array(journey_counts)
+        print(f"  Journeys/user:")
+        print(f"    Input  (step6): Mean={in_arr.mean():>5.1f}  "
+              f"P50={int(np.percentile(in_arr, 50)):>4}  "
+              f"Max={in_arr.max():>4}  "
+              f"Total={in_arr.sum():>6,}")
+        print(f"    Output (s3):    Mean={out_arr.mean():>5.1f}  "
+              f"P50={int(np.percentile(out_arr, 50)):>4}  "
+              f"Max={out_arr.max():>4}  "
+              f"Total={out_arr.sum():>6,}")
+
+    # Products per journey: input vs output
+    if input_product_counts and product_counts:
+        in_arr = np.array(input_product_counts)
+        out_arr = np.array(product_counts)
+        print(f"  Products/journey:")
+        print(f"    Input  (step6): Mean={in_arr.mean():>5.1f}  "
+              f"Min={in_arr.min():>3}  Max={in_arr.max():>3}  "
+              f"Total={in_arr.sum():>8,}")
+        print(f"    Output (s3):    Mean={out_arr.mean():>5.1f}  "
+              f"Min={out_arr.min():>3}  Max={out_arr.max():>3}  "
+              f"Total={out_arr.sum():>8,}")
+
+    # Journey types: input vs output
     if sft_data:
-        type_dist = defaultdict(int)
+        output_type_dist = defaultdict(int)
         for s in sft_data:
             try:
                 out_obj = json.loads(s["output"])
                 for j in out_obj.get("ContinuedJourneys", []):
-                    type_dist[j.get("JourneyType", "explicit")] += 1
+                    output_type_dist[j.get("JourneyType", "explicit")] += 1
             except (json.JSONDecodeError, TypeError):
                 pass
-        total_j_out = sum(type_dist.values())
-        if total_j_out > 0:
-            parts = [f"{jt}: {c:,} ({c / total_j_out * 100:.0f}%)"
-                     for jt, c in sorted(type_dist.items(), key=lambda x: -x[1])]
-            print(f"  Journey types:   {', '.join(parts)}")
+        all_types = sorted(set(list(input_type_dist.keys()) +
+                               list(output_type_dist.keys())),
+                           key=lambda t: -(input_type_dist.get(t, 0) +
+                                           output_type_dist.get(t, 0)))
+        total_in = sum(input_type_dist.values()) or 1
+        total_out = sum(output_type_dist.values()) or 1
+        print(f"  Journey types:")
+        for jt in all_types:
+            ic = input_type_dist.get(jt, 0)
+            oc = output_type_dist.get(jt, 0)
+            print(f"    {jt:12s}  Input: {ic:>5,} ({ic/total_in*100:.0f}%)  "
+                  f"Output: {oc:>5,} ({oc/total_out*100:.0f}%)")
 
     if total_resolved_tids > 0:
         print(f"  TID source:      summary_words_norm "
               f"{total_norm_tids:,}/{total_resolved_tids:,} "
               f"({total_norm_tids / total_resolved_tids * 100:.1f}%)")
 
-    return sft_data
+    return sft_data, vis_data
 
 
 # =============================================================================
@@ -1267,7 +1392,7 @@ def parse_args():
     parser.add_argument(
         "--ranked_journey_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260516/raw_data/"
+                "Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full/"
                 "UserEvents_clean_combined_full_journey_with_products_Ranked.tsv",
         help="Path to step6 merged *_Ranked.tsv "
              "(columns: UserId, ReadableUserEvents, ShoppingProfile, "
@@ -1276,14 +1401,14 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260516/processed/"
+                "Data/LLMTrainingData/20260528/processed_IDB/"
                 "id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )
     parser.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260516/sft_data",
+                "Data/LLMTrainingData/20260528/sft_data_IDB/",
         help="Output directory",
     )
 
@@ -1496,7 +1621,7 @@ def main():
     print(f"  seed = {args.seed}")
     print("=" * 70)
 
-    sft_data = create_sft_data(
+    sft_data, vis_data = create_sft_data(
         task=task,
         shopping_journey_data=shopping_data,
         id2meta=id2meta,
@@ -1525,6 +1650,14 @@ def main():
 
     output_file = os.path.join(args.output_dir, f"{task}_sft.json")
     save_sft_data(sft_data, output_file)
+
+    # Export step8-compatible JSONL for HTML visualization (real products + TID)
+    vis_jsonl = os.path.join(args.output_dir, f"{task}_sft_for_vis.jsonl")
+    export_vis_jsonl(vis_data, vis_jsonl)
+    print(f"\n  To visualize, run:")
+    print(f"  python cook_journey_data/step8_generate_html.py "
+          f"--input {vis_jsonl} --results_dir {args.output_dir} "
+          f"--item_json <path/to/item.json> --skip_rerank")
 
     # =========================================================================
     # Step 4: Show example cases

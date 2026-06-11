@@ -99,13 +99,13 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/id2meta.json",
-        help="Path to id2meta JSON from step 1 (default: ./processed/id2meta.json)",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_IDB/id2meta_with_norm.json",
+        help="Path to id2meta JSON from step 1",
     )
     parser.add_argument(
         "--output_file",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/sft_data/meta2tid_sft.json",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/sft_data_IDB/meta2tid_sft.json",
         help="Output path for SFT training data JSON",
     )
     return parser.parse_args()

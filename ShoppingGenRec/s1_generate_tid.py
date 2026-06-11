@@ -532,7 +532,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_IDB/",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_IDB_v4/",
         #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_PG/",
         help="Directory to save summaries and statistics",
     )
@@ -546,7 +546,7 @@ def parse_args():
     parser.add_argument(
         "--prompt_file",
         type=str,
-        default=os.path.join(SCRIPT_DIR, "prompts", "term_generation.md"),
+        default=os.path.join(SCRIPT_DIR, "prompts", "term_generationV4.md"),
         help="Path to prompt template file (.md/.txt) with {placeholders}",
     )
     # --- Copilot API-specific args ---
@@ -559,7 +559,7 @@ def parse_args():
     parser.add_argument(
         "--copilot_model",
         type=str,
-        default="gpt-5.2",
+        default="gpt-5.4",
         #default="gemini-3-flash-preview",
         help="Copilot model name",
     )
@@ -719,8 +719,8 @@ def parse_args():
         "--resume_from_multi_path",
         type=str,
         nargs="*",
-        #default=[],
-        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed_v2/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/summaries_with_similarity.jsonl"],
+        default=[],
+        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260513/processed_v2/summaries_with_similarity.jsonl", "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/summaries_with_similarity.jsonl"],
         #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_1/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_2/summaries_with_similarity.jsonl","/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/processed/s1_split_3/summaries_with_similarity.jsonl"],
         help="One or more paths to .jsonl or .json files from previous runs "
              "to resume from. Supports both JSONL (one record per line) and "
@@ -739,6 +739,16 @@ def parse_args():
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",
+    )
+    parser.add_argument(
+        "--filter_items_file",
+        type=str,
+        default=None,
+        help="Path to a text file with one OfferId per line. "
+             "If provided, only process items whose ID appears in this file. "
+             "The full item_file and similarity_file are still loaded "
+             "(so similar-item context is available), but only filtered "
+             "items get inference and output.",
     )
     return parser.parse_args()
 
@@ -1482,6 +1492,16 @@ def main():
 
     # Build full items dict BEFORE trimming, so similarity lookups work
     all_items_dict = {item["id"]: item for item in full_data}
+
+    # ---- Filter to subset if --filter_items_file is provided ----
+    if args.filter_items_file and os.path.isfile(args.filter_items_file):
+        print(f"\n[FILTER] Loading filter IDs from: {args.filter_items_file}")
+        with open(args.filter_items_file, "r") as f:
+            filter_ids = {line.strip() for line in f if line.strip()}
+        print(f"  Filter IDs loaded: {len(filter_ids):,}")
+        full_data = [item for item in full_data if item["id"] in filter_ids]
+        print(f"  Items after filter: {len(full_data):,} "
+              f"(full item dict kept for similarity lookups)")
 
     if debug:
         data = random.sample(full_data, min(args.debug_sample_size, len(full_data)))
