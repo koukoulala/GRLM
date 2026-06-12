@@ -1401,7 +1401,7 @@ def parse_args():
     parser.add_argument(
         "--id2meta_file", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/"
-                "Data/LLMTrainingData/20260528/raw_data_IDB/"
+                "Data/LLMTrainingData/20260528/processed_IDB/"
                 "id2meta_with_norm.json",
         help="Path to id2meta JSON from s1_generate_tid",
     )

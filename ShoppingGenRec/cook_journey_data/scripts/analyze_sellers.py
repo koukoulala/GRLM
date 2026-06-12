@@ -262,7 +262,7 @@ p2_brands = collections.Counter()
 
 for user in paired:
     # P1
-    for j in user.get('p1', {}).get('journeys', []):
+    for j in (user.get('p1') or {}).get('journeys', []):
         for p in j.get('products', []):
             # Schema A: top-level
             s = p.get('seller', '')
@@ -287,7 +287,7 @@ for user in paired:
                     if pv > 0: p1_prices.append(pv)
                 except: pass
     # P2
-    for j in user.get('p2', {}).get('journeys', []):
+    for j in (user.get('p2') or {}).get('journeys', []):
         for p in j.get('products', []):
             s = p.get('seller', '')
             if s: p2_sellers[s] += 1

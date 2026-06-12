@@ -829,6 +829,7 @@ def render_product_card(p, position):
     orig_query = p.get("OriginalQuery", "")
     orig_rank = p.get("OriginalSLMRank", p.get("Rank"))
     ann_score = p.get("ANNScore", None)
+    tid = p.get("TID", None)  # 7-slot text ID array from s3
     gender = (p.get("Gender", "") or "").strip()
     age_group = (p.get("AgeGroup", "") or "").strip()
 
@@ -868,6 +869,7 @@ def render_product_card(p, position):
     {attrs_html}
     {f'<div class="product-brand">{esc(brand)}</div>' if brand else ''}
     {f'<div class="product-query">Q: {esc(orig_query[:50])}</div>' if orig_query else ''}
+    {f'<div class="product-tid" title="{esc(" | ".join(tid))}">{esc(" | ".join(tid))}</div>' if tid and isinstance(tid, list) else ''}
     {f'<div class="product-ann-score">ANN: {ann_score:.4f}</div>' if isinstance(ann_score, (int, float)) and ann_score else ''}
   </div>
 </div>"""
@@ -943,14 +945,25 @@ def render_journey_block(j, ji, top_k):
         total = stats.get("totalCandidates", 0)
         kept = stats.get("selectedCount", len(products))
         filt = stats.get("filteredCount", max(0, total - kept))
+        step6_sel = stats.get("step6SelectedCount", 0)
         if total > 0:
-            rsumm_html = (
-                f'<div class="rsumm">'
-                f'<span class="rs">Total: {total}</span>'
-                f'<span class="rs rsk">Kept: {kept}</span>'
-                f'<span class="rs rsf">Filtered: {filt}</span>'
-                f'</div>'
-            )
+            # 3-tier stats: ANN candidates → step6 ranker → s3 diversity
+            if step6_sel and step6_sel != kept and step6_sel != total:
+                rsumm_html = (
+                    f'<div class="rsumm">'
+                    f'<span class="rs">ANN: {total}</span>'
+                    f'<span class="rs rsf">→ Ranker: {step6_sel}</span>'
+                    f'<span class="rs rsk">→ SFT: {kept}</span>'
+                    f'</div>'
+                )
+            else:
+                rsumm_html = (
+                    f'<div class="rsumm">'
+                    f'<span class="rs">Total: {total}</span>'
+                    f'<span class="rs rsk">Kept: {kept}</span>'
+                    f'<span class="rs rsf">Filtered: {filt}</span>'
+                    f'</div>'
+                )
 
     # L3 rerank diagnostics
     l3_html = ""
@@ -1147,6 +1160,7 @@ details[open]>.us::before{transform:rotate(90deg)}
 .attr-gender{background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8}
 .attr-age{background:#dcfce7;color:#166534;border:1px solid #bbf7d0}
 .product-query{font-size:.68rem;color:var(--mt);margin-top:.15rem;font-style:italic;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.product-tid{font-size:.55rem;color:#7c3aed;margin-top:.15rem;padding:.1rem .3rem;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:4px;line-height:1.35;font-family:'SF Mono',Monaco,monospace;letter-spacing:-.3px;word-break:break-all}
 .product-ann-score{font-size:.68rem;color:#2563eb;margin-top:.15rem;font-weight:600}
 .tail-section{margin-top:.6rem;border:1px dashed var(--bd);border-radius:8px;padding:.5rem .6rem;background:#fafbff}
 .tail-label{font-size:.78rem;font-weight:600;color:var(--t2);cursor:pointer;list-style:none;padding:.15rem 0}
@@ -1196,10 +1210,10 @@ def main():
     ap.add_argument("--output_prefix", default=None,
                     help="Output prefix (default: derived from input filename)")
     ap.add_argument("--results_dir", 
-                    default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study/",
+                    default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/vip_case_study_IDB/",
                     help="Directory to save outputs (HTML files)")
     ap.add_argument("--item_json", 
-                    default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/item.json",
+                    default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/item.json",
                     help="Path to item.json with offer_url/image_url fields")
     ap.add_argument("--original_index_file", 
                     default="",
@@ -1279,6 +1293,36 @@ def main():
         del url_map
     else:
         users = load_jsonl_input(args.input)
+
+        # Enrich JSONL products with URLs from item.json (if provided)
+        if args.item_json and os.path.isfile(args.item_json):
+            # Collect all global_offer_ids that need URLs
+            needed_gids = set()
+            for u in users:
+                for j in u.get("journeys", []):
+                    for p in j.get("products", []):
+                        gid = p.get("global_offer_id", "")
+                        if gid and not gid.startswith("tid_") and not p.get("ImageUrl"):
+                            needed_gids.add(gid)
+            if needed_gids:
+                print(f"  JSONL: {len(needed_gids):,} products need URLs")
+                url_map = load_urls_from_item_json(
+                    args.item_json, needed_gids=needed_gids)
+                if url_map:
+                    n_enriched = 0
+                    for u in users:
+                        for j in u.get("journeys", []):
+                            for p in j.get("products", []):
+                                gid = p.get("global_offer_id", "")
+                                urls = url_map.get(gid)
+                                if urls:
+                                    if not p.get("ImageUrl"):
+                                        p["ImageUrl"] = urls.get("image_url", "")
+                                    if not p.get("OfferUrl"):
+                                        p["OfferUrl"] = urls.get("offer_url", "")
+                                    n_enriched += 1
+                    print(f"  Enriched {n_enriched:,} products with URLs")
+                    del url_map
 
     print(f"\nLoaded {len(users)} users")
 

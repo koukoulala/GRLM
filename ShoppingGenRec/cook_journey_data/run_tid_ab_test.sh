@@ -183,4 +183,79 @@ fi
 
 # =============================================================================
 #  s2: Evaluate TID quality (single-run mode only; multi-run already did s2 above)
-# ============================================================
+# =============================================================================
+if should_run "s2" && [[ ${RUNS} -eq 1 ]]; then
+    echo "── s2: Evaluate TID quality ────────────────────────────────────────"
+    ID2META="${OUTPUT_DIR}/id2meta_with_norm.json"
+    [[ ! -f "${ID2META}" ]] && { echo "  ERROR: ${ID2META} not found"; exit 1; }
+    python3 -u s2_0_evaluate_tid.py \
+        --id2meta_file "${ID2META}" \
+        --copilot_model "${COPILOT_MODEL}" \
+        --copilot_workers "${COPILOT_WORKERS}"
+    echo ""
+fi
+
+# =============================================================================
+#  s3: Build SFT data
+# =============================================================================
+if should_run "s3"; then
+    echo "── s3: Build SFT data ──────────────────────────────────────────────"
+    RANKED_TSV=$(find_ranked_tsv)
+    [[ -z "${RANKED_TSV}" || ! -f "${RANKED_TSV}" ]] && { echo "  ERROR: Ranked TSV not found"; exit 1; }
+
+    ID2META="${OUTPUT_DIR}/id2meta_with_norm.json"
+    SFT_DIR="${VIP_DIR}/sft_data_${VER_TAG}"
+    [[ ! -f "${ID2META}" ]] && { echo "  ERROR: ${ID2META} not found"; exit 1; }
+
+    python3 -u s3_build_journey_sft_data.py \
+        --task profile2journey \
+        --ranked_journey_file "${RANKED_TSV}" \
+        --id2meta_file "${ID2META}" \
+        --output_dir "${SFT_DIR}"
+    echo ""
+fi
+
+# =============================================================================
+#  step8: Generate visualization HTML
+# =============================================================================
+if should_run "step8"; then
+    echo "── step8: Visualization HTML ───────────────────────────────────────"
+    SFT_DIR="${VIP_DIR}/sft_data_${VER_TAG}"
+    VIS_JSONL="${SFT_DIR}/profile2journey_sft_for_vis.jsonl"
+
+    if [[ -f "${VIS_JSONL}" ]]; then
+        python3 -u cook_journey_data/step8_generate_html.py \
+            --input "${VIS_JSONL}" \
+            --results_dir "${SFT_DIR}" \
+            --item_json "${ITEM_JSON}" \
+            --skip_rerank
+    else
+        echo "  WARNING: ${VIS_JSONL} not found, skipping"
+    fi
+    echo ""
+fi
+
+# =============================================================================
+#  Summary
+# =============================================================================
+echo "=================================================================="
+echo "  Pipeline Complete! (${VERSION})"
+echo "=================================================================="
+echo "  TIDs:   ${OUTPUT_DIR}/id2meta_with_norm.json"
+EVAL_DIR="${OUTPUT_DIR}/eval"
+EVAL_JSON=$(ls -t "${EVAL_DIR}"/eval_statistics.json 2>/dev/null | head -1) || true
+echo "  Eval:   ${EVAL_JSON:-"(not run)"}"
+SFT_DIR="${VIP_DIR}/sft_data_${VER_TAG}"
+if [[ -d "${SFT_DIR}" ]]; then
+    echo "  SFT:    ${SFT_DIR}/"
+    HTML=$(ls -t "${SFT_DIR}"/*_L3.html 2>/dev/null | head -1) || true
+    echo "  HTML:   ${HTML:-"(not generated)"}"
+fi
+if [[ ${RUNS} -gt 1 ]]; then
+    echo "  Consistency: ${VIP_DIR}/processed_${VER_TAG}_run1/consistency_report.json"
+    for ((r=1; r<=RUNS; r++)); do
+        RUN_EVAL="${VIP_DIR}/processed_${VER_TAG}_run${r}/eval/eval_statistics.json"
+        [[ -f "${RUN_EVAL}" ]] && echo "  Eval(run${r}): ${RUN_EVAL}"
+    done
+fi
+echo "=================================================================="

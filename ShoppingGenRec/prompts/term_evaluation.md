@@ -47,4 +47,52 @@ Are the most important distinguishing attributes present? (Given only 5 slots, s
 - 0: Multiple important attributes missing while weak slots remain
 
 ### D5 — Brand & Seller Placement
-"Same" means the same entity regardless of case or minor formatting ("Loft" = "LOFT", "Novica" = "NOVICA"). But "Apple" vs "Apple Store", "Nike" vs "Nike.com", "Kasper" vs "Kasper Store" are DIFFERENT entit
+"Same" means the same entity regardless of case or minor formatting ("Loft" = "LOFT", "Novica" = "NOVICA"). But "Apple" vs "Apple Store", "Nike" vs "Nike.com", "Kasper" vs "Kasper Store" are DIFFERENT entities — both should appear in their respective slots.
+- 2: Slot 6 = Brand, Slot 7 = Seller, both correct. If Brand="Other"/unknown, Slot 6 has a useful attribute and Slot 7 has Seller. If Brand=Seller (same entity), Slot 7 has the name and Slot 6 has a useful, distinguishing attribute.
+- 1: Brand or Seller name is slightly different from metadata but still recognizable (e.g., "Blindscom" vs "Blinds.com"); or Brand=Seller and Slot 6 uses a non-distinguishing attribute when a clearly more useful one was available.
+- 0: Brand and Seller are swapped (Seller in Slot 6); or Brand/Seller explicitly provided in metadata but missing from TID; or "Other"/"none"/"N/A" appears as a slot value; or brand and seller are truly the same entity but the name is duplicated in both Slot 6 and Slot 7 with no useful attribute.
+
+### D6 — Category Precision
+Is Slot 1 a reasonable category term? Slot 1 only needs to be the broadest useful descriptor — Slots 2-5 handle specificity. Do NOT penalize a single-word category (e.g., "lamp", "pants", "toy", "microwave") if the remaining slots already clarify the subtype. Only penalize if Slot 1 is genuinely wrong or so vague it could mean completely different product types (e.g., "item", "product", "thing").
+- 2: Clearly identifies the product type (e.g., "lamp", "shirtdress", "toy", "vacuum", "microwave")
+- 1: Acceptable but ambiguous across very different product types (e.g., "screen" could be phone screen or projector screen)
+- 0: Wrong category or meaninglessly vague (e.g., "item", "product", "thing")
+
+### D7 — Factual Accuracy
+Every slot must be grounded in the provided metadata — no hallucinated or unsupported terms.
+- 2: Every slot accurately reflects information from the title, description, categories, or attributes
+- 1: One slot contains a plausible but unverifiable inference not directly stated in the metadata
+- 0: One or more slots contain clearly wrong information (wrong color, wrong material, hallucinated model name, incorrect product type)
+
+## Input
+
+PRODUCT INFORMATION:
+{product_info_text}
+
+GENERATED TERM ID:
+{term_id_text}
+
+## Output Format
+
+Output ONLY a JSON object. No extra text.
+
+The suggested_fix must follow the same rules as generation: If Brand ≠ Seller, Slot 6 = Brand, Slot 7 = Seller. If Brand = Seller (same entity), Slot 6 = useful product attribute, Slot 7 = the brand/seller name. If Brand is unknown/"Other", Slot 6 = useful product attribute, Slot 7 = Seller. Never repeat the same name in both Slot 6 and Slot 7. Never use "Other"/"none"/"N/A" as a slot value. Only change the slots that have issues — keep correct slots as-is.
+
+Only include actionable problems in the issues list. Do NOT include informational notes like "no model name exists" — that is not a problem.
+
+```json
+{
+  "scores": {
+    "D1_searchability": <0-2>,
+    "D2_model_name": <0-2 or "N/A">,
+    "D3_info_density": <0-2>,
+    "D4_attribute_coverage": <0-2>,
+    "D5_brand_seller": <0-2>,
+    "D6_category_precision": <0-2>,
+    "D7_factual_accuracy": <0-2>
+  },
+  "overall": <sum of numeric scores, excluding D2 if N/A. Max is 14 when D2 is scored, 12 when D2 is N/A>,
+  "issues": ["<specific issue 1>", "<specific issue 2>", ...],
+  "suggested_fix": "[<slot1>, <slot2>, <slot3>, <slot4>, <slot5>, <slot6: brand or attr if brand=seller>, <slot7: seller or brand/seller name>]"
+}
+```

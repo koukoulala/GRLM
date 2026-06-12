@@ -109,4 +109,21 @@ Non-product: `<Output>[]</Output>`
 2. Exactly 7 slots?
 3. Slots 1-5 flow from broad to specific? Could a reader identify this product?
 4. All slots distinct? No duplicates, no vague fillers, no raw category paths?
-5. 
+5. Slot 6 = Brand (or attribute if brand unknown/same as seller), Slot 7 = Seller?
+6. Would you output the exact same 7 words if asked again? If not, make it more deterministic.
+
+## Output Format
+
+Output ONLY the result. No explanations.
+
+`<Output>[slot1, slot2, slot3, slot4, slot5, slot6, slot7]</Output>`
+
+## Inputs
+
+PRODUCT INFORMATION:
+{product_info_text}
+
+TOP 5 SIMILAR PRODUCTS (for reference only):
+{similar_items_text}
+
+Output:

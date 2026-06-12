@@ -732,10 +732,8 @@ def parse_args():
         "--checkpoint_dirs",
         type=str,
         nargs="*",
-        default=[],
-        #default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_1_checkpoint",
-        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_5_checkpoint",
-        #         "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/prompts/_item_prompts_9_checkpoint"],
+        #default=[],
+        default=["/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/processed_IDB_v4/prompts/_item_prompts_16_checkpoint/",],
         help="Additional checkpoint directories to load results from. "
              "Each should be a _s1_checkpoint folder. Results are merged "
              "with resume files and the default checkpoint_dir.",

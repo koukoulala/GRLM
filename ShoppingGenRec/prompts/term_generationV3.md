@@ -56,13 +56,13 @@ Use 5 slots to describe the product from broad to specific. Think of them as the
 
 ### Slot 6 — Brand
 
-MUST include if explicitly provided. Keep original form — do not translate or rewrite.
-If the brand is "Other", "Unknown", or blank, use a remaining useful product attribute instead.
+If brand is explicitly provided and different from seller, put it here. Keep original form.
+If brand is "Other", "Unknown", "Generic", or blank, OR if brand and seller are the same — use a remaining useful product attribute in this slot instead. Never output "Other"/"Unknown"/"Generic" as a slot value.
 
 ### Slot 7 — Seller / Retailer
 
-MUST include if explicitly provided and different from brand. Keep original form.
-If brand and seller are the same, do NOT repeat — use a remaining useful product attribute instead.
+Seller MUST go here whenever it is explicitly provided and not "Other"/"Unknown"/blank. This is the fixed slot for seller — never move seller to Slot 6.
+If brand and seller are the same, put the name here (not in Slot 6). If seller is "Other"/"Unknown"/blank, use a remaining useful product attribute instead.
 
 ## Rules
 
@@ -78,6 +78,9 @@ Use base/dictionary form when natural (singular nouns, no unnecessary -ing/-ed).
 ### No Duplicates
 All 7 slots must be different. No hypernym+hyponym pairs (do not output both "coat" and "outerwear", or both "shoes" and "footwear").
 
+### No Vague Fillers
+Never use vague quality tiers or placeholder words in ANY slot: flagship, premium, classic, modern, basic, general, other, none, N/A, standard. Every slot must carry concrete, searchable information.
+
 ### No Guessing
 Do not invent missing facts. Only include attributes explicitly stated or clearly supported by the product information.
 
@@ -86,12 +89,12 @@ Use the TOP 5 SIMILAR PRODUCTS only as reference for terminology consistency. Pr
 
 ## Output Examples
 
-`<Output>[smartphone, iPhone 17 Pro Max, unlocked, 256gb, deep-blue, Apple, Best Buy]</Output>`
-`<Output>[toy, Technic BMW M4 GT3 EVO, race-car, 747-piece, kids, LEGO, Scheels]</Output>`
-`<Output>[vacuum, Saros 20, robotic, self-emptying, pet, Roborock, Best Buy]</Output>`
-`<Output>[shirtdress, button-down, midi, cotton, women, Evi Grintela, Neiman Marcus]</Output>`
-`<Output>[chandelier, hand-blown, pendant, glass, art-deco, Rejuvenation, Frontgate]</Output>`
-`<Output>[sneaker, platform, low-top, cushioned, women, Converse, Nordstrom Rack]</Output>`
+`<Output>[smartphone, iPhone 17 Pro Max, unlocked, 256gb, deep-blue, Apple, Apple Store]</Output>`
+`<Output>[headphone, WH-1000XM6, wireless, noise-canceling, black, Sony, Crutchfield]</Output>`
+`<Output>[toy, Technic Koenigsegg Jesko Absolut, hypercar, grey, 801-piece, Lego, Ace Hardware]</Output>`
+`<Output>[shirtdress, flounce, midi, striped, cotton, Evi Grintela, Neiman Marcus]</Output>`
+`<Output>[clutch, beaded, black, golden-rose, evening, NOVICA, handmade]</Output>`
+`<Output>[microwave, countertop, 1.1-cu-ft, stainless, 900w, Hamilton Beach, Walmart]</Output>`
 
 Non-product: `<Output>[]</Output>`
 
@@ -100,7 +103,7 @@ Non-product: `<Output>[]</Output>`
 1. Is this a real, specific product? If not, output `[]`
 2. Are there exactly 7 slots?
 3. Do Slots 1-5 together distinguish this product from similar ones? If someone reads only these 5 words, can they tell which specific product it is?
-4. All 7 slots distinct? No vague fillers?
+4. All 7 slots distinct? No vague fillers (flagship, premium, classic, modern, basic, general, other, none)?
 5. Brand in Slot 6, Seller in Slot 7 (if available and different)?
 6. Proper nouns intact and untranslated?
 7. No extra text outside `<Output></Output>`?

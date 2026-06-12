@@ -1,0 +1,104 @@
+3CE1D248ED92C0F317090FD6FFFFFFFF
+<USER-EVENTS>
+1 | 1 day ago | Searched | lg oled g6
+2 | 1 day ago | Browsed | QVC | Shop QVC® For Today’s Special Value & Top Brands At The Official Site
+3 | 1 day ago | Browsed | HSN | Shop HSN ® For Daily Deals & Top Brands At The Official Site | HSN
+4 | 1 day ago | Searched | ulta
+5 | 2 days ago | Searched | ulta beauty
+6 | 4 days ago | Browsed | Discover Latest Software, Firmware and Drivers from LG | U.A.E
+7 | 5 days ago | Browsed | Microsoft unveils Copilot redesign with uninstall option
+8 | 5 days ago | Browsed | 给在 PC（Steam）上遇到 Fanatec CSL DD 无法正常使用问题的玩家：r/ForzaHorizon --- For folks on PC (Steam) with issues getting their Fanatec CSL DD to work : r/ForzaHorizon
+9 | 5 days ago | Browsed | Forza Horizon 6 Recommended Settings | Fanatec
+10 | 5 days ago | Browsed | Reddit - The heart of the internet
+11 | 5 days ago | Browsed | Forza Horizon 6 设置：r/Fanatec --- Forza Horizon 6 Settings : r/Fanatec
+12 | 6 days ago | Searched | shop lc
+13 | 6 days ago | Browsed | Platform Compatibility | FANATEC
+14 | 6 days ago | Searched | aloe vera juice
+15 | 6 days ago | Searched | vitamin shoppe
+16 | 7 days ago | Searched | boca toothpaste
+17 | 7 days ago | Browsed | Nordic Naturals, Ultimate Omega®, Plant-Based With D3 + K2, Lemon, 60 Soft Gels
+18 | 8 days ago | Browsed | Search Products, Brands & More at the Vitamin Shoppe
+19 | 8 days ago | Browsed | The Vitamin Shoppe® Official | Vitamins, Health Supplements & Nutrition
+20 | 8 days ago | Browsed | Buy Obvi Collagenic AM Burn Collagen Infused Fat Burner Dietary Supplement (180 Capsules) Made in US at ShopLC.
+21 | 9 days ago | Searched | Apple AirPods Pro
+22 | 9 days ago | Browsed | THINK Teacher's Book 2 with digital pack B1 (Page 26) - Flipbook by Клет България | FlipHTML5
+23 | 15 days ago | Browsed | 65 Inch Class LG OLED evo AI G6 4K Smart TV 2026 with Supplied Wall Mount - OLED65G6WUA.AUS | LG USA
+24 | 15 days ago | Clicked | LG 65" Class OLED evo AI G6 4K Smart TV 2026 - OLED65G6WUA
+25 | 15 days ago | Browsed | 2019 Porsche 911 GT3
+26 | 15 days ago | Browsed | 2019 Porsche 911 GT3 | eBay
+27 | 15 days ago | Browsed | BMW M4 GT3 EVO Race Car 42226 | Technic™ | Buy online at the Official LEGO® Shop US
+28 | 15 days ago | Searched | bmw m4 gt3 evo lego
+29 | 15 days ago | Clicked | HP OmniBook 5 16" 2K Laptop, Copilot+ PC, AMD Ryzen AI 7 350, 16GB RAM, 1TB SSD, +16.75 Hour Battery, Windows 11 Home
+30 | 15 days ago | Clicked | Logitech G X56 H.O.T.A.S Throttle and Joystick Flight Simulator Game Controller, 4 Spring Options, +189 Programmable Controls, RGB Lighting, 2x USB,
+31 | 15 days ago | Browsed | LEGO Speed Champions BMW M4 GT3 & BMW M Hybrid V8 Building Toys - Race Car Toys for Kids, Ages 9+ - 76922 - Walmart.com
+32 | 15 days ago | Browsed | LEGO® Technic BMW M4 GT3 EVO Race Car 42226 Building Set | SCHEELS.com
+33 | 15 days ago | Clicked | LEGO BMW M4 GT3 EVO Race Car Building Set
+34 | 15 days ago | Searched | lego bmw m4 gt3
+35 | 15 days ago | Searched | lego
+36 | 19 days ago | Browsed | 今すぐ使えるかんたん Outlook 2024 ［Office 2024/Microsoft 365 両対応］ - Search Shopping
+37 | 19 days ago | Clicked | 今すぐ使えるかんたん Outlook 2024 ［Office 2024/Microsoft 365 両対応］
+38 | 19 days ago | Searched | iphone
+39 | 20 days ago | Searched | iphone 17 pro max
+40 | 20 days ago | Searched | iphone 15 pro max
+41 | 20 days ago | Browsed | 서울역 - Google Maps
+42 | 20 days ago | Browsed | KINTEX 1 - Google Maps
+43 | 20 days ago | Browsed | KINTEX 1, Kintex-ro, Ilsanseo-gu, Goyang-si, Gyeonggi-do, South Korea - Google Maps
+44 | 23 days ago | Searched | women's sandals
+45 | 23 days ago | Searched | laptops
+46 | 23 days ago | Searched | laptops amazon
+47 | 23 days ago | Searched | women's shoes
+48 | 23 days ago | Searched | nike shoes
+49 | 26 days ago | Browsed | Edge 中的 Copilot | Microsoft Edge
+50 | 26 days ago | Browsed | Microsoft Outlook 个人电子邮件和日历 | Microsoft 365
+</USER-EVENTS>
+
+<SHOPPING-PROFILE>
+{
+  "userShoppingProfile": {
+    "shoppingGenderPreference": "general",
+    "categoryPreferences": [
+      "OLED TVs",
+      "Laptops",
+      "Smartphones",
+      "Wireless earbuds",
+      "LEGO building sets",
+      "Gaming controllers & joysticks",
+      "Women's shoes"
+    ],
+    "brandPreferences": [
+      "LG",
+      "LEGO",
+      "BMW",
+      "HP",
+      "Logitech",
+      "Fanatec",
+      "Apple",
+      "Nike"
+    ],
+    "retailerPreferences": [],
+    "priceSensitivity": "general",
+    "fashionStyle": [],
+    "fashionFit": [],
+    "shoppingValues": [],
+    "contextualShoppingInterests": [
+      "active research: searching, browsing, and clicking LG OLED G6 TV listings across multiple sessions",
+      "active research: comparing laptops (including Amazon searches) and clicking a specific HP OmniBook configuration",
+      "active research: repeated smartphone searches focused on iPhone models/generations",
+      "recurring interest: browsing and clicking LEGO BMW M4 GT3 sets across multiple retailers",
+      "recurring interest: engaging with sim-racing/flight-sim hardware (Fanatec compatibility/settings pages and a Logitech flight stick click)"
+    ],
+    "suggestedRelatedBrands": [
+      "Samsung",
+      "Sony",
+      "Lenovo",
+      "Dell",
+      "ASUS",
+      "Bose",
+      "Beats",
+      "Adidas",
+      "Puma",
+      "Thrustmaster"
+    ]
+  }
+}
+</SHOPPING-PROFILE>

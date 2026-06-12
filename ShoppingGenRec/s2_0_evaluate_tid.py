@@ -39,7 +39,7 @@ def build_product_info_text(item):
         lines.append(f"Title: {title}")
     desc = item.get("description", "")
     if desc:
-        lines.append(f"Description: {desc[:300]}{'...' if len(desc) > 300 else ''}")
+        lines.append(f"Description: {desc[:500]}{'...' if len(desc) > 500 else ''}")
     cats = item.get("categories", "")
     if cats:
         lines.append(f"Categories: {cats}")
@@ -92,7 +92,7 @@ def compute_statistics(eval_results):
     """Compute aggregate statistics from evaluation results."""
     dimensions = ["D1_searchability", "D2_model_name", "D3_info_density",
                    "D4_attribute_coverage", "D5_brand_seller",
-                   "D6_category_precision"]
+                   "D6_category_precision", "D7_factual_accuracy"]
     stats = {}
     for dim in dimensions:
         scores = []
@@ -127,6 +127,140 @@ def compute_statistics(eval_results):
 
 
 # =============================================================================
+# Consistency Check (multi-run comparison)
+# =============================================================================
+
+def compare_runs(id2meta_files):
+    """Compare TID consistency across multiple generation runs."""
+    print(f"\n{'=' * 60}")
+    print(f"  TID Consistency Check ({len(id2meta_files)} runs)")
+    print(f"{'=' * 60}")
+
+    all_data = []
+    for fpath in id2meta_files:
+        print(f"  Loading: {fpath}")
+        with open(fpath, "r", encoding="utf-8") as f:
+            raw = f.read().rstrip('\x00')
+            all_data.append(json.loads(raw))
+
+    common_ids = set(all_data[0].keys())
+    for d in all_data[1:]:
+        common_ids &= set(d.keys())
+    print(f"  Common items across all runs: {len(common_ids):,}")
+
+    n_runs = len(all_data)
+    identical = 0
+    different = 0
+    all_different = 0  # every run produced a unique TID
+    slot_same = [0] * 7
+    slot_all_diff = [0] * 7  # every run produced a unique value for that slot
+    diff_examples = []
+    all_diff_examples = []
+
+    for item_id in sorted(common_ids):
+        tids = []
+        for d in all_data:
+            sw = d[item_id].get("summary_words", [])
+            tids.append(tuple(sw) if sw else ())
+
+        if any(len(t) != 7 for t in tids):
+            continue
+
+        n_unique = len(set(tids))
+        if n_unique == 1:
+            identical += 1
+        else:
+            different += 1
+            if n_unique == n_runs:
+                all_different += 1
+                if len(all_diff_examples) < 20:
+                    all_diff_examples.append({
+                        "item_id": item_id,
+                        "title": all_data[0][item_id].get("title", "")[:80],
+                        "tids": [list(t) for t in tids],
+                    })
+            if len(diff_examples) < 20:
+                diff_examples.append({
+                    "item_id": item_id,
+                    "title": all_data[0][item_id].get("title", "")[:80],
+                    "tids": [list(t) for t in tids],
+                })
+
+        for s in range(7):
+            vals = set(t[s] for t in tids)
+            if len(vals) == 1:
+                slot_same[s] += 1
+            elif len(vals) == n_runs:
+                slot_all_diff[s] += 1
+
+    total = identical + different
+    if total == 0:
+        print("  No valid items to compare.")
+        return
+
+    slot_names = ["Category", "Attr2", "Attr3", "Attr4", "Attr5", "Brand", "Seller"]
+    partially_diff = different - all_different
+
+    print(f"\n  Overall Consistency:")
+    print(f"    Identical (all same):     {identical:,}/{total:,} ({identical/total*100:.1f}%)")
+    print(f"    Partially different:      {partially_diff:,}/{total:,} ({partially_diff/total*100:.1f}%)")
+    print(f"    All different ({n_runs}× unique): {all_different:,}/{total:,} ({all_different/total*100:.1f}%)")
+
+    print(f"\n  Per-Slot Consistency:")
+    for s in range(7):
+        pct = slot_same[s] / total * 100
+        ad_pct = slot_all_diff[s] / total * 100
+        print(f"    Slot {s+1} ({slot_names[s]:>8}): "
+              f"same={slot_same[s]:,}/{total:,} ({pct:.1f}%)  "
+              f"all_diff={slot_all_diff[s]:,} ({ad_pct:.1f}%)")
+
+    if diff_examples:
+        print(f"\n  Examples of Differing TIDs (showing up to 10):")
+        for ex in diff_examples[:10]:
+            print(f"    {ex['title']}")
+            for i, tid in enumerate(ex["tids"]):
+                print(f"      Run {i+1}: {tid}")
+            print()
+
+    if all_diff_examples:
+        print(f"\n  Examples of All-Different TIDs ({n_runs}× unique, showing up to 10):")
+        for ex in all_diff_examples[:10]:
+            print(f"    {ex['title']}")
+            for i, tid in enumerate(ex["tids"]):
+                print(f"      Run {i+1}: {tid}")
+            print()
+
+    report = {
+        "n_runs": n_runs,
+        "n_items": total,
+        "identical": identical,
+        "identical_pct": round(identical / total * 100, 1),
+        "different": different,
+        "different_pct": round(different / total * 100, 1),
+        "all_different": all_different,
+        "all_different_pct": round(all_different / total * 100, 1),
+        "partially_different": partially_diff,
+        "partially_different_pct": round(partially_diff / total * 100, 1),
+        "per_slot_consistency": {
+            slot_names[s]: round(slot_same[s] / total * 100, 1)
+            for s in range(7)
+        },
+        "per_slot_all_diff": {
+            slot_names[s]: round(slot_all_diff[s] / total * 100, 1)
+            for s in range(7)
+        },
+        "diff_examples": diff_examples,
+        "all_diff_examples": all_diff_examples,
+    }
+
+    out_dir = os.path.dirname(id2meta_files[0])
+    out_path = os.path.join(out_dir, "consistency_report.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    print(f"  Saved: {out_path}")
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -154,8 +288,10 @@ def parse_args():
     parser.add_argument("--token_file", type=str,
                         default="./resources/tokens_full.txt")
     parser.add_argument("--copilot_model", type=str, default="gpt-5.4")
-    parser.add_argument("--copilot_workers", type=int, default=20)
+    parser.add_argument("--copilot_workers", type=int, default=40)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--compare_runs", nargs="+", default=None,
+                        help="Compare TID consistency across multiple id2meta files")
     args = parser.parse_args()
 
     # Default output_dir next to id2meta
@@ -170,6 +306,12 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Consistency comparison mode
+    if args.compare_runs:
+        compare_runs(args.compare_runs)
+        return
+
     random.seed(args.seed)
 
     print("=" * 60)
@@ -252,7 +394,8 @@ def main():
     print(f"  Evaluation Summary ({len(eval_results):,} items)")
     print(f"{'=' * 60}")
     for dim in ["D1_searchability", "D2_model_name", "D3_info_density",
-                "D4_attribute_coverage", "D5_brand_seller", "D6_category_precision"]:
+                "D4_attribute_coverage", "D5_brand_seller",
+                "D6_category_precision", "D7_factual_accuracy"]:
         if dim in stats:
             s = stats[dim]
             d = s["dist"]
@@ -260,7 +403,7 @@ def main():
                   f"(0:{d.get('0',0)} 1:{d.get('1',0)} 2:{d.get('2',0)})")
     if "overall" in stats:
         o = stats["overall"]
-        print(f"\n  Overall: mean={o['mean']:.1f}/12  min={o['min']} max={o['max']}")
+        print(f"\n  Overall: mean={o['mean']:.1f}  min={o['min']} max={o['max']}")
     if stats.get("top_issues"):
         print(f"\n  Top Issues:")
         for issue, cnt in stats["top_issues"][:15]:
@@ -283,4 +426,19 @@ def main():
                         ("eval_statistics.json", stats)]:
         path = os.path.join(args.output_dir, name)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        print(f"\n  Saved: {path}")
+
+    low = [r for r in eval_results if r.get("overall", 12) <= 8]
+    low.sort(key=lambda x: x.get("overall", 0))
+    low_path = os.path.join(args.output_dir, "eval_low_scores.json")
+    with open(low_path, "w", encoding="utf-8") as f:
+        json.dump(low, f, ensure_ascii=False, indent=2)
+    print(f"  Low-score items ({len(low):,}): {low_path}")
+
+    cleanup_checkpoint(ckpt_dir)
+    print(f"\n  Done!")
+
+
+if __name__ == "__main__":
+    main()

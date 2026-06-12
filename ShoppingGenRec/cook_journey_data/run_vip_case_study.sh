@@ -12,7 +12,9 @@
 #      bash run_vip_case_study.sh --date 20260528 --source PG --from step6 # from step6
 #      bash run_vip_case_study.sh --from step7                             # step7+step8 only
 #      bash run_vip_case_study.sh --from step8                             # step8 only
-#      bash run_vip_case_study.sh --model claude-opus-4.6                   # use Claude
+#      bash run_vip_case_study.sh --model gpt-5.2                          # use gpt-5.2 (default: gpt-5.4)
+#      bash run_vip_case_study.sh --tag new                               # vip_case_study_IDB_new
+#      bash run_vip_case_study.sh --do_sft                                # also run s3 SFT + vis HTML
 #
 # =============================================================================
 
@@ -29,8 +31,10 @@ COOK_DIR="${SCRIPT_DIR}"
 
 DATA_DATE="20260528"
 START_FROM="step3"
-SOURCE=""
-MODEL=""
+SOURCE="IDB"
+MODEL="gpt-5.4"
+TAG=""
+DO_SFT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,6 +42,8 @@ while [[ $# -gt 0 ]]; do
         --from)   START_FROM="$2"; shift 2 ;;
         --source) SOURCE="$2";    shift 2 ;;
         --model)  MODEL="$2";     shift 2 ;;
+        --tag)    TAG="$2";       shift 2 ;;
+        --do_sft) DO_SFT=true;    shift ;;
         *)        echo "ERROR: Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -53,14 +59,7 @@ else
     SOURCE_SUFFIX=""
 fi
 
-# MODEL suffix for step6 outputs (e.g., "_claude-opus-4.6"; empty for default)
-if [[ -n "${MODEL}" && "${MODEL}" != "gpt-5.2" ]]; then
-    MODEL_SUFFIX="_${MODEL}"
-else
-    MODEL_SUFFIX=""
-fi
-
-VIP_DIR="${DATA_ROOT}/vip_case_study${SOURCE_SUFFIX}"
+VIP_DIR="${DATA_ROOT}/vip_case_study${SOURCE_SUFFIX}${TAG:+_${TAG}}_${MODEL}"
 RAW_DIR="${DATA_ROOT}/raw_data${SOURCE_SUFFIX}"
 
 # Input
@@ -73,13 +72,12 @@ INDEX_DIR="${RAW_DIR}/MatadorEmb_Index"
 STEP3_OUTPUT="${VIP_DIR}/vip_users_Journey_Results.tsv"
 STEP5_PREFIX="vip_users"
 STEP5_OUTPUT="${VIP_DIR}/${STEP5_PREFIX}_journey_with_products.tsv"
-STEP6_OUTPUT_DIR="${VIP_DIR}/ranker_output${MODEL_SUFFIX}"
+STEP6_OUTPUT_DIR="${VIP_DIR}/ranker_output"
 STEP6_MERGED=""  # auto-detected after step6 merge
-STEP8_RESULTS_DIR="${VIP_DIR}/html${MODEL_SUFFIX}"
+STEP8_RESULTS_DIR="${VIP_DIR}/html"
 
-# LLM settings — model only affects step6
-COPILOT_MODEL="gpt-5.2"
-STEP6_COPILOT_MODEL="${MODEL:-gpt-5.2}"
+# LLM settings — all LLM steps use the same model
+COPILOT_MODEL="${MODEL}"
 GPU_IDS="1"
 
 echo "=================================================================="
@@ -91,7 +89,9 @@ echo "  VIP input:     ${VIP_INPUT}"
 echo "  Data date:     ${DATA_DATE}"
 echo "  Source:        ${SOURCE:-"(default)"}"
 echo "  Start from:    ${START_FROM}"
-echo "  Step6 model:   ${STEP6_COPILOT_MODEL}"
+echo "  Model:         ${COPILOT_MODEL}"
+echo "  Tag:           ${TAG:-"(none)"}"
+echo "  Do SFT:        ${DO_SFT}"
 echo "  RAW dir:       ${RAW_DIR}"
 echo "  Item JSON:     ${ITEM_JSON}"
 echo "  Index dir:     ${INDEX_DIR}"
@@ -134,7 +134,7 @@ fi
 if step_should_run "step6"; then
     rm -rf "${STEP6_OUTPUT_DIR}"/_ranker_ckpt_* 2>/dev/null || true
     rm -f  "${STEP6_OUTPUT_DIR}"/*_Results.tsv 2>/dev/null || true
-    rm -f  "${VIP_DIR}"/*_Ranked${MODEL_SUFFIX}.tsv 2>/dev/null || true
+    rm -f  "${VIP_DIR}"/*_Ranked.tsv 2>/dev/null || true
 fi
 
 if step_should_run "step7"; then
@@ -244,7 +244,7 @@ if step_should_run "step6"; then
     python3 "${COOK_DIR}/step6_call_LLM_ranker.py" \
         --input_file "${STEP5_OUTPUT}" \
         --output_dir "${STEP6_OUTPUT_DIR}" \
-        --copilot_model "${STEP6_COPILOT_MODEL}" \
+        --copilot_model "${COPILOT_MODEL}" \
         --num_workers 20 \
         --max_tokens 10000
 
@@ -337,6 +337,61 @@ else
 fi
 
 # =============================================================================
+#  SFT Data Generation (optional: --do_sft)
+# =============================================================================
+if [[ "${DO_SFT}" == true ]]; then
+    echo ""
+    echo "────────────────────────────────────────────────────────────────────"
+    echo "  SFT: s3 Journey SFT Data + Visualization HTML"
+    echo "────────────────────────────────────────────────────────────────────"
+
+    if [[ -z "${STEP6_MERGED}" ]]; then
+        STEP6_ACTUAL=$(ls -t "${STEP6_OUTPUT_DIR}"/*_Ranked.tsv 2>/dev/null | head -1)
+        if [[ -n "${STEP6_ACTUAL}" ]]; then
+            STEP6_MERGED="${STEP6_ACTUAL}"
+        fi
+    fi
+
+    if [[ -z "${STEP6_MERGED}" || ! -f "${STEP6_MERGED}" ]]; then
+        echo "  WARNING: No ranked TSV found, skipping SFT"
+    else
+        ID2META="${DATA_ROOT}/processed${SOURCE_SUFFIX}/id2meta_with_norm.json"
+        SFT_DIR="${VIP_DIR}/sft_data"
+
+        if [[ ! -f "${ID2META}" ]]; then
+            echo "  WARNING: id2meta not found: ${ID2META}, skipping SFT"
+        else
+            # Run s3 for profile2journey
+            echo ""
+            echo "  [SFT] Running s3 (profile2journey)..."
+            python3 "${PROJECT_DIR}/s3_build_journey_sft_data.py" \
+                --task profile2journey \
+                --ranked_journey_file "${STEP6_MERGED}" \
+                --id2meta_file "${ID2META}" \
+                --output_dir "${SFT_DIR}"
+
+            # Generate vis HTML from the profile2journey vis JSONL
+            VIS_JSONL="${SFT_DIR}/profile2journey_sft_for_vis.jsonl"
+            if [[ -f "${VIS_JSONL}" ]]; then
+                echo ""
+                echo "  [SFT] Generating visualization HTML..."
+                python3 "${COOK_DIR}/step8_generate_html.py" \
+                    --input "${VIS_JSONL}" \
+                    --results_dir "${SFT_DIR}" \
+                    --item_json "${ITEM_JSON}" \
+                    --skip_rerank
+            fi
+
+            echo ""
+            echo "  SFT output: ${SFT_DIR}"
+            ls -lhS "${SFT_DIR}"/*.json "${SFT_DIR}"/*.jsonl "${SFT_DIR}"/*.html 2>/dev/null | \
+                awk '{printf "    %-6s  %s\n", $5, $NF}'
+        fi
+    fi
+    echo ""
+fi
+
+# =============================================================================
 #  Summary
 # =============================================================================
 echo ""
@@ -345,7 +400,7 @@ echo "  VIP Case Study Pipeline — Complete!"
 echo "=================================================================="
 echo ""
 echo "  Output directory: ${VIP_DIR}"
-echo "  Step6 output:    ${STEP6_OUTPUT_DIR}"
+echo "  Ranker output:   ${STEP6_OUTPUT_DIR}"
 echo "  HTML output:     ${STEP8_RESULTS_DIR}"
 echo ""
 echo "  Files:"

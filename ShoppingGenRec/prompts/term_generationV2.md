@@ -47,38 +47,41 @@ Examples: headphone, sneaker, cream, laptop, shirtdress, television, tent
 
 **Slot 2 — Product Identity: Model Name OR Primary Style/Function**
 This slot answers “what specifically is it?” beyond the category.
-- If the product has a specific model name or product line, it MUST be here (as a phrase slot).
-- If not, use the product’s primary defining style or function.
+- If the product has a specific model name or product line, it MUST be here as a phrase slot. E.g., iPhone 17 Pro Max, WH-1000XM6, Technic BMW M4 GT3 EVO, Saros 20, V15 Detect, Kindle Paperwhite, Roomba j9+, Instant Pot Duo, Caseta, Mad House 6.
+- If not, use the defining sub-style, technique, or type that a shopper would search for. E.g., hand-blown (chandelier), button-down (shirtdress), robotic (vacuum), beaded (clutch), kitten (heel), double-breasted (blazer), cabin (tent), noise-canceling (headphone).
+- Do NOT repeat the category in different words (chandelier→"illuminating", vacuum→"cleaning", clutch→"carrying"). These add no information.
 
-Model names: iPhone 17 Pro Max, WH-1000XM6, Technic BMW M4 GT3 EVO, SOLIX C1000, Kindle Paperwhite, Roomba j9+, Instant Pot Duo, Saros 20, V15 Detect.
-Not model names: button-down, belted, slim-fit, collared, dimmable, noise-canceling — these are styles/functions.
-
-**Slot 3 — Form Factor / Subtype / Key Capability**
-This slot answers “what form or type?” — the physical shape, subtype, or primary capability.
-When Slot 2 is a model name, this slot takes the core function.
-Examples: over-ear, wireless, cordless, robotic, unlocked, midi, countertop, clip-on, 6-person, 3-in-1, building, a-line
+**Slot 3 — Structural Form / Subtype**
+This slot answers "what form, subtype, or subject?" — the physical shape, subtype, or what the product represents. Pick the term a shopper would use to filter or search. When both "how it's made" and "what it is/represents" are options, prefer what it represents.
+- Electronics: wireless, cordless, robotic, usb-c, over-ear, in-ear, 3-in-1, all-in-one
+- Clothing: midi, maxi, ankle, sleeveless, short-sleeve, wide-leg, a-line, bootcut
+- Shoes: low-top, platform, slip-on, lace-up, open-toe, block-heel
+- Home: countertop, clip-on, wall-mounted, bedside, freestanding, pendant
+- Toys/Art/Decor: race-car, castle, spaceship, floral, landscape, abstract
+- Accessories: hoop, crossbody, sling, trapezoid, envelope
+- Outdoor: 2-person, 6-person, 28l, ultralight
 
 **Slot 4 — Distinguishing Attribute**
-The attribute that most differentiates this product from similar items. Color, size, storage, material, pattern, or key spec all belong here when they are important differentiators.
-Examples: 256gb, 65-inch, titanium, striped, lightweight, waterproof, stainless, hepa, linen, obstacle-crossing, dimmable
+The attribute that most differentiates this product from similar items within the same subtype. Color, size, storage, material, pattern, or key spec all belong here.
+Examples: 256gb, 65-inch, titanium, striped, lightweight, waterproof, stainless, hepa, linen, self-emptying, dimmable, ceramic
 
 **Slot 5 — Audience / Context / Additional Attribute**
 Fill this slot using the following priority (first match wins):
 1. **Target audience** if explicitly stated: kids, women, men, professional, baby, pet. (Exclude generic "unisex" or "adult".)
 2. **Use scenario or occasion** if clear: outdoor, gaming, office, evening, backpacking, kitchen, desk.
-3. **Any remaining useful product attribute**: color, material, pattern, or spec that hasn’t been used in Slots 3–4. A concrete attribute (e.g., deep-blue, cotton, 1TB) is always better than a vague filler.
+3. **Any remaining useful product attribute**: color, material, function, pattern, or spec not yet used in Slots 3–4. A concrete attribute (e.g., deep-blue, cotton, noise-canceling, 1TB) is always better than a vague filler.
 
 Do NOT use vague quality tiers (flagship, premium, classic, modern, basic) — they add no useful information.
 
 **Slot 6 — Brand**
 Brand or platform ecosystem.
-MUST include if explicitly provided. Keep the original form — do not translate, split, normalize, or rewrite.
-If the brand field is "Other", "Unknown", "Generic", or blank, treat it as no brand — use a meaningful product attribute (e.g., style, material, or use scenario) instead.
+If brand is explicitly provided and different from seller, put it here. Keep the original form — do not translate, split, normalize, or rewrite.
+If brand is "Other", "Unknown", "Generic", or blank, OR if brand and seller are the same — use a meaningful product attribute n this slot instead. Never output "Other"/"Unknown"/"Generic" as a slot value.
 
 **Slot 7 — Seller / Retailer**
-Seller or retailer name.
-MUST include if explicitly provided and meaningfully different from the brand. Keep the original form — do not translate, split, normalize, or rewrite.
-If brand and seller are the same or nearly the same, do NOT repeat — use this slot for a remaining useful product attribute (e.g., a key feature, material, or spec not yet captured in Slots 2–5). Never use generic filler ("other", "none", "N/A").
+Seller MUST go here whenever it is explicitly provided and not "Other"/"Unknown"/blank. This is the fixed slot for seller — never move seller to Slot 6.
+If brand and seller are the same, put the name here (not in Slot 6). Keep the original form — do not translate, split, normalize, or rewrite.
+If seller is "Other"/"Unknown"/blank, use a remaining useful product attribute instead. Never use generic filler ("other", "none", "N/A").
 
 
 ## Rules
@@ -140,18 +143,18 @@ Never use vague quality tiers (flagship, premium, classic, modern, basic) or pla
 
 ### Rule 13 — Model Name Format
 Keep model names compact. Drop brand prefixes (brand goes in Slot 6) and non-essential suffixes like color, storage, or SKU. Do NOT split a model name across multiple slots — it is ONE phrase slot.
-- ✅ iPhone 17 Pro Max (not "Apple iPhone 17 Pro Max 256GB Deep Blue")
-- ✅ Technic BMW M4 GT3 EVO (not "LEGO Technic BMW M4 GT3 EVO Race Car 42226")
-- ✅ WH-1000XM6 (not "Sony WH-1000XM6 Wireless Noise Canceling")
-- ✅ Instant Pot Duo (not "Instant Pot Duo 7-in-1 Electric Pressure Cooker 6Qt")
-- ✅ ThinkPad X1 Carbon (not "Lenovo ThinkPad X1 Carbon Gen 12 14-inch")
+- iPhone 17 Pro Max (not "Apple iPhone 17 Pro Max 256GB Deep Blue")
+- Technic BMW M4 GT3 EVO (not "LEGO Technic BMW M4 GT3 EVO Race Car 42226")
+- WH-1000XM6 (not "Sony WH-1000XM6 Wireless Noise Canceling")
+- Instant Pot Duo (not "Instant Pot Duo 7-in-1 Electric Pressure Cooker 6Qt")
+- ThinkPad X1 Carbon (not "Lenovo ThinkPad X1 Carbon Gen 12 14-inch")
 
 ## Complete Output Examples
 
 With model name (electronics):
 `<Output>[smartphone, iPhone 17 Pro Max, unlocked, 256gb, deep-blue, Apple, Best Buy]</Output>`
 `<Output>[headphone, WH-1000XM6, noise-canceling, over-ear, silver, Sony, Amazon]</Output>`
-`<Output>[toy, Technic BMW M4 GT3 EVO, building, detailed, kids, LEGO, Scheels]</Output>`
+`<Output>[toy, Technic BMW M4 GT3 EVO, race-car, detailed, kids, LEGO, Scheels]</Output>`
 `<Output>[vacuum, Saros 20, robotic, self-emptying, pet, Roborock, Best Buy]</Output>`
 
 Without model name (clothing / home / outdoor):
@@ -191,4 +194,10 @@ If a product:
 
 ## Inputs
 
-PROD
+PRODUCT INFORMATION:
+{product_info_text}
+
+TOP 5 SIMILAR PRODUCTS (for reference only):
+{similar_items_text}
+
+Output:
