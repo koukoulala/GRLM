@@ -606,12 +606,12 @@ def parse_args():
         "--input_files",
         type=str,
         nargs="+",
-        default=[#"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/26/IndexData_en_us_all.tsv",
-                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/25/IndexData_en_us_all.tsv",
-                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/22/IndexData_en_us_all.tsv",
-                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/12/IndexData_en_us_all.tsv",
-                 #"/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/04/IndexData_en_us_all.tsv",
-                 "/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260528_ProductBestOffer_Sampled.tsv",],
+        default=["/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/26/IndexData_en_us_all.tsv",
+                 "/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/25/IndexData_en_us_all.tsv",
+                 "/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/22/IndexData_en_us_all.tsv",
+                 "/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/12/IndexData_en_us_all.tsv",
+                 "/cosmos/projects/Recommendations/Pipelines/QualityIndexAllMarketUnify/dev_Updated/2026/05/04/IndexData_en_us_all.tsv",
+                 #"/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/ProductGroup/20260528_ProductBestOffer_Sampled.tsv",],
         help="Path(s) to product TSV files (JourneyProduct or IndexData). "
              "Multiple files will be merged; duplicate GlobalOfferIds are "
              "resolved by keeping the row with the latest Date.",
@@ -627,7 +627,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_PG",
+        #default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_PG",
+        default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB",
         help="Directory to save output item.json (default: ./raw_data)",
     )
     parser.add_argument(

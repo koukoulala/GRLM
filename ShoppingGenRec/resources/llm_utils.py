@@ -64,7 +64,13 @@ def load_tokens(token_file):
     return tokens
 
 
-def validate_tokens(tokens, model="gpt-5.2"):
+def _uses_responses_api(model):
+    """Check if a model requires the Responses API instead of Chat Completions."""
+    _RESPONSES_ONLY = {"gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex"}
+    return model in _RESPONSES_ONLY
+
+
+def validate_tokens(tokens, model="gpt-5.5"):
     """
     Validate tokens by:
       1. Checking if the token can obtain a Copilot API token
@@ -74,7 +80,7 @@ def validate_tokens(tokens, model="gpt-5.2"):
 
     Args:
         tokens: List of GitHub access tokens.
-        model: Model name to test against (default: "gpt-5.2").
+        model: Model name to test against (default: "gpt-5.5").
 
     Returns:
         list[str]: List of valid tokens that passed all checks.
@@ -95,7 +101,6 @@ def validate_tokens(tokens, model="gpt-5.2"):
 
         # Step 2: test a minimal API call with the target model
         try:
-            url = "https://api.githubcopilot.com/chat/completions"
             headers = {
                 "Authorization": f"Bearer {copilot_token}",
                 "User-Agent": "GitHub-Copilot-Client/1.0",
@@ -105,17 +110,25 @@ def validate_tokens(tokens, model="gpt-5.2"):
                 "Editor-Plugin-Version": "copilot/1.155.0",
                 "X-GitHub-Api-Version": "2023-07-07"
             }
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": False,
-            }
-            # Newer models (gpt-5.4+, o-series) require max_completion_tokens
-            # instead of max_tokens
-            if any(model.startswith(p) for p in ("gpt-5.4", "gpt-5.5", "gpt-6", "o1", "o3", "o4")):
-                payload["max_completion_tokens"] = 1
+
+            if _uses_responses_api(model):
+                url = "https://api.githubcopilot.com/responses"
+                payload = {
+                    "model": model,
+                    "input": "hi",
+                    "max_output_tokens": 16,
+                }
             else:
-                payload["max_tokens"] = 1
+                url = "https://api.githubcopilot.com/chat/completions"
+                payload = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                }
+                if any(model.startswith(p) for p in ("gpt-5.4", "gpt-6", "o1", "o3", "o4")):
+                    payload["max_completion_tokens"] = 1
+                else:
+                    payload["max_tokens"] = 1
             resp = requests.post(url, headers=headers, json=payload, timeout=30)
             if resp.status_code == 200:
                 valid.append(token)
@@ -181,7 +194,7 @@ def get_copilot_token(access_token):
         raise Exception(f"Failed to get Copilot token: {response.status_code} - {response.text}")
 
 
-def call_llm_api(prompt, access_token, system_prompt="", model="gpt-4o",
+def call_llm_api(prompt, access_token, system_prompt="", model="gpt-5.5",
                  temperature=0.5, max_tokens=2000, timeout=300, max_retries=3):
     """
     Make a call to the LLM API with retry logic.
@@ -190,7 +203,7 @@ def call_llm_api(prompt, access_token, system_prompt="", model="gpt-4o",
         prompt: User prompt text
         access_token: GitHub access token
         system_prompt: System prompt text (default: "")
-        model: Model name to use (default: "gpt-4o")
+        model: Model name to use (default: "gpt-5.5")
         temperature: Temperature parameter (default: 0.5)
         max_tokens: Maximum tokens for response (default: 2000)
         timeout: Request timeout in seconds (default: 300)
@@ -212,7 +225,6 @@ def call_llm_api(prompt, access_token, system_prompt="", model="gpt-4o",
         try:
             copilot_token = get_copilot_token(access_token)
 
-            url = "https://api.githubcopilot.com/chat/completions"
             headers = {
                 "Authorization": f"Bearer {copilot_token}",
                 "User-Agent": "GitHub-Copilot-Client/1.0",
@@ -223,35 +235,70 @@ def call_llm_api(prompt, access_token, system_prompt="", model="gpt-4o",
                 "X-GitHub-Api-Version": "2023-07-07"
             }
 
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "stream": False,
-                "n": 1,
-                "top_p": 1
-            }
-            # Newer models (gpt-5.4+, o-series) require max_completion_tokens
-            if any(model.startswith(p) for p in ("gpt-5.4", "gpt-5.5", "gpt-6", "o1", "o3", "o4")):
-                payload["max_completion_tokens"] = max_tokens
+            if _uses_responses_api(model):
+                # Responses API for models that don't support /chat/completions
+                url = "https://api.githubcopilot.com/responses"
+                input_text = prompt
+                if system_prompt:
+                    input_text = f"{system_prompt}\n\n{prompt}"
+                payload = {
+                    "model": model,
+                    "input": input_text,
+                    "max_output_tokens": max_tokens,
+                }
+
+                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+
+                if response.status_code != 200:
+                    if response.text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                        error_body = "(HTML error page)"
+                    else:
+                        error_body = response.text[:150]
+                    raise Exception(
+                        f"{response.status_code} {response.reason} - {error_body}"
+                    )
+
+                result = response.json()
+                # Extract text from Responses API output
+                for item in result.get("output", []):
+                    if item.get("type") == "message":
+                        for c in item.get("content", []):
+                            if c.get("type") == "output_text":
+                                return c.get("text", "")
+                raise Exception("No output_text found in Responses API result")
+
             else:
-                payload["max_tokens"] = max_tokens
+                # Chat Completions API
+                url = "https://api.githubcopilot.com/chat/completions"
 
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
-
-            if response.status_code != 200:
-                # Truncate error body; replace HTML error pages with short msg
-                if response.text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
-                    error_body = "(HTML error page)"
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "stream": False,
+                    "n": 1,
+                    "top_p": 1
+                }
+                # Newer models require max_completion_tokens
+                if any(model.startswith(p) for p in ("gpt-5.4", "gpt-6", "o1", "o3", "o4")):
+                    payload["max_completion_tokens"] = max_tokens
                 else:
-                    error_body = response.text[:150]
-                raise Exception(
-                    f"{response.status_code} {response.reason} - {error_body}"
-                )
+                    payload["max_tokens"] = max_tokens
 
-            result = response.json()
-            response_text = result['choices'][0]['message']['content']
-            return response_text
+                response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+
+                if response.status_code != 200:
+                    if response.text.strip().startswith(("<!DOCTYPE", "<html", "<!--")):
+                        error_body = "(HTML error page)"
+                    else:
+                        error_body = response.text[:150]
+                    raise Exception(
+                        f"{response.status_code} {response.reason} - {error_body}"
+                    )
+
+                result = response.json()
+                response_text = result['choices'][0]['message']['content']
+                return response_text
 
         except Exception as e:
             last_exception = e
@@ -292,7 +339,7 @@ def _process_single_item(idx, prompt, tokens, system_prompt, model,
 
 
 def run_llm_parallel(inputs, token_file=None, num_workers=4, system_prompt="",
-                     model="gpt-4o", temperature=0.5, max_tokens=2000,
+                     model="gpt-5.5", temperature=0.5, max_tokens=2000,
                      timeout=300, max_retries=3, _tokens=None, token_evaluate=False):
     """
     Run LLM calls in parallel over a list of (idx, prompt) inputs.
@@ -306,7 +353,7 @@ def run_llm_parallel(inputs, token_file=None, num_workers=4, system_prompt="",
         token_file: Path to token file (one token per line).
         num_workers: Number of parallel threads (default: 4)
         system_prompt: System prompt for all calls (default: "")
-        model: Model name (default: "gpt-4o")
+        model: Model name (default: "gpt-5.5")
         temperature: Temperature (default: 0.5)
         max_tokens: Max tokens per response (default: 2000)
         timeout: Timeout per request in seconds (default: 300)
@@ -431,7 +478,7 @@ def cleanup_checkpoint(checkpoint_dir):
 
 def run_llm_parallel_with_checkpoint(inputs, token_file, checkpoint_dir,
                                      num_workers=20, system_prompt="",
-                                     model="gpt-5.2", temperature=0,
+                                     model="gpt-5.5", temperature=0,
                                      max_tokens=2000, timeout=300,
                                      max_retries=3, chunk_size=10000):
     """Run parallel LLM calls with chunked checkpoint/resume support.

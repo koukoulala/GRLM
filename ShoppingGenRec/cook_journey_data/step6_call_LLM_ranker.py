@@ -221,6 +221,9 @@ def load_step5_and_flatten(input_file, max_journeys=0):
             nf = len(fields)
 
             if is_split:
+                # Skip embedded header rows (from concatenated split files)
+                if idx_jkey < nf and fields[idx_jkey].strip() == "JourneyKey":
+                    continue
                 jr = {
                     "JourneyKey": fields[idx_jkey] if idx_jkey < nf else "",
                     "UserId": fields[idx_uid] if idx_uid < nf else "",
@@ -333,6 +336,9 @@ def _iter_journey_chunks(input_file, chunk_size, max_journeys=0):
             nf = len(fields)
 
             if is_split:
+                # Skip embedded header rows (from concatenated split files)
+                if idx_jkey < nf and fields[idx_jkey].strip() == "JourneyKey":
+                    continue
                 jr = {
                     "JourneyKey": fields[idx_jkey] if idx_jkey < nf else "",
                     "UserId": fields[idx_uid] if idx_uid < nf else "",
@@ -605,6 +611,9 @@ def run_split_streaming(input_file, output_dir, split_n):
             nf = len(fields)
 
             if is_split:
+                # Skip embedded header rows (from concatenated split files)
+                if idx_jkey < nf and fields[idx_jkey].strip() == "JourneyKey":
+                    continue
                 total_journeys += 1
                 if total_journeys <= skip_journeys:
                     continue
@@ -888,6 +897,22 @@ def run_inference_streaming(prompt_template, args):
     # Load checkpoint for resume
     completed = load_checkpoint(checkpoint_dir)
 
+    # Retry failed: remove entries where API returned empty or JSON invalid
+    if args.retry_failed and completed:
+        n_before = len(completed)
+        failed_keys = []
+        for key, response in list(completed.items()):
+            if not response:
+                failed_keys.append(key)
+            elif not extract_ranked_journey(response):
+                failed_keys.append(key)
+        for key in failed_keys:
+            del completed[key]
+        if failed_keys:
+            print(f"  [retry] Removed {len(failed_keys):,} failed entries "
+                  f"from checkpoint ({n_before:,} total, "
+                  f"{n_before - len(failed_keys):,} kept)")
+
     # Load and validate tokens once
     tokens = load_tokens(args.token_file)
     tokens = validate_tokens(tokens, model=args.copilot_model)
@@ -1067,6 +1092,144 @@ def run_inference_streaming(prompt_template, args):
 
 
 # ============================================================================ #
+# Retry failed journeys                                                        #
+# ============================================================================ #
+def _run_single_retry(split_dir, all_results, prompt_template, args,
+                      round_num):
+    """Run a single retry round on failed journeys.
+
+    Reuses run_inference_streaming: collects failed journey rows, writes
+    them to a temporary split TSV, then runs the standard inference
+    pipeline (with checkpoint, progress, dedup — all for free).
+
+    Returns the number of newly successful results.
+    """
+    # 1. Find split chunk files (exclude Results / Ranked / retry files)
+    all_tsv = sorted(glob.glob(os.path.join(split_dir, "*.tsv")))
+    split_files = [
+        f for f in all_tsv
+        if not os.path.basename(f).endswith("_Results.tsv")
+        and not os.path.basename(f).endswith("_Ranked.tsv")
+        and not os.path.basename(f).startswith("_retry_")
+    ]
+
+    # 2. Collect failed journey rows
+    failed_rows = []
+    if split_files:
+        print(f"\n[retry-{round_num}] Scanning {len(split_files)} split "
+              f"files for failed journeys ...", flush=True)
+        for fi, fpath in enumerate(split_files):
+            with open(fpath, "r", encoding="utf-8",
+                      buffering=8 << 20) as f:
+                hdr = f.readline().rstrip("\r\n")
+                if not hdr:
+                    continue
+                cols = hdr.split("\t")
+                if "JourneyKey" not in cols:
+                    continue
+                ci = {name: i for i, name in enumerate(cols)}
+                ij = ci.get("JourneyKey", -1)
+                iu = ci.get("UserId", -1)
+                ix = ci.get("JourneyIdx", -1)
+                ip = ci.get("ShoppingProfile", -1)
+                iw = ci.get("JourneyWithProducts", -1)
+
+                for line in f:
+                    fs = line.rstrip("\r\n").split("\t")
+                    nf = len(fs)
+                    key = fs[ij] if ij < nf else ""
+                    if not key or key == "JourneyKey":
+                        continue
+                    out = all_results.get(key, "")
+                    if out and extract_ranked_journey(out):
+                        continue  # already valid
+                    failed_rows.append({
+                        "JourneyKey": key,
+                        "UserId": fs[iu] if iu < nf else "",
+                        "JourneyIdx": fs[ix] if ix < nf else "0",
+                        "ShoppingProfile": fs[ip] if ip < nf else "",
+                        "JourneyWithProducts": fs[iw] if iw < nf else "",
+                    })
+            if (fi + 1) % 5 == 0 or fi == len(split_files) - 1:
+                print(f"  [retry-{round_num}] Scanned {fi + 1}/"
+                      f"{len(split_files)} files, "
+                      f"{len(failed_rows):,} failed so far", flush=True)
+    else:
+        # Fallback: no split files, stream from step5 input
+        print(f"\n[retry-{round_num}] No split files found in {split_dir}, "
+              f"reading from step5 input: {args.input_file}", flush=True)
+        for chunk in _iter_journey_chunks(args.input_file, 50000):
+            for jr in chunk:
+                key = jr["JourneyKey"]
+                out = all_results.get(key, "")
+                if out and extract_ranked_journey(out):
+                    continue
+                failed_rows.append(jr)
+
+    if not failed_rows:
+        print(f"[retry-{round_num}] No failed journeys found.", flush=True)
+        return 0
+
+    print(f"[retry-{round_num}] {len(failed_rows):,} failed journeys "
+          f"to retry", flush=True)
+
+    # 3. Write failed rows to a temporary split TSV as input
+    retry_input_file = os.path.join(
+        split_dir, f"_retry_round_{round_num}_input.tsv")
+    with open(retry_input_file, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=SPLIT_COLUMNS,
+                                delimiter="\t", extrasaction="ignore")
+        writer.writeheader()
+        for jr in failed_rows:
+            writer.writerow(jr)
+    n_failed = len(failed_rows)
+    del failed_rows  # free memory before inference
+
+    sz = os.path.getsize(retry_input_file) / (1024 * 1024)
+    print(f"[retry-{round_num}] Wrote retry input: {retry_input_file} "
+          f"({sz:.1f} MB, {n_failed:,} journeys)", flush=True)
+
+    # 4. Run inference via the standard pipeline (reuse everything)
+    retry_args = argparse.Namespace(**vars(args))
+    retry_args.input_file = retry_input_file
+    retry_args.output_dir = split_dir
+    retry_args.retry_failed = True  # clean failed entries from checkpoint on re-run
+
+    output_file = run_inference_streaming(prompt_template, retry_args)
+
+    # 5. Load results back into all_results for merge
+    n_new = 0
+    if output_file and os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8",
+                  buffering=8 << 20) as f:
+            reader = csv.DictReader(f, delimiter="\t")
+            for row in reader:
+                key = (row.get("JourneyKey") or "").strip()
+                output = (row.get("OUTPUT") or "").strip()
+                if key and output:
+                    all_results[key] = output
+                    if extract_ranked_journey(output):
+                        n_new += 1
+        print(f"[retry-{round_num}] Loaded {n_new:,} newly valid results "
+              f"into merge", flush=True)
+
+    return n_new
+
+
+def _run_retry_rounds(split_dir, all_results, args):
+    """Retry inference on failed journeys for up to N rounds."""
+    prompt_template = load_prompt_template(args.prompt_file)
+
+    for rnd in range(1, args.retry_failed_rounds + 1):
+        n_new = _run_single_retry(
+            split_dir, all_results, prompt_template, args, rnd)
+        if n_new == 0:
+            print(f"[retry] Round {rnd}: no new successes, stopping retries.")
+            break
+    print()
+
+
+# ============================================================================ #
 # Merge mode                                                                   #
 # ============================================================================ #
 def run_merge(args):
@@ -1079,17 +1242,19 @@ def run_merge(args):
       - Progressive cleanup: removes used keys from all_results
       - Uses _json_dumps_compact (orjson) for output serialization
     """
-    merge_dir = args.merge_dir
+    # Where to read results / split files from
+    split_dir = (args.merge_dir
+                 or os.path.join(args.output_dir, args.split_sub_dir))
     input_file = args.input_file  # original step5 output (for user rows)
-    output_dir = args.output_dir or merge_dir
+    merge_output_dir = args.output_dir  # Ranked.tsv goes here
 
     # 1. Find all result files
-    pattern = os.path.join(merge_dir, "*_Results.tsv")
+    pattern = os.path.join(split_dir, "*_Results.tsv")
     result_files = sorted(glob.glob(pattern))
     if not result_files:
-        print(f"[merge] No *_Results.tsv found in {merge_dir}")
+        print(f"[merge] No *_Results.tsv found in {split_dir}")
         return
-    print(f"[merge] Found {len(result_files)} result files in {merge_dir}")
+    print(f"[merge] Found {len(result_files)} result files in {split_dir}")
 
     # 2. Load all results: key -> OUTPUT
     #    Results TSV is written by csv.DictWriter which quotes fields
@@ -1108,6 +1273,10 @@ def run_merge(args):
         print(f"  {os.path.basename(fpath)}: {count:,} valid results")
     print(f"  Total unique results: {len(all_results):,}")
 
+    # 2b. Retry failed journeys (if requested)
+    if getattr(args, "retry_failed_rounds", 0) > 0:
+        _run_retry_rounds(split_dir, all_results, args)
+
     # 3. Stream-read original step5 output, build per-user data, and write
     #    merged output in a single pass. This avoids storing all user data
     #    in memory — we process each user as we encounter them.
@@ -1119,8 +1288,8 @@ def run_merge(args):
         file_size = 0
 
     input_base = os.path.splitext(os.path.basename(input_file))[0]
-    output_file = os.path.join(output_dir, f"{input_base}_Ranked.tsv")
-    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(merge_output_dir, f"{input_base}_Ranked.tsv")
+    os.makedirs(merge_output_dir, exist_ok=True)
 
     stats = {
         "users_total": 0,
@@ -1334,8 +1503,14 @@ def parse_args():
     g_io.add_argument(
         "--output_dir", type=str,
         default="/cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec"
-                "/Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full",
-        help="Directory for output files (results, splits, merged).",
+                "/Data/LLMTrainingData/20260528/raw_data_IDB",
+        help="Root output directory. Merge writes Ranked TSV here.",
+    )
+    g_io.add_argument(
+        "--split_sub_dir", type=str, default="ranker_output_full",
+        help="Sub-directory under output_dir for split chunks and "
+             "inference results. Split/inference write here; merge reads "
+             "from here but writes Ranked TSV to output_dir.",
     )
     g_io.add_argument(
         "--prompt_file", type=str, default=PROMPT_FILE,
@@ -1347,9 +1522,9 @@ def parse_args():
     )
 
     g_llm = p.add_argument_group("LLM")
-    g_llm.add_argument("--copilot_model", type=str, default="gpt-5.2",
+    g_llm.add_argument("--copilot_model", type=str, default="gpt-5.4",
                         help="Copilot model name.")
-    g_llm.add_argument("--num_workers", type=int, default=60,
+    g_llm.add_argument("--num_workers", type=int, default=70,
                         help="Number of parallel workers.")
     g_llm.add_argument("--max_tokens", type=int, default=10000,
                         help="Max output tokens per API call.")
@@ -1363,9 +1538,21 @@ def parse_args():
              "Set 0 to disable (run inference instead).",
     )
     g_mode.add_argument(
-        "--merge_dir", type=str, default=None,
-        help="Merge mode: path to directory containing *_Results.tsv files. "
+        "--merge_dir", type=str, default=None, nargs='?', const='',
+        help="Merge mode: directory containing *_Results.tsv files. "
+             "Use as flag without path to auto-use output_dir/split_sub_dir. "
              "Requires --input_file pointing to the original step5 output.",
+    )
+    g_mode.add_argument(
+        "--retry_failed", action="store_true", default=False,
+        help="Inference mode: retry journeys that failed in previous runs. "
+             "Removes entries from checkpoint where API returned empty or "
+             "JSON parsing failed, so they get re-inferred.",
+    )
+    g_mode.add_argument(
+        "--retry_failed_rounds", type=int, default=1,
+        help="During merge, retry inference on failed journeys (infer_fail "
+             "+ invalid_json) for this many rounds. 0 disables retry.",
     )
     g_mode.add_argument(
         "--cleanup_checkpoint", action="store_true", default=False,
@@ -1387,19 +1574,28 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Compute split_dir: where splits / inference results live
+    split_dir = os.path.join(args.output_dir, args.split_sub_dir)
+
     print("=" * 70)
     print("Step 6: Call LLM Ranker (per-journey)")
     print("=" * 70)
     print(f"  Input:      {args.input_file}")
     print(f"  Output dir: {args.output_dir}")
+    print(f"  Split dir:  {split_dir}")
     print(f"  Prompt:     {args.prompt_file}")
     print(f"  Model:      {args.copilot_model}")
     if args.split_n > 0:
         print(f"  Mode:       SPLIT (n={args.split_n:,})")
-    elif args.merge_dir:
-        print(f"  Mode:       MERGE (dir={args.merge_dir})")
+    elif args.merge_dir is not None:
+        effective_merge_dir = args.merge_dir or split_dir
+        print(f"  Mode:       MERGE (dir={effective_merge_dir})")
+        if args.retry_failed_rounds > 0:
+            print(f"  Retry:      {args.retry_failed_rounds} round(s)")
     else:
         print(f"  Mode:       INFERENCE")
+        if args.retry_failed:
+            print(f"  Retry:      enabled (re-infer failed from checkpoint)")
         print(f"  Workers:    {args.num_workers}")
         print(f"  Max tokens: {args.max_tokens}")
         print(f"  Chunk size: {args.chunk_size:,}")
@@ -1408,17 +1604,21 @@ def main():
     print()
 
     # ---- Merge mode ----
-    if args.merge_dir:
+    if args.merge_dir is not None:
+        if not args.merge_dir:
+            args.merge_dir = split_dir  # auto-default
         run_merge(args)
         return
 
     # ---- Streaming split mode (constant memory) ----
     if args.split_n > 0:
-        run_split_streaming(args.input_file, args.output_dir, args.split_n)
+        run_split_streaming(args.input_file, split_dir, args.split_n)
         return
 
     # ---- Inference mode (streaming, memory-efficient) ----
-    os.makedirs(args.output_dir, exist_ok=True)
+    # Inference writes to split_dir (output_dir/split_sub_dir)
+    args.output_dir = split_dir
+    os.makedirs(split_dir, exist_ok=True)
     print(f"[infer] Loading prompt: {args.prompt_file}")
     prompt_template = load_prompt_template(args.prompt_file)
     print(f"  Template: {len(prompt_template):,} chars")

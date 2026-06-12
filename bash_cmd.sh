@@ -37,14 +37,18 @@ nohup python -u cook_journey_data/step5_InferQueryEmbAndAnnSearch.py --resume --
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --debug > logs/step6_debug.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000 > logs/step6_900K.out 2>&1 &
 nohup bash -c '
-while kill -0 587690 2>/dev/null; do sleep 30; done
-echo "PID 587690 finished, starting step6..."
-python -u cook_journey_data/step6_call_LLM_ranker.py --split_n 900000' > logs/step6_split_idb.out 2>&1 &
+while kill -0 404024 2>/dev/null; do sleep 30; done
+echo "PID 404024 finished, starting step6..."
+python -u cook_journey_data/step6_call_LLM_ranker.py --merge_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full/' > logs/step6_merge_idb.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --copilot_model gpt-5.4 --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260528/raw_data_IDB/ranker_output_full/UserEvents_clean_combined_full_journey_with_products_split_009.tsv > logs/step6_idb_009.out 2>&1 &
 nohup python -u cook_journey_data/step6_call_LLM_ranker.py --merge_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/ranker_output_full/ > logs/step6_merge.out 2>&1 &
 nohup python -u cook_journey_data/step7_stats.py --input_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/raw_data/UserEvents_clean_profiles_results_Journey_Results_combined.tsv > logs/step7_stats_after_step3.out 2>&1 &
 nohup bash cook_journey_data/run_vip_case_study.sh > logs/vip_pipeline.out 2>&1 &
 nohup python -u s2_build_meta2tid_sft_data.py > logs/s2.out 2>&1 &
+nohup bash -c '
+while kill -0 455034 2>/dev/null; do sleep 30; done
+echo "PID 455034 finished, starting s3..."
+python -u s3_build_journey_sft_data.py --task profile2journey ' > logs/s3_idb.out 2>&1 &
 nohup python -u s3_build_journey_sft_data.py --task profile2journey --ranked_journey_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study/vip_users_journey_with_products_Ranked.tsv --id2meta_file /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/processed/id2meta_with_norm.json --output_dir /cosmos/projects/Recommendations/PartnerData/Pipelines/OneRec/Data/LLMTrainingData/20260516/vip_case_study/sft_data --use_embedding > logs/s3_profile2journey.log 2>&1 &
 
 export LD_LIBRARY_PATH="/scratch/workspaceblobstore/users/xiaoyukou/faiss-gpu-rocm/build/faiss:/home/aiscuser/.local/lib/python3.12/site-packages/faiss:${LD_LIBRARY_PATH}"

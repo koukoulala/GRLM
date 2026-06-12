@@ -631,7 +631,7 @@ def parse_args():
         help="Path to tokens.txt for Copilot API authentication",
     )
     parser.add_argument(
-        "--copilot_model", type=str, default="gpt-5.2",
+        "--copilot_model", type=str, default="gpt-5.4",
         help="Copilot model name",
     )
     parser.add_argument(

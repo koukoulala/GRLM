@@ -371,8 +371,8 @@ def parse_args():
     parser.add_argument(
         "--copilot_model",
         type=str,
-        default="gpt-5.2",
-        help="Copilot model name (default: gpt-5.2)",
+        default="gpt-5.4",
+        help="Copilot model name",
     )
     parser.add_argument(
         "--num_workers",
